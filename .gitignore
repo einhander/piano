@@ -1,0 +1,68 @@
+# Android
+*.apk
+*.apkm
+*.aab
+*.dex
+*.class
+
+# Gradle
+.gradle/
+build/
+app/build/
+.gradle/
+
+# Android Studio
+.idea/
+*.iml
+*.DS_Store
+*.log
+
+# Android SDK
+# Android SDK
+LOCAL_SDK
+
+# CMake
+!app/src/main/cpp/cmake-build-*
+cmake-build-*/
+*.ninja
+*.cmake.cache
+
+# Native libs
+app/src/main/cpp/build/
+app/src/main/cpp/3rdparty/build/
+
+# FluidSynth build artifacts
+app/src/main/cpp/3rdparty/fluidsynth/build/
+app/src/main/cpp/3rdparty/fluidsynth/CMakeFiles/
+app/src/main/cpp/3rdparty/fluidsynth/libfluidsynth.pc
+app/src/main/cpp/3rdparty/fluidsynth/include/fluidsynth/
+
+# Oboe build artifacts
+app/src/main/cpp/3rdparty/oboe/build/
+
+# Project files
+*.live/
+MyLiveSet/
+
+# Build cache
+app/build-cache/
+
+# Local config
+local.properties
+app/local.properties
+
+# Android signing
+*.jks
+*.keystore
+*.keystore.bak
+
+# CI/CD
+!build/
+build/*.apk
+
+# Deepwork state (git-local, OpenCode-readable)
+.slim/deepwork/
+
+# OS
+.DS_Store
+Thumbs.db
