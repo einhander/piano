@@ -3,6 +3,7 @@
 #include "audio/OboeOutput.h"
 #include "engine/NativeEngine.h"
 #include "model/TransportState.h"
+#include "engine/MidiRecorder.h"
 
 extern "C" {
 
@@ -199,6 +200,308 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeAcknowledgeSceneChange(JNIEnv*
     if (inst) {
         inst->acknowledgeSceneChange();
     }
+}
+
+// Mixer controls
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetTrackVolume(
+    JNIEnv* env, jclass, jint trackId, jfloat volume) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setTrackVolume(static_cast<int>(trackId), static_cast<float>(volume));
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetTrackPan(
+    JNIEnv* env, jclass, jint trackId, jfloat pan) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setTrackPan(static_cast<int>(trackId), static_cast<float>(pan));
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetTrackMute(
+    JNIEnv* env, jclass, jint trackId, jboolean mute) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setTrackMute(static_cast<int>(trackId), mute != 0);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetTrackSolo(
+    JNIEnv* env, jclass, jint trackId, jboolean solo) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setTrackSolo(static_cast<int>(trackId), solo != 0);
+    }
+}
+
+JNIEXPORT jfloat JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetTrackPeakMeter(
+    JNIEnv* env, jclass, jint trackId) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jfloat>(inst->getTrackPeakMeter(static_cast<int>(trackId)));
+    return 0.0f;
+}
+
+// Master bus controls
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetMasterVolume(
+    JNIEnv* env, jclass, jfloat volume) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setMasterVolume(static_cast<float>(volume));
+    }
+}
+
+JNIEXPORT jfloat JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterPeakMeter(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jfloat>(inst->getMasterPeakMeter());
+    return 0.0f;
+}
+
+// Launch quantization
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetQuantizationGrid(
+    JNIEnv* env, jclass, jint grid) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setQuantizationGrid(static_cast<int32_t>(grid));
+    }
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetQuantizationGrid(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getQuantizationGrid());
+    return 0;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeIsLaunchPending(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return inst->isLaunchPending();
+    return false;
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeAcknowledgeLaunch(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->acknowledgeLaunch();
+    }
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeScheduleLaunch(
+    JNIEnv* env, jclass, jint sceneId, jint grid, jlong currentFrame) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jlong>(
+        inst->scheduleLaunch(static_cast<int32_t>(sceneId),
+                             static_cast<int32_t>(grid),
+                             static_cast<int64_t>(currentFrame)));
+    return 0;
+}
+
+// Scene navigation
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeRegisterScene(
+    JNIEnv* env, jclass, jint sceneId, jstring name) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return;
+    const char* jStr = env->GetStringUTFChars(name, nullptr);
+    if (jStr) {
+        inst->registerScene(static_cast<int32_t>(sceneId), jStr);
+        env->ReleaseStringUTFChars(name, jStr);
+    } else {
+        inst->registerScene(static_cast<int32_t>(sceneId), nullptr);
+    }
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeNextScene(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->nextScene());
+    return -1;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativePreviousScene(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->previousScene());
+    return -1;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetSceneCount(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getSceneCount());
+    return 0;
+}
+
+// Launch queue
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeQueueSceneLaunch(
+    JNIEnv* env, jclass, jint sceneId, jlong targetFrame) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return inst->queueSceneLaunch(
+        static_cast<int32_t>(sceneId),
+        static_cast<int64_t>(targetFrame));
+    return false;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetLaunchQueueDepth(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getLaunchQueueDepth());
+    return 0;
+}
+
+// Clip transport sync
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetClipTransportSync(
+    JNIEnv* env, jclass, jint clipId, jboolean enabled) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setClipTransportSync(static_cast<int32_t>(clipId), enabled != 0);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetClipStartTick(
+    JNIEnv* env, jclass, jint clipId, jlong startTick) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setClipStartTick(static_cast<int32_t>(clipId),
+                               static_cast<int64_t>(startTick));
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetClipEndTick(
+    JNIEnv* env, jclass, jint clipId, jlong endTick) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setClipEndTick(static_cast<int32_t>(clipId),
+                             static_cast<int64_t>(endTick));
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetClipLoop(
+    JNIEnv* env, jclass, jint clipId, jboolean loop) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setClipLoop(static_cast<int32_t>(clipId), loop != 0);
+    }
+}
+
+// Count-in metronome
+JNIEXPORT jlong JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeStartCountIn(
+    JNIEnv* env, jclass, jint beats) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jlong>(inst->startCountIn(static_cast<int>(beats)));
+    return 0;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeIsCountingIn(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return inst->isCountingIn();
+    return false;
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetCountInEndFrame(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jlong>(inst->getCountInEndFrame());
+    return 0;
+}
+
+// Recording control
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeStartRecording(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) inst->startRecording();
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeStopRecording(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) inst->stopRecording();
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetRecordArmed(
+    JNIEnv* env, jclass, jint trackId, jboolean armed) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) inst->setRecordArm(static_cast<int>(trackId), armed != 0);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeIsRecording(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return inst->isRecording();
+    return false;
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetOverdub(
+    JNIEnv* env, jclass, jboolean overdub) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) inst->setOverdub(overdub != 0);
+}
+
+// MIDI export
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeWriteMidiFile(
+    JNIEnv* env, jclass, jstring filePath, jbyteArray events,
+    jint eventCount, jint ppq, jint tempo) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return false;
+
+    const char* path = env->GetStringUTFChars(filePath, nullptr);
+    if (!path) return false;
+
+    jbyte* evtData = env->GetByteArrayElements(events, nullptr);
+    if (!evtData && eventCount > 0) {
+        env->ReleaseStringUTFChars(filePath, path);
+        return false;
+    }
+
+    // Convert jbyteArray to std::vector<RecordedMidiEvent>
+    std::vector<RecordedMidiEvent> recordedEvents;
+    if (eventCount > 0 && evtData) {
+        RecordedMidiEvent* eventsPtr = reinterpret_cast<RecordedMidiEvent*>(evtData);
+        recordedEvents.assign(eventsPtr, eventsPtr + eventCount);
+    }
+
+    jboolean result = inst->writeMidiFile(path, recordedEvents, static_cast<int>(ppq), static_cast<uint32_t>(tempo));
+
+    if (evtData) {
+        env->ReleaseByteArrayElements(events, evtData, JNI_ABORT);
+    }
+    env->ReleaseStringUTFChars(filePath, path);
+
+    return result;
 }
 
 } // extern "C"

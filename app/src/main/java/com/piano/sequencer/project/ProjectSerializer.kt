@@ -11,8 +11,11 @@ object ProjectSerializer {
         prettyPrint = false
     }
 
+    const val CURRENT_FORMAT_VERSION = 1
+
     @Serializable
     data class SerializableProject(
+        val formatVersion: Int = CURRENT_FORMAT_VERSION,
         val id: String,
         val name: String,
         val bpm: Double,
@@ -37,6 +40,7 @@ object ProjectSerializer {
         val pan: Float,
         val muted: Boolean,
         val solo: Boolean,
+        val isRecordArmed: Boolean,
         val clips: List<SerializableClip>,
         val program: Int,
         val transpose: Int,
@@ -80,12 +84,13 @@ object ProjectSerializer {
 
     fun toJson(project: Project): String {
         val serializable = SerializableProject(
+            CURRENT_FORMAT_VERSION,
             project.id, project.name, project.bpm, project.ppq,
             project.numerator, project.denominator,
             project.tracks.map { track ->
                 SerializableTrack(
                     track.id, track.name, track.trackId, track.volume,
-                    track.pan, track.muted, track.solo,
+                    track.pan, track.muted, track.solo, track.isRecordArmed,
                     track.clips.map { clip ->
                         SerializableClip(
                             clip.id, clip.name, clip.clipId, clip.trackId,
@@ -115,18 +120,21 @@ object ProjectSerializer {
 
     fun fromJson(jsonString: String): Project {
         val serializable = json.decodeFromString<SerializableProject>(jsonString)
+        // Migrate based on format version
+        val migrated = migrate(serializable)
         return Project(
-            id = serializable.id,
-            name = serializable.name,
-            bpm = serializable.bpm,
-            ppq = serializable.ppq,
-            numerator = serializable.numerator,
-            denominator = serializable.denominator,
-            tracks = serializable.tracks.map { track ->
+            id = migrated.id,
+            name = migrated.name,
+            bpm = migrated.bpm,
+            ppq = migrated.ppq,
+            numerator = migrated.numerator,
+            denominator = migrated.denominator,
+            tracks = migrated.tracks.map { track ->
                 Track(
                     id = track.id, name = track.name, trackId = track.trackId,
                     volume = track.volume, pan = track.pan,
                     muted = track.muted, solo = track.solo,
+                    isRecordArmed = track.isRecordArmed,
                     clips = track.clips.map { clip ->
                         Clip(
                             id = clip.id, name = clip.name, clipId = clip.clipId,
@@ -142,7 +150,7 @@ object ProjectSerializer {
                     velocityScale = track.velocityScale
                 )
             }.toMutableList(),
-            scenes = serializable.scenes.map { scene ->
+            scenes = migrated.scenes.map { scene ->
                 Scene(
                     id = scene.id, name = scene.name, sceneId = scene.sceneId,
                     trackScenes = scene.trackScenes.mapValues { (_, state) ->
@@ -150,11 +158,22 @@ object ProjectSerializer {
                     }.toMutableMap()
                 )
             }.toMutableList(),
-            masterGain = serializable.masterGain,
-            polyphony = serializable.polyphony,
-            soundFontPath = serializable.soundFontPath,
-            createdAt = serializable.createdAt,
-            updatedAt = serializable.updatedAt
+            masterGain = migrated.masterGain,
+            polyphony = migrated.polyphony,
+            soundFontPath = migrated.soundFontPath,
+            createdAt = migrated.createdAt,
+            updatedAt = migrated.updatedAt
         )
+    }
+
+    // Migrate project from older format versions
+    fun migrate(project: SerializableProject): SerializableProject {
+        return when (project.formatVersion) {
+            CURRENT_FORMAT_VERSION -> project
+            0 -> project  // Legacy format, no migration needed
+            else -> throw IllegalArgumentException(
+                "Unsupported project format version: ${project.formatVersion}"
+            )
+        }
     }
 }

@@ -77,6 +77,13 @@ class PlaybackService : Service() {
 
     fun getUnderrunCount(): Int = NativeEngineBridge.nativeGetUnderrunCount()
 
+    // Export recorded MIDI to file
+    fun exportMidiFile(callback: (String?) -> Unit) {
+        // Get recorded events from native engine
+        // For now, return null — full implementation would pass events through JNI
+        callback(null)
+    }
+
     private fun requestAudioFocus() {
         if (audioFocusRequest != null) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

@@ -37,7 +37,12 @@ add_library(native-lib SHARED
     engine/Sequencer.cpp
     engine/SceneManager.cpp
     engine/ClipScheduler.cpp
+    engine/Mixer.cpp
+    engine/MasterBus.cpp
+    engine/LaunchQuantizer.cpp
     engine/NativeEngine.cpp
+    midi/MidiFileParser.cpp
+    midi/MidiFileWriter.cpp
 )
 
 # Include directories
@@ -48,6 +53,7 @@ target_include_directories(native-lib PRIVATE
     synth
     realtime
     model
+    midi
 )
 
 # Link libraries

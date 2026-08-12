@@ -12,6 +12,10 @@
 #include "engine/Sequencer.h"
 #include "engine/SceneManager.h"
 #include "engine/ClipScheduler.h"
+#include "engine/Mixer.h"
+#include "engine/MasterBus.h"
+#include "engine/LaunchQuantizer.h"
+#include "engine/MidiRecorder.h"
 
 class OboeOutput;
 class FluidSynthEngine;
@@ -63,6 +67,40 @@ public:
     bool hasSceneChanged() const;
     void acknowledgeSceneChange();
 
+    // Launch quantization
+    void setQuantizationGrid(int32_t grid);
+    int32_t getQuantizationGrid() const;
+    bool isLaunchPending() const;
+    void acknowledgeLaunch();
+    int64_t scheduleLaunch(int32_t sceneId, int32_t grid, int64_t currentFrame);
+
+    // Scene navigation
+    void registerScene(int32_t sceneId, const char* name);
+    int32_t nextScene() const;
+    int32_t previousScene() const;
+    int32_t getSceneCount() const;
+
+    // Launch queue
+    bool queueSceneLaunch(int32_t sceneId, int64_t targetFrame);
+    int32_t getLaunchQueueDepth() const;
+
+    // Clip transport sync
+    void setClipTransportSync(int32_t clipId, bool enabled);
+    void setClipStartTick(int32_t clipId, int64_t startTick);
+    void setClipEndTick(int32_t clipId, int64_t endTick);
+    void setClipLoop(int32_t clipId, bool loop);
+
+    // Mixer controls (atomic, safe for UI thread)
+    void setTrackVolume(int trackId, float volume);
+    void setTrackPan(int trackId, float pan);
+    void setTrackMute(int trackId, bool mute);
+    void setTrackSolo(int trackId, bool solo);
+    float getTrackPeakMeter(int trackId) const;
+
+    // Master bus controls
+    void setMasterVolume(float volume);
+    float getMasterPeakMeter() const;
+
     // Project loading (called from worker thread, NOT audio callback)
     void loadProject(const char* json);
 
@@ -70,6 +108,26 @@ public:
     void addClip(int32_t clipId, int32_t trackId, int64_t startTick, int64_t lengthTicks,
                  const uint8_t* events, int32_t eventCount);
     void removeClip(int32_t clipId);
+
+    // Count-in metronome: play clicks before recording starts
+    // beats: number of count-in beats (default 4)
+    // Returns the frame when recording should start
+    int64_t startCountIn(int beats = 4);
+    bool isCountingIn() const { return mCountingIn.load(); }
+    int64_t getCountInEndFrame() const { return mCountInEndFrame.load(); }
+
+    // Recording control
+    void startRecording();
+    void stopRecording();
+    void setRecordArm(int trackId, bool armed);
+    void setOverdub(bool overdub);
+    bool isRecording() const;
+    const std::vector<RecordedMidiEvent>& getRecordedEvents();
+
+    // MIDI export
+    bool writeMidiFile(const char* filePath,
+                       const std::vector<RecordedMidiEvent>& events,
+                       int ppq, uint32_t tempo);
 
     // Getters
     int getSampleRate() const;
@@ -94,6 +152,10 @@ private:
     void startMidiThread();
     void stopMidiThread();
 
+    // Count-in metronome helpers
+    void playCountInClick(int64_t frame);
+    bool shouldPlayCountInClick(int64_t frame) const;
+
     static std::atomic<NativeEngine*> sInstance;
     FluidSynthEngine* mSynth = nullptr;
     MidiQueue mMidiQueue{4096};
@@ -112,9 +174,29 @@ private:
     Sequencer mSequencer;
     SceneManager mSceneManager;
     ClipScheduler mClipScheduler;
+    LaunchQuantizer mLaunchQuantizer;
+
+    // Mixer + MasterBus (audio mixing pipeline)
+    Mixer mMixer;
+    MasterBus mMasterBus;
 
     // Clip storage (owned by NativeEngine, safe for audio thread access)
     static constexpr int32_t kMaxClips = 64;
     ClipScheduler::ClipData mClips[kMaxClips];
     std::atomic<int32_t> mClipCount{0};
+
+    // Pre-allocated synth render buffer (avoids stack allocation in audio callback)
+    static constexpr int32_t kMaxSynthFrames = 2048;
+    float mSynthBuffer[kMaxSynthFrames * 2];  // stereo float
+
+    // Count-in metronome state
+    std::atomic<bool> mCountingIn{false};
+    int64_t mCountInEndFrame{0};
+    int mCountInBeats{4};
+    int64_t mCountInStartFrame{0};
+    int mCountInClickIndex{0};
+
+    // Recording state
+    MidiRecorder mRecorder;
+    std::atomic<bool> mRecordArmed[16];  // per-track record arm (channels 0-15)
 };

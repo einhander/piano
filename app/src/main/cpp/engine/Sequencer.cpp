@@ -44,8 +44,9 @@ void Sequencer::scheduleEvent(int64_t framePosition, uint8_t status, uint8_t dat
         mEvents[slot].framePosition.store(framePosition, std::memory_order_relaxed);
 
         // CAS as the visibility trigger
+        int64_t expected = -1;
         if (mEvents[slot].framePosition.compare_exchange_strong(
-                -1, framePosition, std::memory_order_release, std::memory_order_relaxed)) {
+                expected, framePosition, std::memory_order_release, std::memory_order_relaxed)) {
             mEventCount.fetch_add(1, std::memory_order_release);
             return;
         }

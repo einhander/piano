@@ -3,9 +3,11 @@ package com.piano.sequencer
 import android.app.Activity
 import android.content.ComponentName
 import android.content.Intent
+import android.content.UriPermission
 import android.content.ServiceConnection
 import android.os.Bundle
 import android.os.IBinder
+import android.provider.DocumentsContract
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -27,6 +29,7 @@ class MainActivity : Activity() {
     private lateinit var panicButton: Button
     private lateinit var saveButton: Button
     private lateinit var loadButton: Button
+    private lateinit var exportMidiButton: Button
     private lateinit var midiStatusText: TextView
 
     private lateinit var projectRepo: ProjectRepository
@@ -36,6 +39,37 @@ class MainActivity : Activity() {
 
     private var playbackService: PlaybackService? = null
     private var serviceBound = false
+
+    // SAF file picker for project save/load
+    private val filePickerLauncher = registerForActivityResult(
+        android.app.ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        uri?.let {
+            contentResolver.takePersistableUriPermission(
+                it,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            projectRepo.setProjectUri(it)
+            Toast.makeText(this@MainActivity, "Project directory selected", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // SAF file picker for MIDI import
+    private val midiImportLauncher = registerForActivityResult(
+        android.app.ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            projectRepo.importResource(it, "imported.mid") { result ->
+                runOnUiThread {
+                    result.onSuccess { path ->
+                        Toast.makeText(this@MainActivity, "MIDI imported: $path", Toast.LENGTH_SHORT).show()
+                    }.onFailure {
+                        Toast.makeText(this@MainActivity, "Import failed: ${it.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+    }
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -130,6 +164,10 @@ class MainActivity : Activity() {
             text = "Load Project"
             setOnClickListener { loadProject() }
         }
+        exportMidiButton = Button(this).apply {
+            text = "Export MIDI"
+            setOnClickListener { exportMidiFile() }
+        }
         layout.addView(statusText)
         layout.addView(playButton)
         layout.addView(c4Button)
@@ -138,6 +176,7 @@ class MainActivity : Activity() {
         layout.addView(panicButton)
         layout.addView(saveButton)
         layout.addView(loadButton)
+        layout.addView(exportMidiButton)
         setContentView(layout)
 
         midiStatusText = TextView(this).apply {
@@ -233,6 +272,25 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun exportMidiFile() {
+        // Get recorded events from native engine and write to MIDI file
+        withService { service ->
+            service.exportMidiFile { filePath ->
+                runOnUiThread {
+                    if (filePath != null) {
+                        Toast.makeText(this@MainActivity, "MIDI exported: $filePath", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(this@MainActivity, "No recorded events to export", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showSaveProjectPicker() {
+        filePickerLauncher.launch(null)
     }
 
     override fun onResume() {

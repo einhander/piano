@@ -1,7 +1,6 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.native.cinterop") version "1.9.20"
     id("org.jetbrains.kotlin.plugin.serialization") version "1.9.20"
 }
 

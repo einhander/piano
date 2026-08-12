@@ -7,11 +7,17 @@ MidiRecorder::~MidiRecorder() = default;
 void MidiRecorder::start(int64_t startTick) {
     mStartTick = startTick;
     mRecording.store(true);
-    clear();
+    if (!mOverdub.load()) {
+        clear();
+    }
 }
 
 void MidiRecorder::stop() {
     mRecording.store(false);
+}
+
+void MidiRecorder::setOverdub(bool overdub) {
+    mOverdub.store(overdub);
 }
 
 // NOTE: record() is called from MIDI input thread, NOT audio callback.
@@ -26,6 +32,12 @@ void MidiRecorder::record(const RecordedMidiEvent& event) {
 
 void MidiRecorder::clear() {
     mEvents.clear();
+}
+
+std::vector<RecordedMidiEvent> MidiRecorder::getCombinedEvents() const {
+    // In overdub mode, return all events (existing + new are already combined)
+    // In non-overdub mode, just return a copy
+    return mEvents;
 }
 
 void MidiRecorder::quantize(int64_t quantizationTicks) {

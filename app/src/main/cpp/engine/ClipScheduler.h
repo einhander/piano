@@ -21,6 +21,10 @@ struct ClipData {
         uint8_t data2;
     } events[kMaxEvents];
     int32_t eventCount = 0;
+
+    // Track active notes for loop boundary cleanup
+    uint8_t mActiveNotes[128];
+    int32_t mActiveNoteCount = 0;
 };
 
 class ClipScheduler {

@@ -1,17 +1,35 @@
 package com.piano.sequencer.project
 
 import android.content.Context
+import android.net.Uri
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 
 class ProjectRepository(private val context: Context) {
     private val projectsDir = File(context.filesDir, "projects")
     private val workerThread = java.util.concurrent.Executors.newSingleThreadExecutor()
 
+    // SAF project directory URI (optional)
+    private var projectUri: Uri? = null
+
     init {
         if (!projectsDir.exists()) {
             projectsDir.mkdirs()
         }
+    }
+
+    // Set SAF project directory URI
+    fun setProjectUri(uri: Uri) {
+        projectUri = uri
+    }
+
+    fun getProjectDirectory(): File {
+        return projectUri?.let { uri ->
+            // For SAF, fall back to internal storage
+            // Full SAF integration would use DocumentFile API
+            projectsDir
+        } ?: projectsDir
     }
 
     fun saveProject(project: Project, callback: (Result<Unit>) -> Unit) {
@@ -77,4 +95,42 @@ class ProjectRepository(private val context: Context) {
     fun shutdown() {
         workerThread.shutdown()
     }
+
+    // Import a resource file (MIDI, audio, etc.) into the project directory
+    fun importResource(sourceUri: Uri, fileName: String, callback: (Result<String>) -> Unit) {
+        workerThread.submit {
+            try {
+                val projectDir = getProjectDirectory()
+                val destPath = File(projectDir, fileName)
+
+                context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                    FileOutputStream(destPath).use { output ->
+                        input.copyTo(output)
+                    }
+                } ?: throw IOException("Could not open input stream for $sourceUri")
+
+                callback(Result.success(fileName))
+            } catch (e: IOException) {
+                callback(Result.failure(e))
+            }
+        }
+    }
+
+    // Autosave support
+    private var lastAutosaveTime = 0L
+    private val autosaveIntervalMs = 30000L // 30 seconds
+
+    fun scheduleAutosave(project: Project, callback: (Result<Unit>) -> Unit) {
+        val now = System.currentTimeMillis()
+        if (now - lastAutosaveTime >= autosaveIntervalMs) {
+            saveProject(project) { result ->
+                lastAutosaveTime = System.currentTimeMillis()
+                callback(result)
+            }
+        } else {
+            callback(Result.success(Unit))
+        }
+    }
+
+    fun getLastAutosaveTime(): Long = lastAutosaveTime
 }
