@@ -34,7 +34,7 @@ oboe::Result OboeOutput::open() {
     builder.setFramesPerCallback(64);
     builder.setErrorCallback(this);
 
-    oboe::Result result = builder.openStream(mStream);
+    oboe::Result result = builder.openStream(&mStream);
     if (result != oboe::Result::OK) {
         return result;
     }
@@ -57,19 +57,19 @@ void OboeOutput::close() {
 
 oboe::Result OboeOutput::start() {
     if (mStream == nullptr) {
-        return oboe::Result::ErrorNullPointer;
+        return oboe::Result::ErrorNull;
     }
     return mStream->start();
 }
 
 oboe::Result OboeOutput::stop() {
     if (mStream == nullptr) {
-        return oboe::Result::ErrorNullPointer;
+        return oboe::Result::ErrorNull;
     }
     return mStream->stop();
 }
 
-oboe::CallbackResult OboeOutput::onAudioData(oboe::AudioStream* stream, void* data, int32_t numFrames) {
+oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, void* data, int32_t numFrames) {
     float* floatData = static_cast<float*>(data);
     AudioFrameCallback cb = sAudioFrameCallback.load(std::memory_order_acquire);
     if (cb) {
@@ -78,7 +78,8 @@ oboe::CallbackResult OboeOutput::onAudioData(oboe::AudioStream* stream, void* da
         generateSineWave(floatData, numFrames);
     }
 
-    int32_t current = stream->getUnderrunCount();
+    auto xrunResult = stream->getXRunCount();
+    int32_t current = xrunResult.value();
     int32_t previous = mUnderrunCount.load();
     while (current > previous) {
         if (mUnderrunCount.compare_exchange_weak(previous, current)) {
@@ -86,12 +87,11 @@ oboe::CallbackResult OboeOutput::onAudioData(oboe::AudioStream* stream, void* da
         }
     }
 
-    return oboe::CallbackResult::Continue;
+    return oboe::DataCallbackResult::Continue;
 }
 
-oboe::CallbackResult OboeOutput::onErrorAfterClose(oboe::AudioStream* stream, oboe::Result error) {
+void OboeOutput::onErrorAfterClose(oboe::AudioStream* stream, oboe::Result error) {
     mState.store(oboe::StreamState::Closed);
-    return oboe::CallbackResult::Close;
 }
 
 void OboeOutput::generateSineWave(float* buffer, int32_t numFrames) {

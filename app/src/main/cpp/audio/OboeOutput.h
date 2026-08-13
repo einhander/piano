@@ -4,7 +4,7 @@
 #include <atomic>
 #include <cstdint>
 
-class OboeOutput {
+class OboeOutput : public oboe::AudioStreamCallback {
 public:
     OboeOutput();
     ~OboeOutput();
@@ -26,13 +26,15 @@ public:
     oboe::StreamState getState() const { return mState.load(); }
 
 private:
-    oboe::CallbackResult onAudioData(oboe::AudioStream* stream, void* data, int32_t numFrames);
-    oboe::CallbackResult onErrorAfterClose(oboe::AudioStream* stream, oboe::Result error);
+    oboe::DataCallbackResult onAudioReady(oboe::AudioStream* stream, void* data, int32_t numFrames) override;
+    void onErrorAfterClose(oboe::AudioStream* stream, oboe::Result error) override;
     void generateSineWave(float* buffer, int32_t numFrames);
 
     // Audio frame callback — set by NativeEngine to replace sine wave generator
     using AudioFrameCallback = void(*)(float* output, int32_t numFrames);
     static void setAudioFrameCallback(AudioFrameCallback cb);
+
+    friend class NativeEngine;
 
     static std::atomic<OboeOutput*> sInstance;
     static std::atomic<AudioFrameCallback> sAudioFrameCallback;

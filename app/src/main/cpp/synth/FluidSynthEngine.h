@@ -4,6 +4,8 @@
 #include "realtime/MidiQueue.h"
 #include <atomic>
 #include <cstdint>
+#include <mutex>
+#include <string>
 #include <unordered_map>
 
 // FluidSynth adapter — renders PCM from MIDI events
@@ -58,10 +60,26 @@ public:
     // Check if initialized
     bool isInitialized() const { return mInitialized; }
 
+    // Getters
+    int getPolyphony() const;
+    float getMasterGain() const;
+    int getSoundFontCount() const;
+    std::string getSoundFontPath() const;
+
 private:
     fluid_synth_t* mSynth = nullptr;
     fluid_settings_t* mSettings = nullptr;
     int mSampleRate = 48000;
     int mBufferSize = 0;
     std::atomic<bool> mInitialized{false};
+    // Note: tracks only the last-loaded SF2 path. Multi-SF2 support not yet implemented.
+    std::string mLoadedSfPath;
+    mutable std::mutex mSfPathMutex;
+
+    // Protects all mSynth access across audio callback, MIDI thread, and settings/JNI threads.
+    // FluidSynth C API is NOT thread-safe; this mutex serializes concurrent access.
+    // Audio callback holds it briefly during render(); MIDI thread during live MIDI processing;
+    // settings thread during polyphony/gain/SF2 changes. Settings changes are infrequent,
+    // so lock contention is minimal. Audio callback hold time is bounded by buffer size.
+    mutable std::mutex mSynthMutex;
 };

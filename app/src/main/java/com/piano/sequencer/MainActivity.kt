@@ -1,6 +1,5 @@
 package com.piano.sequencer
 
-import android.app.Activity
 import android.content.ComponentName
 import android.content.Intent
 import android.content.UriPermission
@@ -12,13 +11,16 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import android.media.midi.MidiDeviceInfo
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import com.piano.sequencer.midi.MidiDeviceManager
 import com.piano.sequencer.midi.MidiInputReceiver
 import com.piano.sequencer.project.Project
 import com.piano.sequencer.project.ProjectRepository
 import com.piano.sequencer.service.PlaybackService
 
-class MainActivity : Activity() {
+class MainActivity : AppCompatActivity() {
 
     private lateinit var layout: LinearLayout
     private lateinit var statusText: TextView
@@ -30,6 +32,7 @@ class MainActivity : Activity() {
     private lateinit var saveButton: Button
     private lateinit var loadButton: Button
     private lateinit var exportMidiButton: Button
+    private lateinit var settingsButton: Button
     private lateinit var midiStatusText: TextView
 
     private lateinit var projectRepo: ProjectRepository
@@ -42,7 +45,7 @@ class MainActivity : Activity() {
 
     // SAF file picker for project save/load
     private val filePickerLauncher = registerForActivityResult(
-        android.app.ActivityResultContracts.OpenDocumentTree()
+        ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         uri?.let {
             contentResolver.takePersistableUriPermission(
@@ -56,7 +59,7 @@ class MainActivity : Activity() {
 
     // SAF file picker for MIDI import
     private val midiImportLauncher = registerForActivityResult(
-        android.app.ActivityResultContracts.GetContent()
+        ActivityResultContracts.GetContent()
     ) { uri ->
         uri?.let {
             projectRepo.importResource(it, "imported.mid") { result ->
@@ -153,7 +156,7 @@ class MainActivity : Activity() {
             text = "PANIC"
             setOnClickListener {
                 withService { it.panic() }
-                Toast.makeText(this, "Panic!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "Panic!", Toast.LENGTH_SHORT).show()
             }
         }
         saveButton = Button(this).apply {
@@ -168,6 +171,12 @@ class MainActivity : Activity() {
             text = "Export MIDI"
             setOnClickListener { exportMidiFile() }
         }
+        settingsButton = Button(this).apply {
+            text = "Settings"
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+            }
+        }
         layout.addView(statusText)
         layout.addView(playButton)
         layout.addView(c4Button)
@@ -177,6 +186,7 @@ class MainActivity : Activity() {
         layout.addView(saveButton)
         layout.addView(loadButton)
         layout.addView(exportMidiButton)
+        layout.addView(settingsButton)
         setContentView(layout)
 
         midiStatusText = TextView(this).apply {
@@ -213,7 +223,7 @@ class MainActivity : Activity() {
         midiManager.setListener(object : MidiDeviceManager.Listener {
             override fun onDeviceConnected(device: MidiDeviceInfo) {
                 runOnUiThread {
-                    midiStatusText.text = "MIDI: connected (${device.product})"
+                    midiStatusText.text = "MIDI: connected"
                 }
             }
             override fun onDeviceDisconnected() {

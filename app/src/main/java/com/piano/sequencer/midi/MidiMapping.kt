@@ -47,79 +47,103 @@ class MidiLearnManager : MidiReceiver() {
         learnState = LearnState.IDLE
     }
 
-    override fun onReceive(status: Byte, data1: Byte, data2: Byte, timestamp: Long): Boolean {
-        if (learnState == LearnState.IDLE) return true
+    override fun onSend(data: ByteArray, offset: Int, length: Int, timestamp: Long) {
+        if (learnState == LearnState.IDLE) return
 
-        val statusInt = status.toInt() and 0xFF
-        val type = statusInt and 0xF0
-        val channel = statusInt and 0x0F
+        val end = offset + length
+        var pos = offset
+        while (pos < end) {
+            val statusInt = data[pos].toInt() and 0xFF
+            val type = statusInt and 0xF0
+            val channel = statusInt and 0x0F
+            pos++
 
-        val mapping = when (type) {
-            0x90 -> MidiMapping(
-                id = nextId++,
-                messageType = "NOTE_ON",
-                channel = channel,
-                data1 = data1.toInt() and 0xFF,
-                data2 = data2.toInt() and 0xFF,
-                action = learnState.name,
-                targetId = 0
-            )
-            0x80 -> MidiMapping(
-                id = nextId++,
-                messageType = "NOTE_OFF",
-                channel = channel,
-                data1 = data1.toInt() and 0xFF,
-                data2 = data2.toInt() and 0xFF,
-                action = learnState.name,
-                targetId = 0
-            )
-            0xB0 -> MidiMapping(
-                id = nextId++,
-                messageType = "CC",
-                channel = channel,
-                data1 = data1.toInt() and 0xFF,
-                data2 = data2.toInt() and 0xFF,
-                action = learnState.name,
-                targetId = 0
-            )
-            0xC0 -> MidiMapping(
-                id = nextId++,
-                messageType = "PC",
-                channel = channel,
-                data1 = data1.toInt() and 0xFF,
-                data2 = data2.toInt() and 0xFF,
-                action = learnState.name,
-                targetId = 0
-            )
-            0xE0 -> MidiMapping(
-                id = nextId++,
-                messageType = "PITCH_BEND",
-                channel = channel,
-                data1 = data1.toInt() and 0xFF,
-                data2 = data2.toInt() and 0xFF,
-                action = learnState.name,
-                targetId = 0
-            )
-            else -> return true
+            val mapping = when (type) {
+                0x90 -> {
+                    val data1 = if (pos < end) data[pos].toInt() and 0xFF else 0; if (pos < end) pos++ else 0
+                    val data2 = if (pos < end) data[pos].toInt() and 0xFF else 0; if (pos < end) pos++ else 0
+                    MidiMapping(
+                        id = nextId++,
+                        messageType = "NOTE_ON",
+                        channel = channel,
+                        data1 = data1,
+                        data2 = data2,
+                        action = learnState.name,
+                        targetId = 0
+                    )
+                }
+                0x80 -> {
+                    val data1 = if (pos < end) data[pos].toInt() and 0xFF else 0; if (pos < end) pos++ else 0
+                    val data2 = if (pos < end) data[pos].toInt() and 0xFF else 0; if (pos < end) pos++ else 0
+                    MidiMapping(
+                        id = nextId++,
+                        messageType = "NOTE_OFF",
+                        channel = channel,
+                        data1 = data1,
+                        data2 = data2,
+                        action = learnState.name,
+                        targetId = 0
+                    )
+                }
+                0xB0 -> {
+                    val data1 = if (pos < end) data[pos].toInt() and 0xFF else 0; if (pos < end) pos++ else 0
+                    val data2 = if (pos < end) data[pos].toInt() and 0xFF else 0; if (pos < end) pos++ else 0
+                    MidiMapping(
+                        id = nextId++,
+                        messageType = "CC",
+                        channel = channel,
+                        data1 = data1,
+                        data2 = data2,
+                        action = learnState.name,
+                        targetId = 0
+                    )
+                }
+                0xC0 -> {
+                    val data1 = if (pos < end) data[pos].toInt() and 0xFF else 0
+                    MidiMapping(
+                        id = nextId++,
+                        messageType = "PC",
+                        channel = channel,
+                        data1 = data1,
+                        data2 = 0,
+                        action = learnState.name,
+                        targetId = 0
+                    )
+                }
+                0xE0 -> {
+                    val data1 = if (pos < end) data[pos].toInt() and 0xFF else 0; if (pos < end) pos++ else 0
+                    val data2 = if (pos < end) data[pos].toInt() and 0xFF else 0; if (pos < end) pos++ else 0
+                    MidiMapping(
+                        id = nextId++,
+                        messageType = "PITCH_BEND",
+                        channel = channel,
+                        data1 = data1,
+                        data2 = data2,
+                        action = learnState.name,
+                        targetId = 0
+                    )
+                }
+                else -> return
+            }
+
+            // Check for conflicts
+            val conflict = mappings.find {
+                it.messageType == mapping.messageType &&
+                it.channel == mapping.channel &&
+                it.data1 == mapping.data1 &&
+                it.data2 == mapping.data2
+            }
+
+            if (conflict != null) {
+                callback?.onMappingConflict(mapping)
+            } else {
+                mappings.add(mapping)
+                callback?.onMappingLearned(mapping)
+            }
+
+            stopLearn()
+            return
         }
-
-        // Check for conflicts
-        val conflict = mappings.find {
-            it.messageType == mapping.messageType &&
-            it.channel == mapping.channel &&
-            it.data1 == mapping.data1 &&
-            it.data2 == mapping.data2
-        }
-
-        if (conflict != null) {
-            callback?.onMappingConflict(mapping)
-        } else {
-            mappings.add(mapping)
-            callback?.onMappingLearned(mapping)
-        }
-
-        stopLearn()
-        return true
     }
 
     fun getMappings(): List<MidiMapping> = mappings.toList()

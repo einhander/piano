@@ -24,7 +24,7 @@ class SessionView @JvmOverloads constructor(
     private var sceneCount = 0
 
     init {
-        orientation = GridLayout.EXACTLY
+        orientation = GridLayout.VERTICAL
     }
 
     fun setupGrid(trackCount: Int, sceneCount: Int) {
@@ -32,7 +32,7 @@ class SessionView @JvmOverloads constructor(
         this.sceneCount = sceneCount
 
         columnCount = sceneCount + 2  // +2 for track labels + record arm column
-        rowCount = trackCount
+        rowCount = trackCount + 1  // +1 for scene header row
 
         // Clear existing children
         removeAllViews()
@@ -41,7 +41,7 @@ class SessionView @JvmOverloads constructor(
         sceneHighlightViews.clear()
         recordArmButtons.clear()
 
-        // Create track labels (first column)
+        // Create track labels (first column, rows 1..trackCount)
         for (t in 0 until trackCount) {
             val label = TextView(context).apply {
                 text = "T${t + 1}"
@@ -51,25 +51,14 @@ class SessionView @JvmOverloads constructor(
                 setPadding(8, 4, 8, 4)
                 background = ContextCompat.getDrawable(context, android.R.drawable.btn_default)
             }
-            addView(label, GridLayout.spec(t, 1, Gravity.CENTER))
+            val params = GridLayout.LayoutParams()
+            params.rowSpec = GridLayout.spec(t + 1)
+            params.columnSpec = GridLayout.spec(0)
+            addView(label, params)
             trackLabels.add(label)
         }
 
-        // Create record arm buttons (second-to-last column)
-        for (t in 0 until trackCount) {
-            val armButton = Button(context).apply {
-                text = "\u25CF"  // Circle character
-                setBackgroundColor(Color.rgb(80, 80, 80))
-                setPadding(4, 4, 4, 4)
-                setOnClickListener {
-                    onRecordArmClick?.invoke(t)
-                }
-            }
-            recordArmButtons.add(armButton)
-            addView(armButton, GridLayout.spec(trackCount, 1, Gravity.CENTER))
-        }
-
-        // Create scene header labels (top row)
+        // Create scene header labels (top row, columns 1..sceneCount)
         for (s in 0 until sceneCount) {
             val header = TextView(context).apply {
                 text = "S${s + 1}"
@@ -78,11 +67,14 @@ class SessionView @JvmOverloads constructor(
                 gravity = Gravity.CENTER
                 setPadding(4, 4, 4, 4)
             }
-            addView(header, GridLayout.spec(GridLayout.TOP, GridLayout.spec(s + 1, 1f)))
+            val params = GridLayout.LayoutParams()
+            params.rowSpec = GridLayout.spec(0)
+            params.columnSpec = GridLayout.spec(s + 1)
+            addView(header, params)
             sceneHighlightViews.add(header)
         }
 
-        // Create clip buttons
+        // Create clip buttons (columns 1..sceneCount, rows 1..trackCount)
         for (t in 0 until trackCount) {
             for (s in 0 until sceneCount) {
                 val button = Button(context).apply {
@@ -90,13 +82,32 @@ class SessionView @JvmOverloads constructor(
                     setBackgroundColor(Color.rgb(51, 51, 51))
                     setPadding(2, 2, 2, 2)
                     setOnClickListener {
-                        // Clip launch callback — caller can observe state changes
                         onClipClick?.invoke(t, s)
                     }
                 }
                 clipButtons[t to s] = button
-                addView(button, GridLayout.spec(t, GridLayout.spec(s + 1, 1f)))
+                val params = GridLayout.LayoutParams()
+                params.rowSpec = GridLayout.spec(t + 1)
+                params.columnSpec = GridLayout.spec(s + 1)
+                addView(button, params)
             }
+        }
+
+        // Create record arm buttons (last column, rows 1..trackCount)
+        for (t in 0 until trackCount) {
+            val armButton = Button(context).apply {
+                text = "\u25CF"
+                setBackgroundColor(Color.rgb(80, 80, 80))
+                setPadding(4, 4, 4, 4)
+                setOnClickListener {
+                    onRecordArmClick?.invoke(t)
+                }
+            }
+            recordArmButtons.add(armButton)
+            val params = GridLayout.LayoutParams()
+            params.rowSpec = GridLayout.spec(t + 1)
+            params.columnSpec = GridLayout.spec(sceneCount + 1)
+            addView(armButton, params)
         }
 
         // Set layout parameters for proper sizing

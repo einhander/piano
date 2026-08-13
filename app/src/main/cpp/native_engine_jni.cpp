@@ -46,8 +46,16 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeIsAudioPlaying(JNIEnv* env, jc
     oboe::StreamState state = inst->getState();
     return state == oboe::StreamState::Open
         || state == oboe::StreamState::Starting
-        || state == oboe::StreamState::Started
-        || state == oboe::StreamState::Running;
+        || state == oboe::StreamState::Started;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeIsEngineInitialized(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) {
+        return false;
+    }
+    return inst->isEngineInitialized();
 }
 
 JNIEXPORT jint JNICALL
@@ -113,6 +121,52 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeSetMasterGain(JNIEnv* env, jcl
     if (inst) {
         inst->setMasterGain(static_cast<float>(gain));
     }
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetPolyphony(JNIEnv* env, jclass, jint polyphony) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) inst->setPolyphony(static_cast<int>(polyphony));
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetPolyphony(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getPolyphony());
+    return 0;
+}
+
+JNIEXPORT jfloat JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterGain(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jfloat>(inst->getMasterGain());
+    return 0.0f;
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeUnloadSoundFonts(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) inst->unloadSoundFonts();
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetSoundFontCount(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getSoundFontCount());
+    return 0;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetSoundFontPath(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return env->NewStringUTF("");
+    std::string path = inst->getSoundFontPath();
+    jstring result = env->NewStringUTF(path.c_str());
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return env->NewStringUTF("");
+    }
+    return result;
 }
 
 JNIEXPORT void JNICALL

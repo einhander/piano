@@ -1,3 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Piano Sequencer</string>
+
+    <!-- Settings -->
+    <string name="settings_title">FluidSynth Settings</string>
+    <string name="settings_sf2_title">SoundFont</string>
+    <string name="settings_browse">Browse…</string>
+    <string name="settings_sf2_none">No SoundFont loaded</string>
+    <string name="settings_unload">Unload</string>
+    <string name="settings_fluidsynth_title">FluidSynth Settings</string>
+    <string name="settings_polyphony">Polyphony</string>
+    <string name="settings_master_gain">Master Gain</string>
+    <string name="settings_polyphony_label">Polyphony:</string>
+    <string name="settings_master_gain_label">Master Gain:</string>
+    <string name="settings_sf2_loaded_count">Loaded: %d SoundFont(s)</string>
+    <string name="settings_polyphony_value">Polyphony: %d</string>
+    <string name="settings_master_gain_value">Master Gain: %.2f</string>
+    <string name="settings_btn_settings">Settings</string>
 </resources>

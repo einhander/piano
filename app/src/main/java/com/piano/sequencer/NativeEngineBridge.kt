@@ -9,6 +9,7 @@ object NativeEngineBridge {
     external fun nativeStartAudio(): Int
     external fun nativeStopAudio(): Int
     external fun nativeIsAudioPlaying(): Boolean
+    external fun nativeIsEngineInitialized(): Boolean
     external fun nativeGetUnderrunCount(): Int
     external fun nativeOpenAudio(): Int
 
@@ -19,6 +20,12 @@ object NativeEngineBridge {
     external fun nativeNoteOff(channel: Int, note: Int)
     external fun nativePanic()
     external fun nativeSetMasterGain(gain: Float)
+    external fun nativeSetPolyphony(polyphony: Int)
+    external fun nativeGetPolyphony(): Int
+    external fun nativeGetMasterGain(): Float
+    external fun nativeUnloadSoundFonts()
+    external fun nativeGetSoundFontCount(): Int
+    external fun nativeGetSoundFontPath(): String
     external fun nativeSendMidiMessage(status: Int, data1: Int, data2: Int)
 
     // Transport control

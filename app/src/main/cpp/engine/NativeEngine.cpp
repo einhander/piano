@@ -87,13 +87,13 @@ void NativeEngine::shutdown() {
 
 oboe::Result NativeEngine::startAudio() {
     OboeOutput* inst = OboeOutput::getInstance();
-    if (!inst) return oboe::Result::ErrorNullPointer;
+    if (!inst) return oboe::Result::ErrorNull;
     return inst->start();
 }
 
 oboe::Result NativeEngine::stopAudio() {
     OboeOutput* inst = OboeOutput::getInstance();
-    if (!inst) return oboe::Result::ErrorNullPointer;
+    if (!inst) return oboe::Result::ErrorNull;
     return inst->stop();
 }
 
@@ -104,7 +104,11 @@ bool NativeEngine::isAudioPlaying() const {
     return state == oboe::StreamState::Open
         || state == oboe::StreamState::Starting
         || state == oboe::StreamState::Started
-        || state == oboe::StreamState::Running;
+        || state == oboe::StreamState::Started;
+}
+
+bool NativeEngine::isEngineInitialized() const {
+    return mInitialized.load(std::memory_order_acquire);
 }
 
 int NativeEngine::loadSoundFont(const char* filePath) {
@@ -172,6 +176,22 @@ void NativeEngine::setPolyphony(int polyphony) {
     if (mSynth) {
         mSynth->setPolyphony(polyphony);
     }
+}
+
+int NativeEngine::getPolyphony() const {
+    return mSynth ? mSynth->getPolyphony() : 0;
+}
+
+float NativeEngine::getMasterGain() const {
+    return mSynth ? mSynth->getMasterGain() : 0.0f;
+}
+
+int NativeEngine::getSoundFontCount() const {
+    return mSynth ? mSynth->getSoundFontCount() : 0;
+}
+
+std::string NativeEngine::getSoundFontPath() const {
+    return mSynth ? mSynth->getSoundFontPath() : std::string();
 }
 
 int NativeEngine::getSampleRate() const {

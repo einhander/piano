@@ -1,5 +1,7 @@
 package com.piano.sequencer.project
 
+import java.util.UUID
+
 data class Clip(
     val id: String = UUID.randomUUID().toString(),
     var name: String = "Clip",

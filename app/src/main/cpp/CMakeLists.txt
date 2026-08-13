@@ -59,7 +59,7 @@ target_include_directories(native-lib PRIVATE
 # Link libraries
 target_link_libraries(native-lib
     oboe
-    fluidsynth
+libfluidsynth
     log
     android
     OpenSLES

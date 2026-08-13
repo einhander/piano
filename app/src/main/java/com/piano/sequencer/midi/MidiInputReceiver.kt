@@ -19,33 +19,95 @@ class MidiInputReceiver : MidiReceiver() {
         this.callback = callback
     }
 
-    override fun onReceive(status: Byte, data1: Byte, data2: Byte, timestamp: Long): Boolean {
-        val statusByte = status.toInt() and 0xFF
-        val data1Int = data1.toInt() and 0xFF
-        val data2Int = data2.toInt() and 0xFF
-        val channel = statusByte and 0x0F
-        val messageType = statusByte and 0xF0
+    override fun onSend(data: ByteArray, offset: Int, length: Int, timestamp: Long) {
+        val end = offset + length
+        var pos = offset
+        while (pos < end) {
+            val statusByte = data[pos].toInt() and 0xFF
+            val channel = statusByte and 0x0F
+            val messageType = statusByte and 0xF0
+            pos++
 
-        callback?.let { cb ->
-            try {
-                when (messageType) {
-                    0x90 -> { // Note On
-                        if (data2Int > 0) {
-                            cb.onNoteOn(channel, data1Int, data2Int)
-                        } else {
-                            cb.onNoteOff(channel, data1Int, data2Int)
+            callback?.let { cb ->
+                try {
+                    when (messageType) {
+                        0x90 -> { // Note On
+                            if (pos < end) {
+                                val data1 = data[pos].toInt() and 0xFF
+                                pos++
+                                if (pos < end) {
+                                    val data2 = data[pos].toInt() and 0xFF
+                                    pos++
+                                    if (data2 > 0) {
+                                        cb.onNoteOn(channel, data1, data2)
+                                    } else {
+                                        cb.onNoteOff(channel, data1, data2)
+                                    }
+                                }
+                            }
+                        }
+                        0x80 -> { // Note Off
+                            if (pos < end) {
+                                val data1 = data[pos].toInt() and 0xFF
+                                pos++
+                                if (pos < end) {
+                                    val data2 = data[pos].toInt() and 0xFF
+                                    cb.onNoteOff(channel, data1, data2)
+                                }
+                            }
+                        }
+                        0xB0 -> { // Control Change
+                            if (pos < end) {
+                                val data1 = data[pos].toInt() and 0xFF
+                                pos++
+                                if (pos < end) {
+                                    val data2 = data[pos].toInt() and 0xFF
+                                    cb.onControlChange(channel, data1, data2)
+                                }
+                            }
+                        }
+                        0xC0 -> { // Program Change
+                            if (pos < end) {
+                                val data1 = data[pos].toInt() and 0xFF
+                                cb.onProgramChange(channel, data1)
+                            }
+                        }
+                        0xE0 -> { // Pitch Bend
+                            if (pos < end) {
+                                val data1 = data[pos].toInt() and 0xFF
+                                pos++
+                                if (pos < end) {
+                                    val data2 = data[pos].toInt() and 0xFF
+                                    cb.onPitchBend(channel, (data2 shl 7) or data1)
+                                }
+                            }
+                        }
+                        0xD0 -> { // Channel Pressure
+                            if (pos < end) {
+                                val data1 = data[pos].toInt() and 0xFF
+                                cb.onChannelPressure(channel, data1)
+                            }
+                        }
+                        0xF0 -> { // System Exclusive / Real-Time — skip
+                            if (messageType == 0xF0) {
+                                // Skip until 0xF7
+                                while (pos < end) {
+                                    if (data[pos].toInt() and 0xFF == 0xF7) {
+                                        pos++
+                                        break
+                                    }
+                                    pos++
+                                }
+                            }
+                        }
+                        else -> {
+                            // Unknown message, skip remaining data bytes for this status
                         }
                     }
-                    0x80 -> cb.onNoteOff(channel, data1Int, data2Int)
-                    0xB0 -> cb.onControlChange(channel, data1Int, data2Int)
-                    0xC0 -> cb.onProgramChange(channel, data1Int)
-                    0xE0 -> cb.onPitchBend(channel, (data2Int shl 7) or data1Int)
-                    0xD0 -> cb.onChannelPressure(channel, data1Int)
+                } catch (e: Exception) {
+                    // Prevent callback exception from crashing MIDI callback chain
                 }
-            } catch (e: Exception) {
-                // Prevent callback exception from crashing MIDI callback chain
             }
         }
-        return true
-    }
+        }
 }

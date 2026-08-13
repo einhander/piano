@@ -9,6 +9,7 @@ val ndkVersion = "26.1.10909125"
 android {
     namespace = "com.piano.sequencer"
     compileSdk = 34
+    ndkVersion = "26.1.10909125"
 
     defaultConfig {
         applicationId = "com.piano.sequencer"
@@ -48,7 +49,7 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
-            version = ndkVersion
+            version = "3.22.1"
         }
     }
 
@@ -60,6 +61,7 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.activity:activity-ktx:1.8.0")
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")

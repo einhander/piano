@@ -2,11 +2,13 @@
 
 #include <atomic>
 #include <cstdint>
+#include <string>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
 #include <chrono>
 
+#include <oboe/Oboe.h>
 #include "realtime/MidiQueue.h"
 #include "model/TransportState.h"
 #include "engine/Sequencer.h"
@@ -35,6 +37,7 @@ public:
     oboe::Result startAudio();
     oboe::Result stopAudio();
     bool isAudioPlaying() const;
+    bool isEngineInitialized() const;
 
     // SoundFont
     int loadSoundFont(const char* filePath);
@@ -54,6 +57,10 @@ public:
     // Master controls
     void setMasterGain(float gain);
     void setPolyphony(int polyphony);
+    int getPolyphony() const;
+    float getMasterGain() const;
+    int getSoundFontCount() const;
+    std::string getSoundFontPath() const;
 
     // Transport control
     void setBPM(double bpm);
@@ -113,8 +120,8 @@ public:
     // beats: number of count-in beats (default 4)
     // Returns the frame when recording should start
     int64_t startCountIn(int beats = 4);
-    bool isCountingIn() const { return mCountingIn.load(); }
-    int64_t getCountInEndFrame() const { return mCountInEndFrame.load(); }
+    bool isCountingIn() const;
+    int64_t getCountInEndFrame() const;
 
     // Recording control
     void startRecording();
@@ -182,7 +189,7 @@ private:
 
     // Clip storage (owned by NativeEngine, safe for audio thread access)
     static constexpr int32_t kMaxClips = 64;
-    ClipScheduler::ClipData mClips[kMaxClips];
+    ClipData mClips[kMaxClips];
     std::atomic<int32_t> mClipCount{0};
 
     // Pre-allocated synth render buffer (avoids stack allocation in audio callback)
@@ -191,7 +198,7 @@ private:
 
     // Count-in metronome state
     std::atomic<bool> mCountingIn{false};
-    int64_t mCountInEndFrame{0};
+    std::atomic<int64_t> mCountInEndFrame{0};
     int mCountInBeats{4};
     int64_t mCountInStartFrame{0};
     int mCountInClickIndex{0};

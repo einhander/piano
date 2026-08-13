@@ -12,19 +12,32 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.Binder
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.widget.Toast
 import com.piano.sequencer.MainActivity
 import com.piano.sequencer.NativeEngineBridge
 
-class PlaybackService : Service() {
+class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     private val binder = PlaybackBinder()
     private var audioFocusRequest: AudioFocusRequest? = null
     private var audioManager: AudioManager? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     inner class PlaybackBinder : Binder() {
         fun getService(): PlaybackService = this@PlaybackService
+
+        fun setPolyphony(value: Int) = this@PlaybackService.setPolyphony(value)
+        fun getPolyphony(): Int = this@PlaybackService.getPolyphony()
+        fun setMasterGain(gain: Float) = this@PlaybackService.setMasterGain(gain)
+        fun getMasterGain(): Float = this@PlaybackService.getMasterGain()
+        fun loadSoundFont(filePath: String): Int = this@PlaybackService.loadSoundFont(filePath)
+        fun unloadSoundFonts() = this@PlaybackService.unloadSoundFonts()
+        fun getSoundFontCount(): Int = this@PlaybackService.getSoundFontCount()
+        fun getSoundFontPath(): String = this@PlaybackService.getSoundFontPath()
+        fun isAudioPlaying(): Boolean = this@PlaybackService.isAudioPlaying()
     }
 
     override fun onCreate() {
@@ -44,7 +57,7 @@ class PlaybackService : Service() {
     fun startAudio() {
         val result = NativeEngineBridge.nativeStartAudio()
         if (result != 0) {
-            runOnUiThread {
+            mainHandler.post {
                 Toast.makeText(this, "Start failed: $result", Toast.LENGTH_SHORT).show()
             }
         }
@@ -55,6 +68,8 @@ class PlaybackService : Service() {
     }
 
     fun isAudioPlaying(): Boolean = NativeEngineBridge.nativeIsAudioPlaying()
+
+    fun isEngineInitialized(): Boolean = NativeEngineBridge.nativeIsEngineInitialized()
 
     fun openAudio(): Int = NativeEngineBridge.nativeOpenAudio()
 
@@ -77,6 +92,13 @@ class PlaybackService : Service() {
 
     fun getUnderrunCount(): Int = NativeEngineBridge.nativeGetUnderrunCount()
 
+    fun setPolyphony(value: Int) = NativeEngineBridge.nativeSetPolyphony(value)
+    fun getPolyphony(): Int = NativeEngineBridge.nativeGetPolyphony()
+    fun getMasterGain(): Float = NativeEngineBridge.nativeGetMasterGain()
+    fun unloadSoundFonts() = NativeEngineBridge.nativeUnloadSoundFonts()
+    fun getSoundFontCount(): Int = NativeEngineBridge.nativeGetSoundFontCount()
+    fun getSoundFontPath(): String = NativeEngineBridge.nativeGetSoundFontPath()
+
     // Export recorded MIDI to file
     fun exportMidiFile(callback: (String?) -> Unit) {
         // Get recorded events from native engine
@@ -94,7 +116,7 @@ class PlaybackService : Service() {
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .build()
                 )
-                .setOnAudioFocusChangeListener { }
+                .setOnAudioFocusChangeListener(this)
                 .build()
             audioManager?.requestAudioFocus(audioFocusRequest!!)
         } else {
@@ -106,10 +128,19 @@ class PlaybackService : Service() {
     }
 
     private fun releaseAudioFocus() {
-        audioFocusRequest?.let {
-            audioManager?.abandonAudioFocus(it)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest?.let {
+                audioManager?.abandonAudioFocusRequest(it)
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager?.abandonAudioFocus(this)
         }
         audioFocusRequest = null
+    }
+
+    override fun onAudioFocusChange(focusChange: Int) {
+        // Handle audio focus changes
     }
 
     private fun buildNotification(): Notification {

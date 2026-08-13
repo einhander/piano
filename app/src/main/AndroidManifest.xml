@@ -20,6 +20,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".SettingsActivity"
+            android:parentActivityName=".MainActivity"
+            android:label="@string/settings_title" />
+
         <service
             android:name=".service.PlaybackService"
             android:exported="true"

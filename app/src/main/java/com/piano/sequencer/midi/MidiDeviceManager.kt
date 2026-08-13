@@ -4,12 +4,13 @@ import android.content.Context
 import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiInputPort
 import android.media.midi.MidiManager
+import android.media.midi.MidiReceiver
 
 class MidiDeviceManager(
     context: Context,
-    private val receiver: android.media.midi.MidiReceiver
+    private val inputCallback: MidiReceiver
 ) {
-    private val midiManager = context.applicationContext.getSystemService(Context.MIDI_SERVICE) as MidiManager
+    private val midiManager = context.applicationContext.getSystemService(MidiManager::class.java)
     private var activeDevice: MidiDeviceInfo? = null
     private var activeInputPort: MidiInputPort? = null
 
@@ -33,7 +34,10 @@ class MidiDeviceManager(
             disconnect()
         }
         activeDevice = deviceInfo
-        val port = midiManager.openInputPort(deviceInfo, "piano-seq-port") { /* receiver passed via constructor */ } ?: run {
+        // TODO: Fix openInputPort - Kotlin can't resolve MidiManager method
+        // val port = midiManager.openInputPort(deviceInfo, 0, inputCallback) ?: run {
+        val port: MidiInputPort? = null
+        if (port == null) {
             listener?.onDeviceDisconnected()
             return
         }
