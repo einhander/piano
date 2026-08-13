@@ -69,7 +69,7 @@ class SettingsActivity : AppCompatActivity() {
         tvMasterGain = findViewById(R.id.tvMasterGain)
         seekBarMasterGain = findViewById(R.id.seekBarMasterGain)
 
-        btnBrowse.setOnClickListener { sf2Picker.launch("application/soundfont") }
+        btnBrowse.setOnClickListener { sf2Picker.launch("*/*") }
 
         btnUnload.setOnClickListener { unloadSoundFont() }
 

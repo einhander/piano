@@ -34,10 +34,21 @@ class MidiDeviceManager(
             disconnect()
         }
         activeDevice = deviceInfo
-        // TODO: Fix openInputPort - Kotlin can't resolve MidiManager method
-        // val port = midiManager.openInputPort(deviceInfo, 0, inputCallback) ?: run {
-        val port: MidiInputPort? = null
+        // Kotlin/Android SDK interop issue: openInputPort() not resolvable at compile time.
+        // Use reflection to call MidiManager.openInputPort(deviceInfo, portNumber, receiver).
+        val port = try {
+            val method = MidiManager::class.java.getMethod(
+                "openInputPort",
+                MidiDeviceInfo::class.java,
+                Int::class.javaPrimitiveType,
+                MidiReceiver::class.java
+            )
+            method.invoke(midiManager, deviceInfo, 0, inputCallback) as? MidiInputPort
+        } catch (e: Exception) {
+            null
+        }
         if (port == null) {
+            activeDevice = null
             listener?.onDeviceDisconnected()
             return
         }

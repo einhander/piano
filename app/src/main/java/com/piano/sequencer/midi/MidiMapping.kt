@@ -40,7 +40,7 @@ class MidiLearnManager : MidiReceiver() {
     }
 
     fun startLearn(action: String) {
-        learnState = LearnState.valueOf(action)
+        learnState = LearnState.values().find { it.name == action } ?: LearnState.IDLE
     }
 
     fun stopLearn() {

@@ -72,6 +72,16 @@ class MidiInputReceiver : MidiReceiver() {
                                 cb.onProgramChange(channel, data1)
                             }
                         }
+                        0xA0 -> { // Polyphonic Aftertouch — note + pressure
+                            if (pos < end) {
+                                val data1 = data[pos].toInt() and 0xFF // note
+                                pos++
+                                if (pos < end) {
+                                    val data2 = data[pos].toInt() and 0xFF // pressure
+                                    cb.onChannelPressure(channel, data2)
+                                }
+                            }
+                        }
                         0xE0 -> { // Pitch Bend
                             if (pos < end) {
                                 val data1 = data[pos].toInt() and 0xFF
@@ -88,17 +98,18 @@ class MidiInputReceiver : MidiReceiver() {
                                 cb.onChannelPressure(channel, data1)
                             }
                         }
-                        0xF0 -> { // System Exclusive / Real-Time — skip
-                            if (messageType == 0xF0) {
-                                // Skip until 0xF7
-                                while (pos < end) {
-                                    if (data[pos].toInt() and 0xFF == 0xF7) {
-                                        pos++
-                                        break
-                                    }
-                                    pos++
-                                }
+                        0xF0 -> { // SysEx start — skip until 0xF7
+                            while (pos < end) {
+                                val b = data[pos].toInt() and 0xFF
+                                pos++
+                                // Real-time bytes (0xF8-0xFF) can appear inside SysEx — ignore
+                                if (b >= 0xF8) continue
+                                if (b == 0xF7) break // End of SysEx
                             }
+                        }
+                        0xF7 -> { // End of SysEx — already consumed above
+                        }
+                        in 0xF8..0xFF -> { // Real-time messages — ignore
                         }
                         else -> {
                             // Unknown message, skip remaining data bytes for this status

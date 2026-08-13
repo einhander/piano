@@ -24,27 +24,33 @@ OboeOutput::~OboeOutput() {
 }
 
 oboe::Result OboeOutput::open() {
-    oboe::AudioStreamBuilder builder;
+    // Try exclusive first (lowest latency), fall back to shared
+    oboe::SharingMode modes[] = {
+        oboe::SharingMode::Exclusive,
+        oboe::SharingMode::Shared
+    };
 
-    builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
-    builder.setSharingMode(oboe::SharingMode::Exclusive);
-    builder.setFormat(oboe::AudioFormat::Float);
-    builder.setChannelCount(oboe::ChannelCount::Stereo);
-    builder.setCallback(this);
-    builder.setFramesPerCallback(64);
-    builder.setErrorCallback(this);
+    for (auto mode : modes) {
+        oboe::AudioStreamBuilder builder;
+        builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+        builder.setSharingMode(mode);
+        builder.setFormat(oboe::AudioFormat::Float);
+        builder.setChannelCount(oboe::ChannelCount::Stereo);
+        builder.setCallback(this);
+        builder.setFramesPerCallback(64);
+        builder.setErrorCallback(this);
 
-    oboe::Result result = builder.openStream(&mStream);
-    if (result != oboe::Result::OK) {
-        return result;
+        oboe::Result result = builder.openStream(&mStream);
+        if (result == oboe::Result::OK) {
+            mSampleRate = mStream->getSampleRate();
+            mFramesPerBurst = mStream->getFramesPerBurst();
+            mPhaseIncrement = kTestFrequency / mSampleRate;
+            mState.store(oboe::StreamState::Open);
+            return oboe::Result::OK;
+        }
     }
 
-    mSampleRate = mStream->getSampleRate();
-    mFramesPerBurst = mStream->getFramesPerBurst();
-    mPhaseIncrement = kTestFrequency / mSampleRate;
-    mState.store(oboe::StreamState::Open);
-
-    return oboe::Result::OK;
+    return oboe::Result::ErrorInternal;
 }
 
 void OboeOutput::close() {
