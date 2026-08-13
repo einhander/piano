@@ -11,6 +11,9 @@ import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ContextWrapper
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textview.MaterialTextView
 import com.piano.sequencer.service.PlaybackService
@@ -31,11 +34,18 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var tvMasterGain: MaterialTextView
     private lateinit var seekBarMasterGain: SeekBar
 
+    private lateinit var tvLog: MaterialTextView
+    private lateinit var btnCopyLog: MaterialButton
+    private lateinit var btnClearLog: MaterialButton
+
     private var service: PlaybackService? = null
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder) {
             service = (binder as PlaybackService.PlaybackBinder).getService()
-            CompletableFuture.runAsync({ loadCurrentValues() }, mainExecutor)
+            CompletableFuture.runAsync({
+            loadCurrentValues()
+            refreshLog()
+        }, mainExecutor)
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             service = null
@@ -68,6 +78,16 @@ class SettingsActivity : AppCompatActivity() {
         seekBarPolyphony = findViewById(R.id.seekBarPolyphony)
         tvMasterGain = findViewById(R.id.tvMasterGain)
         seekBarMasterGain = findViewById(R.id.seekBarMasterGain)
+
+        tvLog = findViewById(R.id.tvLog)
+        btnCopyLog = findViewById(R.id.btnCopyLog)
+        btnClearLog = findViewById(R.id.btnClearLog)
+
+        btnCopyLog.setOnClickListener { copyLog() }
+        btnClearLog.setOnClickListener {
+            AppLogger.clear()
+            refreshLog()
+        }
 
         btnBrowse.setOnClickListener { sf2Picker.launch("*/*") }
 
@@ -206,10 +226,17 @@ class SettingsActivity : AppCompatActivity() {
                     }
                 }
 
-                svc?.loadSoundFont(destFile.absolutePath) ?: -1
-            } catch (e: Exception) {
-                -1
-            }
+                val result = svc?.loadSoundFont(destFile.absolutePath) ?: -1
+                    if (result != 0) {
+                        AppLogger.error("SettingsActivity", "Failed to load SF2: $fileName (error: $result)")
+                    } else {
+                        AppLogger.info("SettingsActivity", "Loaded SF2: $fileName")
+                    }
+                    result
+                } catch (e: Exception) {
+                    AppLogger.error("SettingsActivity", "SF2 load exception: ${e.message}")
+                    -1
+                }
         }, mainExecutor)
         loadFuture.whenComplete { result, ex ->
             runOnUiThread {
@@ -243,12 +270,14 @@ class SettingsActivity : AppCompatActivity() {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 btnUnload.isEnabled = true
                 if (ex == null) {
+                    AppLogger.info("SettingsActivity", "Unloaded all SoundFonts")
                     val svc = service
                     if (svc != null) {
                         tvSf2Path.text = getString(R.string.settings_sf2_none)
                         tvSf2Count.text = getString(R.string.settings_sf2_loaded_count, 0)
                     }
                 } else {
+                    AppLogger.error("SettingsActivity", "Failed to unload SoundFont: ${ex.message}")
                     Toast.makeText(this@SettingsActivity, "Failed to unload SoundFont", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -258,5 +287,25 @@ class SettingsActivity : AppCompatActivity() {
     override fun onSupportNavigateUp(): Boolean {
         navigateUpTo(Intent(this, MainActivity::class.java))
         return true
+    }
+
+    private fun refreshLog() {
+        val entries = AppLogger.getAll()
+        if (entries.isEmpty()) {
+            tvLog.text = getString(R.string.settings_log_empty)
+        } else {
+            tvLog.text = entries.joinToString("\n")
+        }
+    }
+
+    private fun copyLog() {
+        val entries = AppLogger.getAll()
+        if (entries.isEmpty()) {
+            Toast.makeText(this, "Log is empty", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val clipboard = getSystemService(ContextWrapper.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("App Log", entries.joinToString("\n")))
+        Toast.makeText(this, "Log copied to clipboard", Toast.LENGTH_SHORT).show()
     }
 }

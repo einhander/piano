@@ -167,6 +167,75 @@
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
+            <!-- App Log Section -->
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:layout_marginBottom="16dp"
+                app:cardElevation="2dp"
+                app:cardCornerRadius="12dp"
+                app:strokeWidth="0dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="20dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/settings_log_title"
+                            android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnCopyLog"
+                            style="@style/Widget.MaterialComponents.Button.TextButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/settings_log_copy"
+                            android:textAllCaps="false" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnClearLog"
+                            style="@style/Widget.MaterialComponents.Button.TextButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/settings_log_clear"
+                            android:textAllCaps="false"
+                            android:textColor="?attr/colorError" />
+                    </LinearLayout>
+
+                    <ScrollView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:maxHeight="300dp"
+                        android:layout_marginTop="12dp"
+                        android:background="?attr/colorSurfaceVariant"
+                        android:padding="8dp">
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/tvLog"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/settings_log_empty"
+                            android:textAppearance="?attr/textAppearanceCaption"
+                            android:fontFamily="monospace"
+                            android:textColor="?attr/colorOnSurfaceVariant"
+                            android:lineSpacingMultiplier="1.2" />
+                    </ScrollView>
+
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
         </LinearLayout>
     </ScrollView>
 

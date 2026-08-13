@@ -86,11 +86,17 @@ class MainActivity : AppCompatActivity() {
 
             val openResult = playbackService?.openAudio()
             if (openResult != 0) {
+                AppLogger.error("MainActivity", "Audio open failed: $openResult")
                 Toast.makeText(this@MainActivity, "Audio open failed: $openResult", Toast.LENGTH_SHORT).show()
+            } else {
+                AppLogger.info("MainActivity", "Audio opened successfully")
             }
             val initResult = playbackService?.initEngine(48000, 512)
             if (initResult != true) {
+                AppLogger.error("MainActivity", "Engine init failed")
                 Toast.makeText(this@MainActivity, "Engine init failed", Toast.LENGTH_SHORT).show()
+            } else {
+                AppLogger.info("MainActivity", "Engine initialized (48000Hz, 512 buffer)")
             }
         }
 

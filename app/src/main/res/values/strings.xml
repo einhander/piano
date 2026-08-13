@@ -17,4 +17,8 @@
     <string name="settings_polyphony_value">Polyphony: %d</string>
     <string name="settings_master_gain_value">Master Gain: %.2f</string>
     <string name="settings_btn_settings">Settings</string>
+    <string name="settings_log_title">App Log</string>
+    <string name="settings_log_copy">Copy</string>
+    <string name="settings_log_clear">Clear</string>
+    <string name="settings_log_empty">No log entries</string>
 </resources>

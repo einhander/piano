@@ -5,6 +5,7 @@ import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiInputPort
 import android.media.midi.MidiManager
 import android.media.midi.MidiReceiver
+import com.piano.sequencer.AppLogger
 
 class MidiDeviceManager(
     context: Context,
@@ -49,15 +50,18 @@ class MidiDeviceManager(
         }
         if (port == null) {
             activeDevice = null
+            AppLogger.error("MidiDeviceManager", "Failed to open input port for device ${deviceInfo.id}")
             listener?.onDeviceDisconnected()
             return
         }
         activeInputPort = port
+        AppLogger.info("MidiDeviceManager", "Connected: device ${deviceInfo.id}")
         listener?.onDeviceConnected(deviceInfo)
     }
 
     fun disconnect() {
         if (activeInputPort == null) return
+        AppLogger.info("MidiDeviceManager", "Disconnected: device ${activeDevice?.id ?: -1}")
         activeDevice = null
         activeInputPort?.close()
         activeInputPort = null

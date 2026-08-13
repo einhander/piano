@@ -16,6 +16,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.widget.Toast
+import com.piano.sequencer.AppLogger
 import com.piano.sequencer.MainActivity
 import com.piano.sequencer.NativeEngineBridge
 
@@ -57,14 +58,18 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun startAudio() {
         val result = NativeEngineBridge.nativeStartAudio()
         if (result != 0) {
+            AppLogger.error("PlaybackService", "Start audio failed: $result")
             mainHandler.post {
                 Toast.makeText(this, "Start failed: $result", Toast.LENGTH_SHORT).show()
             }
+        } else {
+            AppLogger.info("PlaybackService", "Audio started")
         }
     }
 
     fun stopAudio() {
         NativeEngineBridge.nativeStopAudio()
+        AppLogger.info("PlaybackService", "Audio stopped")
     }
 
     fun isAudioPlaying(): Boolean = NativeEngineBridge.nativeIsAudioPlaying()
