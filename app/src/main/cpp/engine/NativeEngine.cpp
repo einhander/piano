@@ -194,6 +194,18 @@ std::string NativeEngine::getSoundFontPath() const {
     return mSynth ? mSynth->getSoundFontPath() : std::string();
 }
 
+std::vector<InstrumentInfo> NativeEngine::getInstruments() const {
+    return mSynth ? mSynth->getInstruments() : std::vector<InstrumentInfo>();
+}
+
+bool NativeEngine::setChannelProgram(int channel, int bank, int program) {
+    return mSynth ? mSynth->setChannelProgram(channel, bank, program) : false;
+}
+
+bool NativeEngine::getChannelProgram(int channel, int& bank, int& program) const {
+    return mSynth ? mSynth->getChannelProgram(channel, bank, program) : false;
+}
+
 int NativeEngine::getSampleRate() const {
     return mSampleRate;
 }

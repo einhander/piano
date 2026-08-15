@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <thread>
+#include <vector>
 #include <mutex>
 #include <condition_variable>
 #include <chrono>
@@ -18,9 +19,9 @@
 #include "engine/MasterBus.h"
 #include "engine/LaunchQuantizer.h"
 #include "engine/MidiRecorder.h"
+#include "synth/FluidSynthEngine.h"
 
 class OboeOutput;
-class FluidSynthEngine;
 
 class NativeEngine {
 public:
@@ -61,6 +62,11 @@ public:
     float getMasterGain() const;
     int getSoundFontCount() const;
     std::string getSoundFontPath() const;
+
+    // Instruments (settings thread, NOT audio callback)
+    std::vector<InstrumentInfo> getInstruments() const;
+    bool setChannelProgram(int channel, int bank, int program);
+    bool getChannelProgram(int channel, int& bank, int& program) const;
 
     // Transport control
     void setBPM(double bpm);

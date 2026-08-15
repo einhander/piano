@@ -38,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var loadButton: Button
     private lateinit var exportMidiButton: Button
     private lateinit var settingsButton: Button
+    private lateinit var instrumentsButton: Button
     private lateinit var midiStatusText: TextView
 
     // Log viewer
@@ -203,6 +204,12 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
             }
         }
+        instrumentsButton = Button(this).apply {
+            text = "Instruments"
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, InstrumentActivity::class.java))
+            }
+        }
         layout.addView(statusText)
         layout.addView(playButton)
         layout.addView(c4Button)
@@ -212,6 +219,7 @@ class MainActivity : AppCompatActivity() {
         layout.addView(saveButton)
         layout.addView(loadButton)
         layout.addView(exportMidiButton)
+        layout.addView(instrumentsButton)
         layout.addView(settingsButton)
         setContentView(layout)
 

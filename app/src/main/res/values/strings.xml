@@ -21,4 +21,18 @@
     <string name="settings_log_copy">Copy</string>
     <string name="settings_log_clear">Clear</string>
     <string name="settings_log_empty">No log entries</string>
+
+    <!-- Instruments -->
+    <string name="instruments_title">Instruments</string>
+    <string name="instrument_hint">Tap a channel to change its instrument. Changes apply immediately.</string>
+    <string name="instrument_no_sf2">No SoundFont loaded — load a SoundFont in Settings</string>
+    <string name="instrument_no_sf2_toast">No SoundFont loaded</string>
+    <string name="instrument_picker_title">Channel %d</string>
+    <string name="instrument_search_hint">Search…</string>
+    <string name="instrument_bank_suffix">%1$s (bank %2$d)</string>
+    <string name="instrument_channel">Ch %d</string>
+    <string name="instrument_channel_drums">Ch 10 (Drums)</string>
+    <string name="instrument_program_fallback">Default</string>
+    <string name="instrument_unknown">—</string>
+    <string name="instrument_apply_failed">Could not apply instrument</string>
 </resources>

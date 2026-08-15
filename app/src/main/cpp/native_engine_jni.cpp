@@ -1,9 +1,12 @@
 #include <jni.h>
+#include <cstdio>
 #include <string>
+#include <vector>
 #include "audio/OboeOutput.h"
 #include "engine/NativeEngine.h"
 #include "model/TransportState.h"
 #include "engine/MidiRecorder.h"
+#include "synth/FluidSynthEngine.h"
 
 extern "C" {
 
@@ -192,6 +195,83 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetSoundFontPath(JNIEnv* env, 
         return env->NewStringUTF("");
     }
     return result;
+}
+
+// JSON-escape a string for embedding in a JSON string literal
+static std::string jsonEscape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (unsigned char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += static_cast<char>(c);
+                }
+        }
+    }
+    return out;
+}
+
+// Returns JSON array: [{"name":"...","bank":0,"program":0}, ...]
+// Empty array "[]" if no SoundFont is loaded.
+JNIEXPORT jstring JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetInstruments(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return env->NewStringUTF("[]");
+    std::vector<InstrumentInfo> instruments = inst->getInstruments();
+    std::string json = "[";
+    for (size_t i = 0; i < instruments.size(); i++) {
+        if (i > 0) json += ",";
+        json += "{\"name\":\"";
+        json += jsonEscape(instruments[i].name);
+        json += "\",\"bank\":";
+        json += std::to_string(instruments[i].bank);
+        json += ",\"program\":";
+        json += std::to_string(instruments[i].program);
+        json += "}";
+    }
+    json += "]";
+    jstring result = env->NewStringUTF(json.c_str());
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return env->NewStringUTF("[]");
+    }
+    return result;
+}
+
+// Returns true if the program was applied, false if not (no engine, invalid channel).
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetChannelProgram(
+    JNIEnv* env, jclass, jint channel, jint bank, jint program) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return JNI_FALSE;
+    return inst->setChannelProgram(static_cast<int>(channel),
+                                   static_cast<int>(bank),
+                                   static_cast<int>(program)) ? JNI_TRUE : JNI_FALSE;
+}
+
+// Returns (bank << 8) | program, or -1 if unavailable.
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetChannelProgram(
+    JNIEnv* env, jclass, jint channel) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return -1;
+    int bank = 0, program = 0;
+    if (!inst->getChannelProgram(static_cast<int>(channel), bank, program)) {
+        return -1;
+    }
+    return static_cast<jint>((bank << 8) | program);
 }
 
 JNIEXPORT void JNICALL

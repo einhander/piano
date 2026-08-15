@@ -39,6 +39,10 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         fun getSoundFontCount(): Int = this@PlaybackService.getSoundFontCount()
         fun getSoundFontPath(): String = this@PlaybackService.getSoundFontPath()
         fun isAudioPlaying(): Boolean = this@PlaybackService.isAudioPlaying()
+        fun getInstruments(): String = this@PlaybackService.getInstruments()
+        fun setChannelProgram(channel: Int, bank: Int, program: Int): Boolean =
+            this@PlaybackService.setChannelProgram(channel, bank, program)
+        fun getChannelProgram(channel: Int): Int = this@PlaybackService.getChannelProgram(channel)
     }
 
     override fun onCreate() {
@@ -103,6 +107,12 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun unloadSoundFonts() = NativeEngineBridge.nativeUnloadSoundFonts()
     fun getSoundFontCount(): Int = NativeEngineBridge.nativeGetSoundFontCount()
     fun getSoundFontPath(): String = NativeEngineBridge.nativeGetSoundFontPath()
+
+    // Instrument assignment (16 MIDI channels)
+    fun getInstruments(): String = NativeEngineBridge.nativeGetInstruments()
+    fun setChannelProgram(channel: Int, bank: Int, program: Int): Boolean =
+        NativeEngineBridge.nativeSetChannelProgram(channel, bank, program)
+    fun getChannelProgram(channel: Int): Int = NativeEngineBridge.nativeGetChannelProgram(channel)
 
     // Export recorded MIDI to file
     fun exportMidiFile(callback: (String?) -> Unit) {

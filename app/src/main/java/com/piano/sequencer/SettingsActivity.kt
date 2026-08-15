@@ -41,6 +41,9 @@ class SettingsActivity : AppCompatActivity() {
     private var service: PlaybackService? = null
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder) {
+            // Can be delivered after onDestroy (cold start, user closed the
+            // screen during service startup) — the executor is already shut down.
+            if (isFinishing || isDestroyed) return
             service = (binder as PlaybackService.PlaybackBinder).getService()
             CompletableFuture.runAsync({
             loadCurrentValues()

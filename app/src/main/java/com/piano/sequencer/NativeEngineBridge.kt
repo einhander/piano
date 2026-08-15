@@ -28,6 +28,11 @@ object NativeEngineBridge {
     external fun nativeUnloadSoundFonts()
     external fun nativeGetSoundFontCount(): Int
     external fun nativeGetSoundFontPath(): String
+
+    // Instruments
+    external fun nativeGetInstruments(): String
+    external fun nativeSetChannelProgram(channel: Int, bank: Int, program: Int): Boolean
+    external fun nativeGetChannelProgram(channel: Int): Int
     external fun nativeSendMidiMessage(status: Int, data1: Int, data2: Int)
 
     // Transport control

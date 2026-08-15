@@ -188,6 +188,71 @@ std::string FluidSynthEngine::getSoundFontPath() const {
     return mLoadedSfPath;
 }
 
+std::vector<InstrumentInfo> FluidSynthEngine::getInstruments() const {
+    if (!mInitialized.load()) return {};
+    std::vector<InstrumentInfo> result;
+    std::lock_guard<std::mutex> lock(mSynthMutex);
+    if (!mSynth) return result;
+    // One-shot UI operation; a typical GM SF2 (128 presets) fits the initial
+    // capacity without reallocation. Holding mSynthMutex for the enumeration
+    // briefly blocks the audio callback — acceptable for an infrequent call.
+    result.reserve(256);
+    int sfCount = fluid_synth_sfcount(mSynth);
+    for (int i = 0; i < sfCount; i++) {
+        fluid_sfont_t* sfont = fluid_synth_get_sfont(mSynth, i);
+        if (!sfont) continue;
+        fluid_sfont_iteration_start(sfont);
+        fluid_preset_t* preset;
+        while ((preset = fluid_sfont_iteration_next(sfont)) != nullptr) {
+            const char* name = fluid_preset_get_name(preset);
+            result.push_back({name ? name : "",
+                              fluid_preset_get_banknum(preset),
+                              fluid_preset_get_num(preset)});
+        }
+    }
+    return result;
+}
+
+bool FluidSynthEngine::setChannelProgram(int channel, int bank, int program) {
+    if (!mInitialized.load()) return false;
+    std::lock_guard<std::mutex> lock(mSynthMutex);
+    if (!mSynth) return false;
+    if (channel < 0 || channel > 15) return false;
+    if (bank < 0) bank = 0;
+    if (bank > 16383) bank = 16383;
+    if (program < 0 || program > 127) program = 0;
+    // fluid_synth_bank_select handles bank style (GM/GS/XG) and the full
+    // 0-16383 range; raw CC0 only covers 0-127 and is style-dependent.
+    // Note: in the default GS bank style, channel_type (drum/melodic) is not
+    // updated by either this path or the CC0 path; it only affects the
+    // substitute chosen when the preset is missing (see return value below).
+    if (fluid_synth_bank_select(mSynth, channel, bank) != FLUID_OK) {
+        return false;
+    }
+    // FLUID_FAILED means the (bank, program) preset is not in the loaded SF2
+    // (e.g. SF2 swapped after enumeration) — a substitute was applied instead.
+    if (fluid_synth_program_change(mSynth, channel, program) != FLUID_OK) {
+        return false;
+    }
+    return true;
+}
+
+// Returns the requested (or substituted) bank/program — what the user selected,
+// not necessarily the sounding preset after fallback. Live MIDI program changes
+// (0xC0) also move this without any UI notification; the UI must re-sync on
+// resume or after SF2 changes.
+bool FluidSynthEngine::getChannelProgram(int channel, int& bank, int& program) const {
+    if (!mInitialized.load()) return false;
+    std::lock_guard<std::mutex> lock(mSynthMutex);
+    if (!mSynth) return false;
+    if (channel < 0 || channel > 15) return false;
+    int sfontId = -1;
+    if (fluid_synth_get_program(mSynth, channel, &sfontId, &bank, &program) != FLUID_OK) {
+        return false;
+    }
+    return true;
+}
+
 // Called from dedicated MIDI thread — NOT from audio callback.
 // Locks mSynthMutex to serialize with audio callback render() and settings changes.
 void FluidSynthEngine::processLiveMidi(MidiQueue* queue) {

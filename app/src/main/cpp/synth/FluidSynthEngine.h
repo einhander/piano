@@ -7,6 +7,14 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
+
+// One instrument preset from a loaded SoundFont
+struct InstrumentInfo {
+    std::string name;
+    int bank;
+    int program;
+};
 
 // FluidSynth adapter — renders PCM from MIDI events
 // NOT using FluidSynth audio driver, only library mode
@@ -65,6 +73,18 @@ public:
     float getMasterGain() const;
     int getSoundFontCount() const;
     std::string getSoundFontPath() const;
+
+    // Enumerate all presets of all loaded SoundFonts (settings thread, NOT audio callback).
+    // Holds mSynthMutex for the whole enumeration — one-shot UI operation, not for playback.
+    std::vector<InstrumentInfo> getInstruments() const;
+
+    // Set bank + program on a channel (settings thread, NOT audio callback).
+    // Returns false if not applied (not initialized, no synth, or invalid channel).
+    bool setChannelProgram(int channel, int bank, int program);
+
+    // Get the bank + program currently set on a channel (settings thread, NOT audio callback).
+    // Returns false if unavailable; bank/program are 0 when the channel has no explicit program.
+    bool getChannelProgram(int channel, int& bank, int& program) const;
 
 private:
     fluid_synth_t* mSynth = nullptr;
