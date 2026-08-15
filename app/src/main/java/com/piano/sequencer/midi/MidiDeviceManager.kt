@@ -6,6 +6,8 @@ import android.media.midi.MidiInputPort
 import android.media.midi.MidiManager
 import android.media.midi.MidiReceiver
 import com.piano.sequencer.AppLogger
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 
 class MidiDeviceManager(
     context: Context,
@@ -14,6 +16,12 @@ class MidiDeviceManager(
     private val midiManager = context.applicationContext.getSystemService(MidiManager::class.java)
     private var activeDevice: MidiDeviceInfo? = null
     private var activeInputPort: MidiInputPort? = null
+
+    // Dedicated thread for the MidiReceiver callback. openInputPort requires
+    // an Executor; a daemon worker thread keeps input off the main thread.
+    private val midiExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "MidiInput").apply { isDaemon = true }
+    }
 
     interface Listener {
         fun onDeviceConnected(device: MidiDeviceInfo)
@@ -36,15 +44,19 @@ class MidiDeviceManager(
         }
         activeDevice = deviceInfo
         // Kotlin/Android SDK interop issue: openInputPort() not resolvable at compile time.
-        // Use reflection to call MidiManager.openInputPort(deviceInfo, portNumber, receiver).
+        // Use reflection to call the 4-arg API 23+ signature:
+        // MidiManager.openInputPort(device, portNumber, executor, receiver).
+        // (The 3-arg variant does not exist — that is what made the old
+        // reflection call fail with NoSuchMethodException.)
         val port = try {
             val method = MidiManager::class.java.getMethod(
                 "openInputPort",
                 MidiDeviceInfo::class.java,
                 Int::class.javaPrimitiveType,
+                Executor::class.java,
                 MidiReceiver::class.java
             )
-            method.invoke(midiManager, deviceInfo, 0, inputCallback) as? MidiInputPort
+            method.invoke(midiManager, deviceInfo, 0, midiExecutor, inputCallback) as? MidiInputPort
         } catch (e: Exception) {
             AppLogger.warn("MidiDeviceManager", "Reflection openInputPort failed: ${e.javaClass.simpleName}: ${e.message}")
             null

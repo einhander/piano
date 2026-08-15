@@ -7,16 +7,21 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.UriPermission
+import android.graphics.Color
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
+import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.media.midi.MidiDeviceInfo
+import java.io.File
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.piano.sequencer.midi.MidiDeviceManager
@@ -47,6 +52,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnCopyLog: Button
     private lateinit var btnClearLog: Button
 
+    // Log folder (crash.log destination)
+    private lateinit var tvLogFolder: TextView
+    private lateinit var btnChooseLogFolder: Button
+
     private lateinit var projectRepo: ProjectRepository
 
     private lateinit var midiManager: MidiDeviceManager
@@ -66,6 +75,21 @@ class MainActivity : AppCompatActivity() {
             )
             projectRepo.setProjectUri(it)
             Toast.makeText(this@MainActivity, "Project directory selected", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // SAF folder picker for the crash log destination (crash.log)
+    private val logFolderLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        uri?.let {
+            contentResolver.takePersistableUriPermission(
+                it,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            LogFolder.set(this@MainActivity, it)
+            updateLogFolderLabel()
+            Toast.makeText(this@MainActivity, "Log folder selected", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -117,6 +141,11 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, "Engine init failed", Toast.LENGTH_SHORT).show()
             } else {
                 AppLogger.info("MainActivity", "Engine initialized (48000Hz, 512 buffer)")
+                // Restore persisted state (SF2, polyphony, master gain,
+                // channel programs) if the engine was recreated (process
+                // death). If the engine survived (activity recreation) the
+                // state is intact — the sfcount guard inside skips the restore.
+                restorePersistedState()
             }
             refreshLog()
         }
@@ -233,7 +262,7 @@ class MainActivity : AppCompatActivity() {
         val logCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, 16, 0, 0)
-            background = getDrawable(android.R.drawable.dialog_frame) ?: background
+            background = getDrawable(R.drawable.card_frame)
         }
 
         val logTitle = TextView(this).apply {
@@ -260,18 +289,38 @@ class MainActivity : AppCompatActivity() {
         logButtonsRow.addView(btnCopyLog)
         logButtonsRow.addView(btnClearLog)
 
+        val logFolderRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        tvLogFolder = TextView(this@MainActivity).apply {
+            textSize = 12f
+            setPadding(0, 0, 8, 0)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        btnChooseLogFolder = Button(this@MainActivity).apply {
+            text = "Choose"
+            setOnClickListener { logFolderLauncher.launch(null) }
+        }
+        logFolderRow.addView(tvLogFolder)
+        logFolderRow.addView(btnChooseLogFolder)
+        updateLogFolderLabel()
+
         logScrollView = ScrollView(this)
 
         tvLog = TextView(this@MainActivity).apply {
             text = "No log entries"
             typeface = Typeface.MONOSPACE
             textSize = 10f
+            setBackgroundColor(Color.WHITE)
+            setTextColor(Color.BLACK)
             setPadding(8, 8, 8, 8)
         }
         logScrollView.addView(tvLog)
 
         logCard.addView(logTitle)
         logCard.addView(logButtonsRow)
+        logCard.addView(logFolderRow)
         logCard.addView(logScrollView)
         layout.addView(logCard)
 
@@ -345,6 +394,69 @@ class MainActivity : AppCompatActivity() {
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("App Log", entries.joinToString("\n")))
         Toast.makeText(this, "Log copied", Toast.LENGTH_SHORT).show()
+    }
+
+    // "Log folder: <name>" for the crash.log destination (SAF tree)
+    private fun updateLogFolderLabel() {
+        val uri = LogFolder.get(this)
+        tvLogFolder.text = if (uri == null) "Log folder: not set"
+        else "Log folder: ${logFolderDisplayName(uri)}"
+    }
+
+    private fun logFolderDisplayName(uri: Uri): String =
+        try {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                if (it.moveToFirst()) it.getString(0) else "unknown"
+            } ?: "unknown"
+        } catch (_: Exception) {
+            "unknown"
+        }
+
+    // Restore persisted state after engine (re)initialization.
+    // Covers process death: the engine is a fresh instance and everything
+    // (SF2, polyphony, master gain, channel programs) is reset to defaults.
+    // If the engine survived (activity recreation) its state is intact — the
+    // sfcount guard skips the restore. All JNI calls run on a worker thread.
+    private fun restorePersistedState() {
+        val svc = playbackService ?: return
+        Thread({
+            // A fresh engine always starts with no SoundFonts, so sfcount > 0
+            // means the engine survived (activity recreation) — state intact.
+            if (svc.getSoundFontCount() > 0) return@Thread
+            val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+
+            // 1. Reload the last SoundFont (file on disk, path in prefs).
+            var sf2Loaded = false
+            val path = prefs.getString("sf2_path", null)
+            if (path != null && File(path).exists()) {
+                val id = svc.loadSoundFont(path)
+                if (id >= 0) {
+                    sf2Loaded = true
+                    AppLogger.info("MainActivity", "Reloaded SF2: ${File(path).name} (synth ID: $id)")
+                } else {
+                    AppLogger.warn("MainActivity", "Failed to reload SF2: $path (error: $id)")
+                }
+            }
+
+            // 2. Restore polyphony + master gain.
+            svc.setPolyphony(prefs.getInt("polyphony", 64))
+            svc.setMasterGain(prefs.getFloat("master_gain", 1.0f))
+
+            // 3. Restore the 16 channel programs (only meaningful with an SF2).
+            if (sf2Loaded) {
+                var restored = 0
+                for (ch in 0 until 16) {
+                    val packed = prefs.getInt("chan_prog_$ch", -1)
+                    if (packed >= 0 &&
+                        svc.setChannelProgram(ch, packed shr 8, packed and 0xFF)) {
+                        restored++
+                    }
+                }
+                if (restored > 0) {
+                    AppLogger.info("MainActivity", "Restored $restored channel program(s)")
+                }
+            }
+        }, "StateRestore").apply { isDaemon = true }.start()
     }
 
     private fun saveProject() {
@@ -430,8 +542,11 @@ class MainActivity : AppCompatActivity() {
         }
         midiManager.close()
         projectRepo.shutdown()
-        NativeEngineBridge.nativeShutdown()
-        AppLogger.info("MainActivity", "Native engine shutdown")
+        // Do NOT call nativeShutdown() here: the native engine is a
+        // process-level singleton. Destroying it on activity destroy lost the
+        // loaded SoundFont every time the user left and returned (back button
+        // -> new empty engine on re-create). Native resources are reclaimed
+        // on process death; the engine must survive activity recreation.
     }
 
     private fun toggleAudio() {

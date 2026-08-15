@@ -123,7 +123,18 @@ class InstrumentActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER_VERTICAL
                 isClickable = true
                 isFocusable = true
-                background = ContextCompat.getDrawable(this@InstrumentActivity, android.R.drawable.list_selector_background)
+                // selectableItemBackground resolved via the app Light theme
+                // (the list_selector_background platform drawable flips with
+                // the device system theme: light ripple on white card in dark
+                // mode). Note: ContextCompat.getDrawable takes a resource id,
+                // not an attr — the attr must be resolved first.
+                val selector = TypedValue()
+                if (theme.resolveAttribute(android.R.attr.selectableItemBackground, selector, true)) {
+                    background = if (selector.resourceId != 0)
+                        ContextCompat.getDrawable(this@InstrumentActivity, selector.resourceId)
+                    else
+                        ColorDrawable(selector.data)
+                }
                 setPadding(dp(8), dp(12), dp(8), dp(12))
             }
 
@@ -169,8 +180,15 @@ class InstrumentActivity : AppCompatActivity() {
                 return@execute
             }
 
-            val parsed = parseInstruments(svc.getInstruments())
+            val jsonStr = svc.getInstruments()
+            val parsed = parseInstruments(jsonStr)
             val current = IntArray(16) { ch -> svc.getChannelProgram(ch) }
+            // Diagnostics: pinpoint where the chain breaks when the SF2 is
+            // loaded but the list comes back empty.
+            AppLogger.info(
+                "InstrumentActivity",
+                "refresh: sf2 count=${svc.getSoundFontCount()}, json=${jsonStr.length} chars, presets=${parsed.size}"
+            )
 
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
@@ -329,6 +347,11 @@ class InstrumentActivity : AppCompatActivity() {
                         "InstrumentActivity",
                         "Channel ${channel + 1} → ${instrument.name} (bank ${instrument.bank}, program ${instrument.program})"
                     )
+                    // Persist the assignment (packed bank<<8|program) so it
+                    // survives process death / restart.
+                    getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+                        .putInt("chan_prog_$channel", (instrument.bank shl 8) or instrument.program)
+                        .apply()
                 } else {
                     val bank = actual shr 8
                     val program = actual and 0xFF

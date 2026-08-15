@@ -66,3 +66,18 @@ build/*.apk
 # OS
 .DS_Store
 Thumbs.db
+
+# Build artifacts (explicit; the `!build/` CI negation above un-ignores app/build/)
+app/build/
+app/.cxx/
+
+# AI tools
+.opencode/
+.claude/
+.cursor/
+.aider/
+.codex/
+.gemini/
+.windsurf/
+.roo/
+.continue/
