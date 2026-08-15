@@ -21,6 +21,9 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.media.midi.MidiDeviceInfo
+import android.media.midi.MidiManager
+import android.os.Handler
+import android.os.Looper
 import java.io.File
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -45,6 +48,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var settingsButton: Button
     private lateinit var instrumentsButton: Button
     private lateinit var midiStatusText: TextView
+    private lateinit var midiDeviceButton: Button
+
+    private var selectedDeviceName: String? = null
+
+    // True when the user explicitly chose "Disconnect" — suppresses the
+    // auto-reconnect in onResume so the disconnected state is sticky.
+    private var userDisconnected = false
 
     // Log viewer
     private lateinit var logScrollView: ScrollView
@@ -60,6 +70,17 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var midiManager: MidiDeviceManager
     private lateinit var midiInputReceiver: MidiInputReceiver
+
+    // Live re-enumeration: notified when any MIDI device is added/removed
+    // (e.g. a virtual MIDI device connected after the app started).
+    private val midiDeviceCallback = object : MidiManager.DeviceCallback() {
+        override fun onDeviceAdded(deviceInfo: MidiDeviceInfo) {
+            refreshMidiStatus()
+        }
+        override fun onDeviceRemoved(deviceInfo: MidiDeviceInfo) {
+            refreshMidiStatus()
+        }
+    }
 
     private var playbackService: PlaybackService? = null
     private var serviceBound = false
@@ -164,6 +185,28 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun refreshMidiStatus() {
+        if (isFinishing || isDestroyed) return
+        val devices = midiManager.listDevices()
+        when {
+            devices.isEmpty() -> {
+                midiStatusText.text = "MIDI: no devices"
+                midiDeviceButton.text = "MIDI: no devices"
+            }
+            !midiManager.isConnected() -> {
+                midiStatusText.text = "MIDI: disconnected"
+                midiDeviceButton.text = "MIDI: disconnected"
+            }
+            else -> {
+                midiManager.getCurrentDevice()?.let {
+                    val name = midiManager.deviceName(it)
+                    midiStatusText.text = "MIDI: $name"
+                    midiDeviceButton.text = name
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         layout = LinearLayout(this).apply {
@@ -257,6 +300,34 @@ class MainActivity : AppCompatActivity() {
             textSize = 14f
         }
         layout.addView(midiStatusText)
+
+        midiDeviceButton = Button(this).apply {
+            text = "MIDI: no devices"
+            setOnClickListener {
+                val devices = midiManager.listDevices()
+                if (devices.isEmpty()) {
+                    Toast.makeText(this@MainActivity, "No MIDI input devices", Toast.LENGTH_SHORT).show()
+                    midiDeviceButton.text = "MIDI: no devices"
+                    return@setOnClickListener
+                }
+                val names = devices.map { midiManager.deviceName(it) } + "Disconnect"
+                androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("MIDI device")
+                    .setItems(names.toTypedArray()) { _, which ->
+                        if (which < devices.size) {
+                            midiManager.connect(devices[which])
+                            selectedDeviceName = midiManager.deviceName(devices[which])
+                            userDisconnected = false
+                        } else {
+                            midiManager.disconnect()
+                            selectedDeviceName = null
+                            userDisconnected = true
+                        }
+                    }
+                    .show()
+            }
+        }
+        layout.addView(midiDeviceButton)
 
         // App Log section
         val logCard = LinearLayout(this).apply {
@@ -352,12 +423,15 @@ class MainActivity : AppCompatActivity() {
         midiManager.setListener(object : MidiDeviceManager.Listener {
             override fun onDeviceConnected(device: MidiDeviceInfo) {
                 runOnUiThread {
-                    midiStatusText.text = "MIDI: connected"
+                    val name = midiManager.deviceName(device)
+                    midiStatusText.text = "MIDI: $name"
+                    midiDeviceButton.text = name
                 }
             }
             override fun onDeviceDisconnected() {
                 runOnUiThread {
                     midiStatusText.text = "MIDI: disconnected"
+                    midiDeviceButton.text = "MIDI: disconnected"
                 }
             }
         })
@@ -366,11 +440,16 @@ class MainActivity : AppCompatActivity() {
         val devices = midiManager.listDevices()
         if (devices.isNotEmpty()) {
             midiManager.connect(devices[0])
+            selectedDeviceName = midiManager.deviceName(devices[0])
+            userDisconnected = false
         } else {
             midiStatusText.text = "MIDI: no devices"
         }
 
         bindService(Intent(this, PlaybackService::class.java), serviceConnection, BIND_AUTO_CREATE)
+
+        // Live re-enumeration: listen for MIDI device add/remove events
+        midiManager.registerDeviceCallback(midiDeviceCallback, Handler(Looper.getMainLooper()))
 
         // Initialize project repository
         projectRepo = ProjectRepository(this)
@@ -517,12 +596,24 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (!midiManager.isConnected()) {
+        if (!midiManager.isConnected() && !userDisconnected) {
             val devices = midiManager.listDevices()
             if (devices.isNotEmpty()) {
-                midiManager.connect(devices[0])
+                val target = selectedDeviceName
+                if (target != null) {
+                    val matched = devices.firstOrNull { midiManager.deviceName(it) == target }
+                    if (matched != null) {
+                        midiManager.connect(matched)
+                    } else {
+                        midiManager.connect(devices[0])
+                        selectedDeviceName = midiManager.deviceName(devices[0])
+                    }
+                } else {
+                    midiManager.connect(devices[0])
+                }
             } else {
                 midiStatusText.text = "MIDI: no devices"
+                midiDeviceButton.text = "MIDI: no devices"
             }
         }
     }
@@ -540,6 +631,7 @@ class MainActivity : AppCompatActivity() {
             unbindService(serviceConnection)
             serviceBound = false
         }
+        midiManager.unregisterDeviceCallback(midiDeviceCallback)
         midiManager.close()
         projectRepo.shutdown()
         // Do NOT call nativeShutdown() here: the native engine is a

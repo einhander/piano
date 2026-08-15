@@ -5,6 +5,7 @@ import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiInputPort
 import android.media.midi.MidiManager
 import android.media.midi.MidiReceiver
+import android.os.Handler
 import com.piano.sequencer.AppLogger
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
@@ -36,6 +37,21 @@ class MidiDeviceManager(
 
     fun listDevices(): List<MidiDeviceInfo> {
         return midiManager.devices.filter { it.inputPortCount > 0 }.toList()
+    }
+
+    fun deviceName(info: MidiDeviceInfo): String =
+        info.properties.getString("name") ?: "MIDI device ${info.id}"
+
+    fun getCurrentDevice(): MidiDeviceInfo? = activeDevice
+
+    // Handler-based variant (not the API 33+ Executor one) because minSdk is 26.
+    @Suppress("DEPRECATION")
+    fun registerDeviceCallback(callback: MidiManager.DeviceCallback, handler: Handler) {
+        midiManager.registerDeviceCallback(callback, handler)
+    }
+
+    fun unregisterDeviceCallback(callback: MidiManager.DeviceCallback) {
+        midiManager.unregisterDeviceCallback(callback)
     }
 
     fun connect(deviceInfo: MidiDeviceInfo) {
