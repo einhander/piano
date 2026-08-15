@@ -7,6 +7,31 @@
 
 extern "C" {
 
+// Create the singleton instances. Must be called once before any other JNI function.
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeInit(JNIEnv* env, jclass) {
+    try {
+        new OboeOutput();
+        new NativeEngine();
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// Destroy the singleton instances. Call on app exit.
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeShutdown(JNIEnv* env, jclass) {
+    NativeEngine* engine = NativeEngine::getInstance();
+    if (engine) {
+        delete engine;
+    }
+    OboeOutput* output = OboeOutput::getInstance();
+    if (output) {
+        delete output;
+    }
+}
+
 JNIEXPORT jint JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeOpenAudio(JNIEnv* env, jclass) {
     OboeOutput* inst = OboeOutput::getInstance();

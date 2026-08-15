@@ -7,15 +7,15 @@ import android.content.ServiceConnection
 import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
+import android.widget.Button
 import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContextWrapper
-import com.google.android.material.button.MaterialButton
-import com.google.android.material.textview.MaterialTextView
 import com.piano.sequencer.service.PlaybackService
 import java.io.File
 import java.io.FileOutputStream
@@ -25,18 +25,18 @@ import java.util.concurrent.Executors
 
 class SettingsActivity : AppCompatActivity() {
 
-    private lateinit var btnBrowse: MaterialButton
-    private lateinit var btnUnload: MaterialButton
-    private lateinit var tvSf2Path: MaterialTextView
-    private lateinit var tvSf2Count: MaterialTextView
-    private lateinit var tvPolyphony: MaterialTextView
+    private lateinit var btnBrowse: Button
+    private lateinit var btnUnload: Button
+    private lateinit var tvSf2Path: TextView
+    private lateinit var tvSf2Count: TextView
+    private lateinit var tvPolyphony: TextView
     private lateinit var seekBarPolyphony: SeekBar
-    private lateinit var tvMasterGain: MaterialTextView
+    private lateinit var tvMasterGain: TextView
     private lateinit var seekBarMasterGain: SeekBar
 
-    private lateinit var tvLog: MaterialTextView
-    private lateinit var btnCopyLog: MaterialButton
-    private lateinit var btnClearLog: MaterialButton
+    private lateinit var tvLog: TextView
+    private lateinit var btnCopyLog: Button
+    private lateinit var btnClearLog: Button
 
     private var service: PlaybackService? = null
     private val serviceConnection = object : ServiceConnection {
@@ -227,10 +227,10 @@ class SettingsActivity : AppCompatActivity() {
                 }
 
                 val result = svc?.loadSoundFont(destFile.absolutePath) ?: -1
-                    if (result != 0) {
+                    if (result < 0) {
                         AppLogger.error("SettingsActivity", "Failed to load SF2: $fileName (error: $result)")
                     } else {
-                        AppLogger.info("SettingsActivity", "Loaded SF2: $fileName")
+                        AppLogger.info("SettingsActivity", "Loaded SF2: $fileName (synth ID: $result)")
                     }
                     result
                 } catch (e: Exception) {
@@ -242,7 +242,7 @@ class SettingsActivity : AppCompatActivity() {
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 btnBrowse.isEnabled = true
-                if (ex == null && result == 0) {
+                if (ex == null && result >= 0) {
                     val svc = service
                     if (svc != null) {
                         tvSf2Path.text = File(getExternalFilesDir(null)!!.absolutePath, fileName).name

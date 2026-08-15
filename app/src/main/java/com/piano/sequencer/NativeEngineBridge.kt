@@ -5,6 +5,8 @@ object NativeEngineBridge {
         System.loadLibrary("native-lib")
     }
 
+    external fun nativeInit(): Boolean
+    external fun nativeShutdown()
     external fun nativeGetVersion(): String
     external fun nativeStartAudio(): Int
     external fun nativeStopAudio(): Int

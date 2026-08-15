@@ -1,14 +1,19 @@
 package com.piano.sequencer
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
+import android.content.ContextWrapper
 import android.content.Intent
-import android.content.UriPermission
 import android.content.ServiceConnection
+import android.content.UriPermission
+import android.graphics.Typeface
 import android.os.Bundle
 import android.os.IBinder
 import android.provider.DocumentsContract
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.media.midi.MidiDeviceInfo
@@ -34,6 +39,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var exportMidiButton: Button
     private lateinit var settingsButton: Button
     private lateinit var midiStatusText: TextView
+
+    // Log viewer
+    private lateinit var logScrollView: ScrollView
+    private lateinit var tvLog: TextView
+    private lateinit var btnCopyLog: Button
+    private lateinit var btnClearLog: Button
 
     private lateinit var projectRepo: ProjectRepository
 
@@ -84,6 +95,14 @@ class MainActivity : AppCompatActivity() {
             playbackService = binder.getService()
             serviceBound = true
 
+            // Initialize native engine singletons BEFORE any other native calls
+            if (!NativeEngineBridge.nativeInit()) {
+                AppLogger.error("MainActivity", "nativeInit() failed")
+                Toast.makeText(this@MainActivity, "Native init failed", Toast.LENGTH_LONG).show()
+                return
+            }
+            AppLogger.info("MainActivity", "Native engine initialized")
+
             val openResult = playbackService?.openAudio()
             if (openResult != 0) {
                 AppLogger.error("MainActivity", "Audio open failed: $openResult")
@@ -98,6 +117,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 AppLogger.info("MainActivity", "Engine initialized (48000Hz, 512 buffer)")
             }
+            refreshLog()
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -201,6 +221,52 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(midiStatusText)
 
+        // App Log section
+        val logCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 16, 0, 0)
+            background = getDrawable(android.R.drawable.dialog_frame) ?: background
+        }
+
+        val logTitle = TextView(this).apply {
+            text = "App Log"
+            textSize = 16f
+            setPadding(0, 0, 0, 8)
+        }
+
+        val logButtonsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        btnCopyLog = Button(this@MainActivity).apply {
+            text = "Copy"
+            setOnClickListener { copyLogToClipboard() }
+        }
+        btnClearLog = Button(this@MainActivity).apply {
+            text = "Clear"
+            setOnClickListener {
+                AppLogger.clear()
+                refreshLog()
+            }
+        }
+        logButtonsRow.addView(btnCopyLog)
+        logButtonsRow.addView(btnClearLog)
+
+        logScrollView = ScrollView(this)
+
+        tvLog = TextView(this@MainActivity).apply {
+            text = "No log entries"
+            typeface = Typeface.MONOSPACE
+            textSize = 10f
+            setPadding(8, 8, 8, 8)
+        }
+        logScrollView.addView(tvLog)
+
+        logCard.addView(logTitle)
+        logCard.addView(logButtonsRow)
+        logCard.addView(logScrollView)
+        layout.addView(logCard)
+
         // Setup MIDI receiver callback
         midiInputReceiver = MidiInputReceiver()
         midiInputReceiver.setCallback(object : MidiInputReceiver.Callback {
@@ -251,6 +317,26 @@ class MainActivity : AppCompatActivity() {
 
         // Initialize project repository
         projectRepo = ProjectRepository(this)
+    }
+
+    private fun refreshLog() {
+        val entries = AppLogger.getAll()
+        if (entries.isEmpty()) {
+            tvLog.text = "No log entries"
+        } else {
+            tvLog.text = entries.joinToString("\n")
+        }
+    }
+
+    private fun copyLogToClipboard() {
+        val entries = AppLogger.getAll()
+        if (entries.isEmpty()) {
+            Toast.makeText(this, "Log is empty", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("App Log", entries.joinToString("\n")))
+        Toast.makeText(this, "Log copied", Toast.LENGTH_SHORT).show()
     }
 
     private fun saveProject() {
@@ -336,6 +422,8 @@ class MainActivity : AppCompatActivity() {
         }
         midiManager.close()
         projectRepo.shutdown()
+        NativeEngineBridge.nativeShutdown()
+        AppLogger.info("MainActivity", "Native engine shutdown")
     }
 
     private fun toggleAudio() {

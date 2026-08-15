@@ -46,11 +46,12 @@ class MidiDeviceManager(
             )
             method.invoke(midiManager, deviceInfo, 0, inputCallback) as? MidiInputPort
         } catch (e: Exception) {
+            AppLogger.warn("MidiDeviceManager", "Reflection openInputPort failed: ${e.javaClass.simpleName}: ${e.message}")
             null
         }
         if (port == null) {
             activeDevice = null
-            AppLogger.error("MidiDeviceManager", "Failed to open input port for device ${deviceInfo.id}")
+            AppLogger.warn("MidiDeviceManager", "Failed to open input port for device ${deviceInfo.id}")
             listener?.onDeviceDisconnected()
             return
         }
