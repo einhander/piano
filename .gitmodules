@@ -1,0 +1,6 @@
+[submodule "app/src/main/cpp/third_party/fluidsynth"]
+	path = app/src/main/cpp/third_party/fluidsynth
+	url = https://github.com/FluidSynth/fluidsynth.git
+[submodule "app/src/main/cpp/third_party/oboe"]
+	path = app/src/main/cpp/third_party/oboe
+	url = https://github.com/google/oboe.git
