@@ -76,9 +76,31 @@ class MainActivity : AppCompatActivity() {
     private val midiDeviceCallback = object : MidiManager.DeviceCallback() {
         override fun onDeviceAdded(deviceInfo: MidiDeviceInfo) {
             refreshMidiStatus()
+            if (!midiManager.isConnected() && !userDisconnected) {
+                val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+                val persistedKey = prefs.getString("midi_device_key", null)
+                val keyMatches = persistedKey != null &&
+                    midiManager.stableKey(deviceInfo) == persistedKey
+                if (persistedKey == null || keyMatches) {
+                    connectToDevice(deviceInfo)
+                }
+            }
         }
         override fun onDeviceRemoved(deviceInfo: MidiDeviceInfo) {
             refreshMidiStatus()
+            val active = midiManager.getCurrentDevice()
+            if (active != null && midiManager.stableKey(active) == midiManager.stableKey(deviceInfo)) {
+                midiManager.disconnect()
+                if (!userDisconnected) {
+                    val devices = midiManager.listDevices()
+                    val other = devices.firstOrNull {
+                        midiManager.stableKey(it) != midiManager.stableKey(deviceInfo)
+                    }
+                    if (other != null) {
+                        connectToDevice(other, persist = false)
+                    }
+                }
+            }
         }
     }
 
@@ -207,6 +229,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun connectToDevice(deviceInfo: MidiDeviceInfo, persist: Boolean = true) {
+        midiManager.connect(deviceInfo)
+        selectedDeviceName = midiManager.deviceName(deviceInfo)
+        userDisconnected = false
+        if (persist) {
+            // Persist the selected device's stable key.
+            getSharedPreferences("piano_prefs", MODE_PRIVATE).edit().putString(
+                "midi_device_key",
+                midiManager.stableKey(deviceInfo)
+            ).apply()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         layout = LinearLayout(this).apply {
@@ -315,13 +350,13 @@ class MainActivity : AppCompatActivity() {
                     .setTitle("MIDI device")
                     .setItems(names.toTypedArray()) { _, which ->
                         if (which < devices.size) {
-                            midiManager.connect(devices[which])
-                            selectedDeviceName = midiManager.deviceName(devices[which])
-                            userDisconnected = false
+                            connectToDevice(devices[which])
                         } else {
                             midiManager.disconnect()
                             selectedDeviceName = null
                             userDisconnected = true
+                            getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+                                .remove("midi_device_key").apply()
                         }
                     }
                     .show()
@@ -436,12 +471,21 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // Auto-connect first available device
+        // Auto-connect: try persisted device key first, fall back to devices[0].
         val devices = midiManager.listDevices()
         if (devices.isNotEmpty()) {
-            midiManager.connect(devices[0])
-            selectedDeviceName = midiManager.deviceName(devices[0])
-            userDisconnected = false
+            val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+            val persistedKey = prefs.getString("midi_device_key", null)
+            val targetDevice = if (persistedKey != null) {
+                devices.firstOrNull { midiManager.stableKey(it) == persistedKey }
+            } else {
+                null
+            }
+            if (targetDevice != null) {
+                connectToDevice(targetDevice)
+            } else {
+                connectToDevice(devices[0], persist = false)
+            }
         } else {
             midiStatusText.text = "MIDI: no devices"
         }
@@ -599,17 +643,19 @@ class MainActivity : AppCompatActivity() {
         if (!midiManager.isConnected() && !userDisconnected) {
             val devices = midiManager.listDevices()
             if (devices.isNotEmpty()) {
-                val target = selectedDeviceName
-                if (target != null) {
-                    val matched = devices.firstOrNull { midiManager.deviceName(it) == target }
-                    if (matched != null) {
-                        midiManager.connect(matched)
-                    } else {
-                        midiManager.connect(devices[0])
-                        selectedDeviceName = midiManager.deviceName(devices[0])
-                    }
+                val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+                val persistedKey = prefs.getString("midi_device_key", null)
+                val targetDevice = if (persistedKey != null) {
+                    devices.firstOrNull { midiManager.stableKey(it) == persistedKey }
                 } else {
-                    midiManager.connect(devices[0])
+                    selectedDeviceName?.let { name ->
+                        devices.firstOrNull { midiManager.deviceName(it) == name }
+                    }
+                }
+                if (targetDevice != null) {
+                    connectToDevice(targetDevice)
+                } else {
+                    connectToDevice(devices[0], persist = false)
                 }
             } else {
                 midiStatusText.text = "MIDI: no devices"

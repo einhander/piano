@@ -1,14 +1,14 @@
 package com.piano.sequencer.midi
 
 import android.content.Context
+import android.media.midi.MidiDevice
 import android.media.midi.MidiDeviceInfo
-import android.media.midi.MidiInputPort
 import android.media.midi.MidiManager
+import android.media.midi.MidiOutputPort
 import android.media.midi.MidiReceiver
 import android.os.Handler
+import android.os.HandlerThread
 import com.piano.sequencer.AppLogger
-import java.util.concurrent.Executor
-import java.util.concurrent.Executors
 
 class MidiDeviceManager(
     context: Context,
@@ -16,13 +16,16 @@ class MidiDeviceManager(
 ) {
     private val midiManager = context.applicationContext.getSystemService(MidiManager::class.java)
     private var activeDevice: MidiDeviceInfo? = null
-    private var activeInputPort: MidiInputPort? = null
+    private var activeMidiDevice: MidiDevice? = null
+    private var activeOutputPort: MidiOutputPort? = null
 
-    // Dedicated thread for the MidiReceiver callback. openInputPort requires
-    // an Executor; a daemon worker thread keeps input off the main thread.
-    private val midiExecutor = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "MidiInput").apply { isDaemon = true }
-    }
+    // HandlerThread to drive the async openDevice callback off the UI thread.
+    private val midiHandlerThread = HandlerThread("MidiInput").apply { start() }
+    private val midiHandler = Handler(midiHandlerThread.looper)
+
+    // Guard against async openDevice races.
+    @Volatile
+    private var connectGeneration: Int = 0
 
     interface Listener {
         fun onDeviceConnected(device: MidiDeviceInfo)
@@ -36,13 +39,22 @@ class MidiDeviceManager(
     }
 
     fun listDevices(): List<MidiDeviceInfo> {
-        return midiManager.devices.filter { it.inputPortCount > 0 }.toList()
+        return midiManager.devices.filter { it.outputPortCount > 0 }.toList()
     }
 
     fun deviceName(info: MidiDeviceInfo): String =
         info.properties.getString("name") ?: "MIDI device ${info.id}"
 
     fun getCurrentDevice(): MidiDeviceInfo? = activeDevice
+
+    fun stableKey(info: MidiDeviceInfo): String {
+        val p = info.properties
+        val manufacturer = p.getString("manufacturer") ?: ""
+        val product = p.getString("product") ?: ""
+        val serial = p.getString("serial_number") ?: ""
+        return if (serial.isNotEmpty()) "$manufacturer|$product|$serial"
+               else "$manufacturer|$product|${p.getString("name") ?: ""}"
+    }
 
     // Handler-based variant (not the API 33+ Executor one) because minSdk is 26.
     @Suppress("DEPRECATION")
@@ -55,51 +67,83 @@ class MidiDeviceManager(
     }
 
     fun connect(deviceInfo: MidiDeviceInfo) {
-        if (activeInputPort != null) {
+        if (activeOutputPort != null || activeMidiDevice != null) {
             disconnect()
         }
+        connectGeneration++
+        val gen = connectGeneration
         activeDevice = deviceInfo
-        // Kotlin/Android SDK interop issue: openInputPort() not resolvable at compile time.
-        // Use reflection to call the 4-arg API 23+ signature:
-        // MidiManager.openInputPort(device, portNumber, executor, receiver).
-        // (The 3-arg variant does not exist — that is what made the old
-        // reflection call fail with NoSuchMethodException.)
-        val port = try {
-            val method = MidiManager::class.java.getMethod(
-                "openInputPort",
-                MidiDeviceInfo::class.java,
-                Int::class.javaPrimitiveType,
-                Executor::class.java,
-                MidiReceiver::class.java
-            )
-            method.invoke(midiManager, deviceInfo, 0, midiExecutor, inputCallback) as? MidiInputPort
-        } catch (e: Exception) {
-            AppLogger.warn("MidiDeviceManager", "Reflection openInputPort failed: ${e.javaClass.simpleName}: ${e.message}")
-            null
-        }
-        if (port == null) {
-            activeDevice = null
-            AppLogger.warn("MidiDeviceManager", "Failed to open input port for device ${deviceInfo.id}")
-            listener?.onDeviceDisconnected()
-            return
-        }
-        activeInputPort = port
-        AppLogger.info("MidiDeviceManager", "Connected: device ${deviceInfo.id}")
-        listener?.onDeviceConnected(deviceInfo)
+
+        midiManager.openDevice(deviceInfo, object : MidiManager.OnDeviceOpenedListener {
+            override fun onDeviceOpened(device: MidiDevice?) {
+                // Stale-callback guard
+                if (gen != connectGeneration) {
+                    device?.let { try { it.close() } catch (e: Exception) {} }
+                    return
+                }
+                if (device == null) {
+                    activeDevice = null
+                    AppLogger.warn("MidiDeviceManager", "Failed to open device ${deviceInfo.id}")
+                    listener?.onDeviceDisconnected()
+                    return
+                }
+                val port = try {
+                    device.openOutputPort(0)
+                } catch (e: Exception) {
+                    AppLogger.warn("MidiDeviceManager", "openOutputPort failed: ${e.message}")
+                    null
+                }
+                if (port == null) {
+                    try { device.close() } catch (e: Exception) {}
+                    activeDevice = null
+                    AppLogger.warn("MidiDeviceManager", "Failed to open output port for device ${deviceInfo.id}")
+                    listener?.onDeviceDisconnected()
+                    return
+                }
+                try {
+                    port.connect(inputCallback)
+                } catch (e: Exception) {
+                    AppLogger.warn("MidiDeviceManager", "connect receiver failed: ${e.message}")
+                }
+                // Gate window: disconnect may have run between port.open and here.
+                if (gen != connectGeneration) {
+                    try { port.disconnect(inputCallback) } catch (e: Exception) {}
+                    try { port.close() } catch (e: Exception) {}
+                    try { device.close() } catch (e: Exception) {}
+                    return
+                }
+                activeMidiDevice = device
+                activeOutputPort = port
+                AppLogger.info("MidiDeviceManager", "Connected: device ${deviceInfo.id}")
+                listener?.onDeviceConnected(deviceInfo)
+            }
+
+            }, midiHandler)
     }
 
     fun disconnect() {
-        if (activeInputPort == null) return
-        AppLogger.info("MidiDeviceManager", "Disconnected: device ${activeDevice?.id ?: -1}")
+        connectGeneration++
+        val wasConnected = activeOutputPort != null || activeMidiDevice != null
+        if (wasConnected) {
+            AppLogger.info("MidiDeviceManager", "Disconnected: device ${activeDevice?.id ?: -1}")
+            try {
+                activeOutputPort?.disconnect(inputCallback)
+                activeOutputPort?.close()
+                activeMidiDevice?.close()
+            } catch (e: Exception) {
+                AppLogger.warn("MidiDeviceManager", "Error closing MIDI: ${e.message}")
+            }
+        }
         activeDevice = null
-        activeInputPort?.close()
-        activeInputPort = null
-        listener?.onDeviceDisconnected()
+        activeMidiDevice = null
+        activeOutputPort = null
+        if (wasConnected) listener?.onDeviceDisconnected()
     }
 
-    fun isConnected(): Boolean = activeInputPort != null
+    fun isConnected(): Boolean = activeOutputPort != null || activeMidiDevice != null
 
     fun close() {
         disconnect()
+        midiHandlerThread.quitSafely()
     }
 }
