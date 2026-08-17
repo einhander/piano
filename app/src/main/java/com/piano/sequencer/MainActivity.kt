@@ -53,9 +53,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var d4Button: Button
     private lateinit var e4Button: Button
     private lateinit var panicButton: Button
-    private lateinit var saveButton: Button
-    private lateinit var loadButton: Button
-    private lateinit var exportMidiButton: Button
+    private lateinit var projectsButton: Button
+    private lateinit var aboutButton: Button
     private lateinit var settingsButton: Button
     private lateinit var instrumentsButton: Button
     private lateinit var midiStatusText: TextView
@@ -67,15 +66,11 @@ class MainActivity : AppCompatActivity() {
     // auto-reconnect in onResume so the disconnected state is sticky.
     private var userDisconnected = false
 
-    // Log viewer
-    private lateinit var logScrollView: ScrollView
-    private lateinit var tvLog: TextView
-    private lateinit var btnCopyLog: Button
-    private lateinit var btnClearLog: Button
-
-    // Log folder (crash.log destination)
-    private lateinit var tvLogFolder: TextView
-    private lateinit var btnChooseLogFolder: Button
+    // App log views — built when the About dialog opens, nulled on dismiss.
+    // Null while the dialog is closed; refreshLog()/updateLogFolderLabel()
+    // are no-ops in that case.
+    private var tvLog: TextView? = null
+    private var tvLogFolder: TextView? = null
 
     private lateinit var projectRepo: ProjectRepository
 
@@ -166,20 +161,6 @@ class MainActivity : AppCompatActivity() {
 
     private var playbackService: PlaybackService? = null
     private var serviceBound = false
-
-    // SAF file picker for project save/load
-    private val filePickerLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        uri?.let {
-            contentResolver.takePersistableUriPermission(
-                it,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            )
-            projectRepo.setProjectUri(it)
-            Toast.makeText(this@MainActivity, "Project directory selected", Toast.LENGTH_SHORT).show()
-        }
-    }
 
     // SAF folder picker for the crash log destination (crash.log)
     private val logFolderLauncher = registerForActivityResult(
@@ -407,17 +388,13 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, "Panic!", Toast.LENGTH_SHORT).show()
             }
         }
-        saveButton = Button(this).apply {
-            text = "Save Project"
-            setOnClickListener { saveProject() }
+        projectsButton = Button(this).apply {
+            text = "Projects"
+            setOnClickListener { showProjectsDialog() }
         }
-        loadButton = Button(this).apply {
-            text = "Load Project"
-            setOnClickListener { loadProject() }
-        }
-        exportMidiButton = Button(this).apply {
-            text = "Export MIDI"
-            setOnClickListener { exportMidiFile() }
+        aboutButton = Button(this).apply {
+            text = "About"
+            setOnClickListener { showAboutDialog() }
         }
         settingsButton = Button(this).apply {
             text = "Settings"
@@ -436,9 +413,8 @@ class MainActivity : AppCompatActivity() {
         layout.addView(d4Button)
         layout.addView(e4Button)
         layout.addView(panicButton)
-        layout.addView(saveButton)
-        layout.addView(loadButton)
-        layout.addView(exportMidiButton)
+        layout.addView(projectsButton)
+        layout.addView(aboutButton)
         layout.addView(instrumentsButton)
         layout.addView(settingsButton)
         setContentView(layout)
@@ -476,72 +452,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
         layout.addView(midiDeviceButton)
-
-        // App Log section
-        val logCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 16, 0, 0)
-            background = getDrawable(R.drawable.card_frame)
-        }
-
-        val logTitle = TextView(this).apply {
-            text = "App Log"
-            textSize = 16f
-            setPadding(0, 0, 0, 8)
-        }
-
-        val logButtonsRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        btnCopyLog = Button(this@MainActivity).apply {
-            text = "Copy"
-            setOnClickListener { copyLogToClipboard() }
-        }
-        btnClearLog = Button(this@MainActivity).apply {
-            text = "Clear"
-            setOnClickListener {
-                AppLogger.clear()
-                refreshLog()
-            }
-        }
-        logButtonsRow.addView(btnCopyLog)
-        logButtonsRow.addView(btnClearLog)
-
-        val logFolderRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        tvLogFolder = TextView(this@MainActivity).apply {
-            textSize = 12f
-            setPadding(0, 0, 8, 0)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        btnChooseLogFolder = Button(this@MainActivity).apply {
-            text = "Choose"
-            setOnClickListener { logFolderLauncher.launch(null) }
-        }
-        logFolderRow.addView(tvLogFolder)
-        logFolderRow.addView(btnChooseLogFolder)
-        updateLogFolderLabel()
-
-        logScrollView = ScrollView(this)
-
-        tvLog = TextView(this@MainActivity).apply {
-            text = "No log entries"
-            typeface = Typeface.MONOSPACE
-            textSize = 10f
-            setBackgroundColor(Color.WHITE)
-            setTextColor(Color.BLACK)
-            setPadding(8, 8, 8, 8)
-        }
-        logScrollView.addView(tvLog)
-
-        logCard.addView(logTitle)
-        logCard.addView(logButtonsRow)
-        logCard.addView(logFolderRow)
-        logCard.addView(logScrollView)
-        layout.addView(logCard)
 
         // ── MIDI Files panel (Phase 2) ──
         // M2: single store instance, passed to panel
@@ -663,12 +573,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshLog() {
+        val tv = tvLog ?: return
         val entries = AppLogger.getAll()
-        if (entries.isEmpty()) {
-            tvLog.text = "No log entries"
-        } else {
-            tvLog.text = entries.joinToString("\n")
-        }
+        tv.text = if (entries.isEmpty()) "No log entries" else entries.joinToString("\n")
     }
 
     private fun copyLogToClipboard() {
@@ -684,8 +591,9 @@ class MainActivity : AppCompatActivity() {
 
     // "Log folder: <name>" for the crash.log destination (SAF tree)
     private fun updateLogFolderLabel() {
+        val tv = tvLogFolder ?: return
         val uri = LogFolder.get(this)
-        tvLogFolder.text = if (uri == null) "Log folder: not set"
+        tv.text = if (uri == null) "Log folder: not set"
         else "Log folder: ${logFolderDisplayName(uri)}"
     }
 
@@ -797,9 +705,127 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showSaveProjectPicker() {
-        filePickerLauncher.launch(null)
+    /**
+     * "Projects" entry point: the three project actions as a house-style
+     * item list dialog (same pattern as the MIDI device picker).
+     */
+    private fun showProjectsDialog() {
+        val actions = arrayOf("Save Project", "Load Project", "Export MIDI")
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Projects")
+            .setItems(actions) { _, which ->
+                when (which) {
+                    0 -> saveProject()
+                    1 -> loadProject()
+                    2 -> exportMidiFile()
+                }
+            }
+            .show()
     }
+
+    /**
+     * "About" entry point: app info (name + version) and the app log
+     * (viewer, copy, clear, log-folder picker). The log views are rebuilt
+     * on each open; tvLog/tvLogFolder are nulled on dismiss.
+     */
+    private fun showAboutDialog() {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = getDrawable(R.drawable.card_frame)
+            setPadding(16, 16, 16, 16)
+        }
+
+        card.addView(TextView(this).apply {
+            text = "Piano Sequencer"
+            textSize = 18f
+        })
+
+        val versionName = try {
+            packageManager.getPackageInfo(packageName, 0).versionName
+        } catch (_: Exception) {
+            null
+        }
+        if (versionName != null) {
+            card.addView(TextView(this).apply {
+                text = "Version $versionName"
+                textSize = 14f
+            })
+        }
+
+        card.addView(TextView(this).apply {
+            text = "App Log"
+            textSize = 16f
+            setPadding(0, 16, 0, 8)
+        })
+
+        val logButtonsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        logButtonsRow.addView(Button(this).apply {
+            text = "Copy"
+            setOnClickListener { copyLogToClipboard() }
+        })
+        logButtonsRow.addView(Button(this).apply {
+            text = "Clear"
+            setOnClickListener {
+                AppLogger.clear()
+                refreshLog()
+            }
+        })
+        card.addView(logButtonsRow)
+
+        val logFolderRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        tvLogFolder = TextView(this).apply {
+            textSize = 12f
+            setPadding(0, 0, 8, 0)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        logFolderRow.addView(tvLogFolder)
+        logFolderRow.addView(Button(this).apply {
+            text = "Choose"
+            setOnClickListener { logFolderLauncher.launch(null) }
+        })
+        card.addView(logFolderRow)
+        updateLogFolderLabel()
+
+        val logScrollView = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(220)
+            )
+        }
+        tvLog = TextView(this).apply {
+            text = "No log entries"
+            typeface = Typeface.MONOSPACE
+            textSize = 10f
+            setBackgroundColor(Color.WHITE)
+            setTextColor(Color.BLACK)
+            setPadding(8, 8, 8, 8)
+        }
+        logScrollView.addView(tvLog)
+        card.addView(logScrollView)
+
+        // Outer ScrollView keeps the dialog from overflowing on small screens.
+        val wrapper = ScrollView(this)
+        wrapper.addView(card)
+
+        refreshLog()
+
+        val dialog = androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("About")
+            .setView(wrapper)
+            .setPositiveButton("Close", null)
+            .show()
+        dialog.setOnDismissListener {
+            tvLog = null
+            tvLogFolder = null
+        }
+    }
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
     override fun onResume() {
         super.onResume()
