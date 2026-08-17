@@ -267,6 +267,13 @@ void FluidSynthEngine::processLiveMidi(MidiQueue* queue) {
     }
     if (batch.empty()) return;
 
+    processLiveMidi(batch);
+}
+
+// Batch overload — processes a pre-drained vector (m7: no re-push needed)
+void FluidSynthEngine::processLiveMidi(const std::vector<MidiMessage>& batch) {
+    if (!mInitialized.load() || batch.empty()) return;
+
     std::lock_guard<std::mutex> lock(mSynthMutex);
     if (!mSynth) return;
 

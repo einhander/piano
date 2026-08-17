@@ -21,10 +21,12 @@ public:
     // outTempoMap: filled with (tick, microsecondsPerQuarter) pairs
     // outTimeSignatures: filled with (tick, numerator, denominator) pairs
     // denominator is the power-of-2 denominator (e.g., 2 = 8th note)
+    // outTicksPerBeat: if non-null, receives the header's division (PPQ)
     bool parse(const char* filePath,
                std::vector<RecordedMidiEvent>& outEvents,
                std::vector<std::pair<int64_t, uint32_t>>& outTempoMap,
-               std::vector<std::pair<int64_t, std::pair<int, int>>>& outTimeSignatures);
+               std::vector<std::pair<int64_t, std::pair<int, int>>>& outTimeSignatures,
+               int* outTicksPerBeat = nullptr);
 
 private:
     // Read a single byte

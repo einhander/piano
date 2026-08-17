@@ -25,13 +25,25 @@ import android.media.midi.MidiManager
 import android.os.Handler
 import android.os.Looper
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.piano.sequencer.midi.MidiDeviceManager
+import com.piano.sequencer.midi.MidiFileAssignment
+import com.piano.sequencer.midi.MidiFileLearnState
+import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.MidiInputReceiver
+import com.piano.sequencer.midi.NoteToggleStateMachine
+import com.piano.sequencer.midi.noteToName
 import com.piano.sequencer.project.Project
 import com.piano.sequencer.project.ProjectRepository
 import com.piano.sequencer.service.PlaybackService
+import com.piano.sequencer.ui.MidiFilesPanel
 
 class MainActivity : AppCompatActivity() {
 
@@ -70,6 +82,55 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var midiManager: MidiDeviceManager
     private lateinit var midiInputReceiver: MidiInputReceiver
+
+    // ── MIDI file key mapping (Phase 2) ──
+
+    /** M2: single store instance created here, passed to MidiFilesPanel. */
+    private lateinit var midiFileStore: MidiFileMappingStore
+    private val noteStateMachine = NoteToggleStateMachine()
+
+    /** m2: ConcurrentHashMap for thread-safe concurrent access from MIDI binder thread. */
+    private val noteSlotMap = ConcurrentHashMap<Int, Int>()
+    private var nextSlotIndex = 0
+
+    /** m8: track loaded-file-per-slot to skip redundant loads. */
+    private val loadedFilePerSlot = ConcurrentHashMap<Int, String>()
+
+    /** MIDI files UI panel. */
+    private lateinit var midiFilesPanel: MidiFilesPanel
+
+    /** SAF folder picker for recorded MIDI output. */
+    private val recordFolderLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+                .putString("record_folder_uri", uri.toString())
+                .apply()
+            Toast.makeText(this@MainActivity, "Record folder selected", Toast.LENGTH_SHORT).show()
+            // M4: complete pending export if one was waiting
+            completePendingExport(uri)
+        } else {
+            // M4(a): user cancelled picker — clear pending, toast, reset UI
+            val pending = pendingExport?.takeIf { pe ->
+                pendingExport = null
+                true
+            }
+            if (pending != null) {
+                Toast.makeText(this@MainActivity, "Export not saved (folder not selected)", Toast.LENGTH_SHORT).show()
+                runOnUiThread {
+                    midiFilesPanel.updateRecordUI(false, pending.eventCount)
+                }
+            }
+            // item 4(b): clear pending-export flag
+            pendingExportFlag = false
+            pendingExportFlagSaved = false
+        }
+    }
 
     // Live re-enumeration: notified when any MIDI device is added/removed
     // (e.g. a virtual MIDI device connected after the app started).
@@ -153,6 +214,49 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // MIDI file import for the MidiFilesPanel (copy to midi_files/ dir)
+    private val midiFileImportLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let { sourceUri ->
+            Thread({
+                try {
+                    val midiDir = File(this@MainActivity.getExternalFilesDir(null), "midi_files")
+                    if (!midiDir.exists()) midiDir.mkdirs()
+                    // Deduplicate: find a unique name
+                    var baseName = try {
+                        contentResolver.query(sourceUri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) cursor.getString(0) else null
+                        } ?: "imported.mid"
+                    } catch (_: Exception) {
+                        "imported.mid"
+                    }
+                    if (!baseName.endsWith(".mid", ignoreCase = true)) baseName += ".mid"
+                    var destFile = File(midiDir, baseName)
+                    var counter = 1
+                    while (destFile.exists()) {
+                        destFile = File(midiDir, "${baseName.removeSuffix(".mid")}_$counter.mid")
+                        counter++
+                    }
+                    contentResolver.openInputStream(sourceUri)?.use { input ->
+                        FileOutputStream(destFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    } ?: throw IOException("Could not open input stream for $sourceUri")
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "Imported: ${destFile.name}", Toast.LENGTH_SHORT).show()
+                        midiFilesPanel.refresh()
+                    }
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "Import failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                    AppLogger.warn("MainActivity", "MIDI import failed: ${e.message}")
+                }
+            }, "MidiFileImport").apply { isDaemon = true }.start()
+        }
+    }
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as? PlaybackService.PlaybackBinder
@@ -191,6 +295,10 @@ class MainActivity : AppCompatActivity() {
                 restorePersistedState()
             }
             refreshLog()
+            // Wire up MIDI files panel
+            midiFilesPanel.bindService(playbackService!!)
+            setupPanelCallbacks()
+            midiFilesPanel.refresh()
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -430,13 +538,60 @@ class MainActivity : AppCompatActivity() {
         logCard.addView(logScrollView)
         layout.addView(logCard)
 
+        // ── MIDI Files panel (Phase 2) ──
+        // M2: single store instance, passed to panel
+        midiFileStore = MidiFileMappingStore(
+            getSharedPreferences("piano_prefs", MODE_PRIVATE)
+        )
+        midiFilesPanel = MidiFilesPanel(this, midiFileStore)
+        layout.addView(midiFilesPanel)
+
         // Setup MIDI receiver callback
         midiInputReceiver = MidiInputReceiver()
         midiInputReceiver.setCallback(object : MidiInputReceiver.Callback {
             override fun onNoteOn(channel: Int, note: Int, velocity: Int) {
+                // D1: channel-agnostic mapping
+                // 1. If learn state active → capture note
+                if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+                    MidiFileLearnState.captureNote(note)
+                    return
+                }
+                // 2. If note is mapped (any channel) → run toggle state machine
+                val assignment = midiFileStore.get(note)
+                if (assignment != null) {
+                    // D2: mapped note is CONSUMED — do NOT forward to engine
+                    // M3: tri-state result (TOGGLE_ON / TOGGLE_OFF / IGNORED)
+                    val result = noteStateMachine.noteOn(note)
+                    when (result) {
+                        NoteToggleStateMachine.Result.TOGGLE_ON -> {
+                            // Start slot (worker thread)
+                            withService { svc ->
+                                triggerSlot(svc, note, assignment)
+                            }
+                        }
+                        NoteToggleStateMachine.Result.TOGGLE_OFF -> {
+                            // item 3: STOP the slot (keep mapping), don't FREE
+                            withService { _ ->
+                                stopSlotForNote(note)
+                            }
+                        }
+                        NoteToggleStateMachine.Result.IGNORED -> {
+                            // Key repeat — nothing to do
+                        }
+                    }
+                    return
+                }
+                // 3. Unmapped note → forward to engine as today
                 withService { it.sendMidiMessage(0x90 or channel, note, velocity) }
             }
             override fun onNoteOff(channel: Int, note: Int, velocity: Int) {
+                // Feed state machine (no stop — loop keeps playing)
+                noteStateMachine.noteOff(note)
+                // D2: mapped note is CONSUMED — do NOT forward to engine (its
+                // note-on never reached the synth; a forwarded note-off could cut
+                // a sequencer note on the same channel)
+                if (midiFileStore.get(note) != null) return
+                // Unmapped notes forward as today
                 withService { it.sendMidiMessage(0x80 or channel, note, velocity) }
             }
             override fun onControlChange(channel: Int, controller: Int, value: Int) {
@@ -640,6 +795,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        midiFilesPanel.refresh()
         if (!midiManager.isConnected() && !userDisconnected) {
             val devices = midiManager.listDevices()
             if (devices.isNotEmpty()) {
@@ -669,6 +825,21 @@ class MainActivity : AppCompatActivity() {
         withService { it.stopAudio() }
         playButton.text = "Play"
         statusText.text = "Piano Sequencer — stopped"
+        // m7: cancel any active learn timeout
+        midiFilesPanel.cancelLearnTimeout()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        // item 4(b): persist pending-export flag across rotation
+        pendingExportFlagSaved = pendingExportFlag
+        outState.putBoolean("pendingExportFlag", pendingExportFlagSaved)
+    }
+
+    override fun onRestoreInstanceState(savedInstanceState: Bundle) {
+        super.onRestoreInstanceState(savedInstanceState)
+        // item 4(b): restore pending-export flag after rotation
+        pendingExportFlag = savedInstanceState.getBoolean("pendingExportFlag", false)
     }
 
     override fun onDestroy() {
@@ -699,6 +870,397 @@ class MainActivity : AppCompatActivity() {
                 val underruns = service.getUnderrunCount()
                 statusText.text = "Piano Sequencer — playing (underruns: $underruns)"
             }
+        }
+    }
+
+    // ── Phase 2: MIDI file slot management ──
+
+    /**
+     * Get or allocate a slot for a note.
+     * D6: 16 slots; round-robin for 17th+ mapping.
+     * item 2: slot 15 reserved for test-play → allocate from 0-14 only.
+     */
+    private fun allocateSlot(note: Int): Int {
+        return noteSlotMap.getOrPut(note) {
+            val slot = nextSlotIndex % 15  // item 2: reserve slot 15 for test-play
+            nextSlotIndex++
+            slot
+        }
+    }
+
+    /**
+     * Trigger a slot: load if not loaded, then start/stop.
+     * D2: worker thread for all JNI calls.
+     * Handles -4 (busy) with up to 3 retries at 50ms apart.
+     * m8: skip load when same file already in slot (loadedFilePerSlot).
+     */
+    private fun triggerSlot(service: PlaybackService, note: Int, assignment: MidiFileAssignment) {
+        Thread({
+            val slot = allocateSlot(note)
+            val isPlaying = service.isMidiFileSlotPlaying(slot)
+
+            if (!isPlaying) {
+                // m8: skip load if same file already loaded in this slot
+                val alreadyLoaded = loadedFilePerSlot[slot] == assignment.filePath
+                if (!alreadyLoaded) {
+                    // Load if not already loaded (lazy load on first trigger)
+                    var loadResult = service.loadMidiFileSlot(
+                        slot, assignment.filePath, assignment.tempo, assignment.loop
+                    )
+                    // Handle -4 (busy) with retries
+                    var retries = 0
+                    while (loadResult == -4 && retries < 3) {
+                        Thread.sleep(50)
+                        loadResult = service.loadMidiFileSlot(
+                            slot, assignment.filePath, assignment.tempo, assignment.loop
+                        )
+                        retries++
+                    }
+                    if (loadResult != 0) {
+                        val msg = when (loadResult) {
+                            -1 -> "Invalid file or engine"
+                            -2 -> "File too long (>8192 events)"
+                            -3 -> "Command queue full"
+                            -4 -> "Slot busy (after retries)"
+                            else -> "Error $loadResult"
+                        }
+                        runOnUiThread {
+                            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+                        }
+                        return@Thread
+                    }
+                    // m8: track loaded file
+                    loadedFilePerSlot[slot] = assignment.filePath
+                }
+            }
+
+            // Start/stop slot
+            if (service.isMidiFileSlotPlaying(slot)) {
+                service.stopMidiFileSlot(slot)
+                noteStateMachine.stopPlaying(note)
+            } else {
+                service.startMidiFileSlot(slot)
+            }
+        }, "MidiFileTrigger-$note").apply { isDaemon = true }.start()
+    }
+
+    /** Free a slot when a mapping is removed or file is deleted. */
+    private fun freeSlotForNote(note: Int) {
+        val slot = noteSlotMap.remove(note)
+        if (slot != null) {
+            // m1: reset toggle machine so next press after free is TOGGLE_ON
+            noteStateMachine.stopPlaying(note)
+            withService { it.freeMidiFileSlot(slot) }
+            loadedFilePerSlot.remove(slot)
+        }
+    }
+
+    /** item 3: stop a slot without freeing it (keeps mapping + loaded file). */
+    private fun stopSlotForNote(note: Int) {
+        val slot = noteSlotMap[note] ?: return
+        withService { it.stopMidiFileSlot(slot) }
+        noteStateMachine.stopPlaying(note)
+    }
+
+    // ── Phase 2: MIDI file panel callbacks ──
+
+    private fun setupPanelCallbacks() {
+        midiFilesPanel.onImportClick = {
+            midiFileImportLauncher.launch("audio/midi")
+        }
+
+        midiFilesPanel.onRecordClick = {
+            // item 6: run the whole record toggle on a worker thread
+            Thread({
+                try {
+                    val svc = playbackService ?: run {
+                        runOnUiThread {
+                            Toast.makeText(this@MainActivity, "Service not connected", Toast.LENGTH_SHORT).show()
+                        }
+                        return@Thread
+                    }
+                    val isRec = svc.isRecording()
+                    if (isRec) {
+                        // Stop recording → write to SAF folder
+                        svc.stopRecording()
+                        val eventCount = svc.getRecordedEventCount()
+                        if (eventCount > 0) {
+                            // Check if SAF folder chosen
+                            val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+                            val recordUriStr = prefs.getString("record_folder_uri", null)
+if (recordUriStr == null) {
+                                // No SAF folder chosen → trigger picker
+                                // M4: hold pending export until picker returns
+                                pendingExport = PendingExport(svc, eventCount)
+                                pendingExportFlag = true
+                                pendingExportFlagSaved = false
+                                runOnUiThread {
+                                    recordFolderLauncher.launch(null)
+                                }
+                            } else {
+                                writeRecordedMidiFileToUri(svc, eventCount, Uri.parse(recordUriStr))
+                            }
+                        }
+                        runOnUiThread {
+                            midiFilesPanel.updateRecordUI(false, eventCount)
+                        }
+                    } else {
+                        // Start recording
+                        svc.startRecording()
+                        runOnUiThread {
+                            midiFilesPanel.updateRecordUI(true, 0)
+                        }
+                    }
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "Record error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }, "MidiRecordToggle").apply { isDaemon = true }.start()
+        }
+
+        midiFilesPanel.onNoteTrigger = { note, filePath, loop, tempo ->
+            val assignment = MidiFileAssignment(note, filePath, loop, tempo)
+            withService { svc ->
+                triggerSlot(svc, note, assignment)
+            }
+        }
+
+        midiFilesPanel.onTestPlay = { _note, filePath, loop, tempo ->
+            // item 8: test-play with load result check, generation counter,
+            // stop-on-second-tap, worker-thread JNI
+            Thread({
+                try {
+                    val svc = playbackService ?: return@Thread
+                    val gen = testPlayGeneration + 1
+                    testPlayGeneration = gen
+                    if (testPlayPlaying) {
+                        // Stop test-play (second tap)
+                        svc.stopMidiFileSlot(testPlaySlot)
+                        testPlayPlaying = false
+                        runOnUiThread {
+                            midiFilesPanel.updateTestPlayUI(false)
+                        }
+                        return@Thread
+                    }
+                    // item 8(a): check load result, retry on -4
+                    var loadResult = svc.loadMidiFileSlot(testPlaySlot, filePath, tempo, loop)
+                    var retries = 0
+                    while (loadResult == -4 && retries < 3) {
+                        Thread.sleep(50)
+                        loadResult = svc.loadMidiFileSlot(testPlaySlot, filePath, tempo, loop)
+                        retries++
+                    }
+                    if (loadResult != 0) {
+                        val msg = when (loadResult) {
+                            -1 -> "Invalid file or engine"
+                            -2 -> "File too long (>8192 events)"
+                            -3 -> "Command queue full"
+                            -4 -> "Slot busy (after retries)"
+                            else -> "Error $loadResult"
+                        }
+                        runOnUiThread {
+                            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+                        }
+                        return@Thread
+                    }
+                    svc.startMidiFileSlot(testPlaySlot)
+                    testPlayPlaying = true
+                    runOnUiThread {
+                        midiFilesPanel.updateTestPlayUI(true)
+                    }
+                    // item 8(b): auto-stop only if still current generation
+                    // item 8(d): worker thread, not main looper
+                    Thread {
+                        Thread.sleep(3000)
+                        if (testPlayGeneration == gen) {
+                            svc.stopMidiFileSlot(testPlaySlot)
+                            testPlayPlaying = false
+                            runOnUiThread {
+                                midiFilesPanel.updateTestPlayUI(false)
+                            }
+                        }
+                    }.apply { isDaemon = true }.start()
+                } catch (_: Exception) {}
+            }, "MidiTestPlay").apply { isDaemon = true }.start()
+        }
+
+        midiFilesPanel.onFileDelete = { filePath ->
+            // Free any slot mapped to this file
+            for ((note, assignment) in midiFileStore.all()) {
+                if (assignment.filePath == filePath) {
+                    midiFileStore.remove(note)
+                    freeSlotForNote(note)
+                }
+            }
+            midiFilesPanel.refresh()
+        }
+
+        midiFilesPanel.onSettingChange = { note, loop, tempo ->
+            val assignment = midiFileStore.get(note)
+            if (assignment != null) {
+                val slot = noteSlotMap[note]
+                if (slot != null) {
+                    withService { it.setMidiFileSlotLoop(slot, loop) }
+                    withService { it.setMidiFileSlotTempo(slot, tempo) }
+                    // m8: if the file path changed (re-learn), clear loaded-file cache
+                    loadedFilePerSlot.remove(slot)
+                }
+            }
+        }
+
+        midiFilesPanel.onNoteLearned = { note, _filePath, _loop, _ ->
+            // Allocate a slot for this note
+            allocateSlot(note)
+            // Clear any stale loaded-file tracking for this slot
+            val slot = noteSlotMap[note]
+            if (slot != null) {
+                loadedFilePerSlot.remove(slot)
+            }
+            midiFilesPanel.refresh()
+        }
+
+        midiFilesPanel.onMappingRemove = { note ->
+            freeSlotForNote(note)
+        }
+
+        midiFilesPanel.onRefresh = {
+            midiFilesPanel.refresh()
+        }
+    }
+
+    /** M4: Pending export for first-time SAF picker flow. */
+
+    /**
+     * Holds a pending export until the SAF folder picker returns.
+     * Created when user stops recording without a saved folder URI.
+     * Cleared when picker returns (success → export, cancel → discard).
+     */
+    private data class PendingExport(
+        val service: PlaybackService,
+        val eventCount: Int
+    )
+
+    private var pendingExport: PendingExport? = null
+
+    /** item 4(b): persist pending-export flag across rotation/process death. */
+    private var pendingExportFlag = false
+    private var pendingExportFlagSaved = false
+
+    /** item 8: test-play state — scratch slot, generation counter, playing flag. */
+    private var testPlayGeneration = 0
+    private var testPlayPlaying = false
+    private val testPlaySlot = 15  // item 2: reserved for test-play
+
+    /**
+     * Complete a pending export with the chosen SAF URI.
+     * Called from recordFolderLauncher callback.
+     */
+    private fun completePendingExport(uri: Uri) {
+        val pending = pendingExport
+        if (pending != null) {
+            pendingExport = null
+            pendingExportFlag = false
+            pendingExportFlagSaved = false
+            writeRecordedMidiFileToUri(pending.service, pending.eventCount, uri)
+            return
+        }
+        // 4b: field lost (rotation/process death) but the flag survived — reconstruct
+        // from engine state (recorder keeps events until the next startRecording;
+        // getRecordedEventCount is JNI -> worker thread).
+        if (pendingExportFlag) {
+            pendingExportFlag = false
+            pendingExportFlagSaved = false
+            val svc = playbackService ?: return
+            Thread {
+                val count = svc.getRecordedEventCount()
+                if (count > 0) {
+                    writeRecordedMidiFileToUri(svc, count, uri)
+                } else {
+                    runOnUiThread {
+                        Toast.makeText(this, "Nothing to export (recording lost)", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }.start()
+        }
+    }
+
+    /**
+     * Write recorded MIDI to a temp file, then copy to SAF folder.
+     * M5: uses actual BPM and PPQ from transport state.
+     */
+    private fun writeRecordedMidiFileToUri(service: PlaybackService, eventCount: Int, uri: Uri) {
+        Thread({
+            try {
+                val tempDir = File(filesDir, "midi_files")
+                if (!tempDir.exists()) tempDir.mkdirs()
+                // item 9: unique temp name to avoid concurrent export collisions
+                val tempFileName = "rec_${System.currentTimeMillis()}.mid"
+                val tempFile = File(tempDir, tempFileName)
+
+                // M5: get actual transport BPM and PPQ
+                val bpm = service.getBPM()
+                val ppq = service.getPpq()
+                val tempoUs = (60_000_000.0 / bpm).toInt()
+
+                val success = service.writeRecordedMidiFile(
+                    tempFile.absolutePath, ppq, tempoUs
+                )
+
+                if (success) {
+                    // Copy temp file to SAF folder
+                    val copied = copyToSaf(tempFile, uri)
+                    runOnUiThread {
+                        midiFilesPanel.updateRecordUI(false, eventCount)
+                        if (copied) {
+                            Toast.makeText(this@MainActivity,
+                                "Recorded $eventCount events", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(this@MainActivity, "Export failed (SAF copy)", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "Export failed", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }, "MidiRecordExport").apply { isDaemon = true }.start()
+    }
+
+    /**
+     * Copy a file to a SAF folder using DocumentFile API.
+     * m5: returns Boolean (true = copied, false = failed).
+     * m5: uses unique temp name with timestamp to avoid collisions.
+     */
+    private fun copyToSaf(tempFile: File, destUri: Uri): Boolean {
+        try {
+            val docFile = DocumentsContract.buildDocumentUriUsingTree(
+                destUri,
+                DocumentsContract.getTreeDocumentId(destUri)
+            )
+            // m5: unique temp name using ISO timestamp
+            val uniqueName = "rec_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.mid"
+            val childUri = DocumentsContract.createDocument(
+                contentResolver, docFile, "audio/midi", uniqueName
+            ) ?: throw IOException("Could not create document in SAF folder")
+            contentResolver.openOutputStream(childUri)?.use { out ->
+                tempFile.inputStream().use { input ->
+                    input.copyTo(out)
+                }
+            } ?: throw IOException("Could not open output stream for $childUri")
+            // Delete temp file
+            tempFile.delete()
+            return true
+        } catch (e: Exception) {
+            AppLogger.warn("MainActivity", "SAF copy failed: ${e.message}")
+            // Still delete temp
+            try { tempFile.delete() } catch (_: Exception) {}
+            return false
         }
     }
 }

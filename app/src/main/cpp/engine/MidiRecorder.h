@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include <atomic>
+#include <mutex>
 
 // Records live MIDI input
 struct RecordedMidiEvent {
@@ -24,7 +25,7 @@ public:
     // Stop recording
     void stop();
 
-    // Record a MIDI event (safe for audio thread)
+    // Record a MIDI event (safe for MIDI thread; uses mutex for worker-thread safety)
     void record(const RecordedMidiEvent& event);
 
     // Check if recording
@@ -34,8 +35,11 @@ public:
     void setOverdub(bool overdub);
     bool isOverdub() const { return mOverdub.load(); }
 
-    // Get recorded events
-    const std::vector<RecordedMidiEvent>& getEvents() const { return mEvents; }
+    // Get a copy of the recorded events (thread-safe: takes the internal lock)
+    std::vector<RecordedMidiEvent> getEvents() const;
+
+    // Number of recorded events (thread-safe: takes the internal lock)
+    size_t eventCount() const;
 
     // Get combined events (existing + new) — used in overdub mode
     std::vector<RecordedMidiEvent> getCombinedEvents() const;
@@ -51,4 +55,5 @@ private:
     std::atomic<bool> mOverdub{false};
     int64_t mStartTick = 0;
     std::vector<RecordedMidiEvent> mEvents;
+    mutable std::mutex mMutex; // m8: protects mEvents from MIDI/worker thread races
 };

@@ -19,6 +19,7 @@
 #include "engine/MasterBus.h"
 #include "engine/LaunchQuantizer.h"
 #include "engine/MidiRecorder.h"
+#include "engine/MidiFilePlayer.h"
 #include "synth/FluidSynthEngine.h"
 
 class OboeOutput;
@@ -73,6 +74,8 @@ public:
     void setTransportState(int state);  // 0=Stopped, 1=Playing, 2=Paused
     double getCurrentTick() const;
     int64_t getFramePosition() const;
+    double getBPM() const;
+    int32_t getPpq() const;
 
     // Scene management
     void switchScene(int32_t sceneId);
@@ -135,12 +138,31 @@ public:
     void setRecordArm(int trackId, bool armed);
     void setOverdub(bool overdub);
     bool isRecording() const;
-    const std::vector<RecordedMidiEvent>& getRecordedEvents();
+    // Returns a thread-safe copy (N7: by-value — getEvents() returns a prvalue).
+    std::vector<RecordedMidiEvent> getRecordedEvents();
 
     // MIDI export
     bool writeMidiFile(const char* filePath,
                        const std::vector<RecordedMidiEvent>& events,
                        int ppq, uint32_t tempo);
+
+    // MIDI file slot playback (worker thread for load, audio thread for process)
+    // NOTE: call from a worker thread, never the main thread.
+    // loadMidiFileSlot does blocking file I/O + parse (tens of ms).
+    int loadMidiFileSlot(int slot, const char* filePath, float bpm, bool loop);
+    void startMidiFileSlot(int slot);
+    void stopMidiFileSlot(int slot);
+    bool isMidiFileSlotPlaying(int slot) const;
+    void setMidiFileSlotLoop(int slot, bool loop);
+    void setMidiFileSlotTempo(int slot, float bpm);
+    MidiFilePlayer::SlotInfo getMidiFileSlotInfo(int slot) const;
+    void freeMidiFileSlot(int slot);
+
+    // Recorded MIDI export (worker thread)
+    // NOTE: call from a worker thread, never the main thread.
+    // Recorded ticks follow the transport bpm/ppq; the export tempo param must match.
+    bool writeRecordedMidiFile(const char* filePath, int ppq, uint32_t tempo);
+    int getRecordedEventCount() const;
 
     // Getters
     int getSampleRate() const;
@@ -212,4 +234,9 @@ private:
     // Recording state
     MidiRecorder mRecorder;
     std::atomic<bool> mRecordArmed[16];  // per-track record arm (channels 0-15)
+    std::atomic<int64_t> mRecordTick{0}; // Recording tick accumulator (advanced in onAudioFrame)
+    double mRecordTickAccumulator = 0.0; // Double accumulator (audio thread) → atomic int64_t for MIDI thread
+
+    // MIDI file playback (16 pre-allocated slots)
+    MidiFilePlayer mMidiFilePlayer;
 };

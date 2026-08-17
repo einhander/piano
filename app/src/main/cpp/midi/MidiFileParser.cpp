@@ -25,7 +25,8 @@ MidiFileParser::~MidiFileParser() {}
 bool MidiFileParser::parse(const char* filePath,
                            std::vector<RecordedMidiEvent>& outEvents,
                            std::vector<std::pair<int64_t, uint32_t>>& outTempoMap,
-                           std::vector<std::pair<int64_t, std::pair<int, int>>>& outTimeSignatures) {
+                           std::vector<std::pair<int64_t, std::pair<int, int>>>& outTimeSignatures,
+                           int* outTicksPerBeat) {
     // Clear outputs
     outEvents.clear();
     outTempoMap.clear();
@@ -287,6 +288,10 @@ bool MidiFileParser::parse(const char* filePath,
 
     if (outTimeSignatures.empty()) {
         outTimeSignatures.push_back({0, {4, 4}});
+    }
+
+    if (outTicksPerBeat) {
+        *outTicksPerBeat = mTicksPerBeat;
     }
 
     return true;

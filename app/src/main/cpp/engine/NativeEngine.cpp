@@ -8,6 +8,7 @@
 #include "engine/ClipScheduler.h"
 #include "engine/LaunchQuantizer.h"
 #include "engine/MidiRecorder.h"
+#include "engine/MidiFilePlayer.h"
 #include "midi/MidiFileWriter.h"
 
 #include <atomic>
@@ -243,6 +244,9 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     // Process pending MIDI messages from external input
     processMidiQueue();
 
+    // Process MIDI file player (real-time safe: pre-allocated slots, lock-free queues)
+    mMidiFilePlayer.process(numFrames, mSampleRate, &mLiveMidiQueue);
+
     // Process sequencer/clip scheduler events
     mSequencer.processFrame();
     mClipScheduler.process();
@@ -252,6 +256,15 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
 
     // Advance frame position
     mTransport.framePosition.fetch_add(numFrames, std::memory_order_release);
+
+    // Advance recording tick (for MIDI file tick timestamps on recorded events)
+    // M5: double accumulator on audio thread + atomic int64_t for MIDI thread to read
+    if (mRecorder.isRecording()) {
+        double ticksPerFrame = (mTransport.bpm * mTransport.ppq) / (60.0 * mSampleRate);
+        mRecordTickAccumulator += ticksPerFrame * numFrames;
+        mRecordTick.store(static_cast<int64_t>(mRecordTickAccumulator),
+                          std::memory_order_relaxed);
+    }
 
     // Render via FluidSynth into pre-allocated buffer (avoids stack allocation)
     // FluidSynth renders stereo PCM float
@@ -298,6 +311,14 @@ double NativeEngine::getCurrentTick() const {
 
 int64_t NativeEngine::getFramePosition() const {
     return mTransport.framePosition.load(std::memory_order_acquire);
+}
+
+double NativeEngine::getBPM() const {
+    return mTransport.bpm;
+}
+
+int32_t NativeEngine::getPpq() const {
+    return mTransport.ppq;
 }
 
 void NativeEngine::switchScene(int32_t sceneId) {
@@ -568,10 +589,11 @@ bool NativeEngine::shouldPlayCountInClick(int64_t frame) const {
 
 // Recording control
 void NativeEngine::startRecording() {
-    int64_t startTick = static_cast<int64_t>(mTransport.currentTick());
-    mRecorder.start(startTick);
-    // Set transport to playing
-    mTransport.state.store(TransportState::Playing, std::memory_order_release);
+    // M4: pass 0 — mRecordTick is already the tick source, record() won't subtract again
+    mRecorder.start(0);
+    mRecordTick.store(0, std::memory_order_release);
+    // m9: removed transport state side effect — recording tick advances in onAudioFrame
+    // regardless of transport state; the export tempo param must match the bpm used during recording.
 }
 
 void NativeEngine::stopRecording() {
@@ -592,16 +614,61 @@ bool NativeEngine::isRecording() const {
     return mRecorder.isRecording();
 }
 
-const std::vector<RecordedMidiEvent>& NativeEngine::getRecordedEvents() {
-    return mRecorder.getEvents();
+std::vector<RecordedMidiEvent> NativeEngine::getRecordedEvents() {
+    return mRecorder.getEvents(); // thread-safe copy (N2/N7)
 }
 
 // MIDI export
 bool NativeEngine::writeMidiFile(const char* filePath,
-                                  const std::vector<RecordedMidiEvent>& events,
-                                  int ppq, uint32_t tempo) {
+                                   const std::vector<RecordedMidiEvent>& events,
+                                   int ppq, uint32_t tempo) {
     MidiFileWriter writer;
     return writer.write(filePath, events, 0, ppq, tempo);
+}
+
+// MIDI file slot playback
+int NativeEngine::loadMidiFileSlot(int slot, const char* filePath, float bpm, bool loop) {
+    return mMidiFilePlayer.load(slot, filePath, bpm, loop);
+}
+
+void NativeEngine::startMidiFileSlot(int slot) {
+    mMidiFilePlayer.start(slot);
+}
+
+void NativeEngine::stopMidiFileSlot(int slot) {
+    mMidiFilePlayer.stop(slot);
+}
+
+bool NativeEngine::isMidiFileSlotPlaying(int slot) const {
+    return mMidiFilePlayer.isSlotPlaying(slot);
+}
+
+void NativeEngine::setMidiFileSlotLoop(int slot, bool loop) {
+    mMidiFilePlayer.setLoop(slot, loop);
+}
+
+void NativeEngine::setMidiFileSlotTempo(int slot, float bpm) {
+    mMidiFilePlayer.setTempo(slot, bpm);
+}
+
+MidiFilePlayer::SlotInfo NativeEngine::getMidiFileSlotInfo(int slot) const {
+    return mMidiFilePlayer.getSlotInfo(slot);
+}
+
+void NativeEngine::freeMidiFileSlot(int slot) {
+    mMidiFilePlayer.freeSlot(slot);
+}
+
+// Recorded MIDI export
+bool NativeEngine::writeRecordedMidiFile(const char* filePath, int ppq, uint32_t tempo) {
+    const auto events = mRecorder.getEvents(); // thread-safe copy (N2)
+    if (events.empty()) return false;
+    MidiFileWriter writer;
+    return writer.write(filePath, events, 0, ppq, tempo);
+}
+
+int NativeEngine::getRecordedEventCount() const {
+    return static_cast<int>(mRecorder.eventCount()); // thread-safe (N2)
 }
 
 NativeEngine* NativeEngine::getInstance() {
@@ -611,9 +678,36 @@ NativeEngine* NativeEngine::getInstance() {
 // MIDI thread — runs outside audio callback, processes live MIDI into FluidSynth
 void NativeEngine::midiThreadFunc() {
     while (mMidiThreadRunning.load(std::memory_order_acquire)) {
-        // Drain all pending live MIDI messages into FluidSynth
-        if (mSynth) {
-            mSynth->processLiveMidi(&mLiveMidiQueue);
+        // Drain all pending live MIDI messages from the queue into a temp buffer
+        // (so we can feed both FluidSynth and the recorder without double-popping)
+        std::vector<MidiMessage> tempMsgs;
+        MidiMessage msg;
+        while (mLiveMidiQueue.pop(msg)) {
+            tempMsgs.push_back(msg);
+        }
+
+        // m5/m10: Record live MIDI events with tick timestamps (MIDI thread, vector push_back OK)
+        // Convention: live keyboard events carry msg.timestamp == 0;
+        // player events carry the tick (> 0). Record only timestamp == 0.
+        if (mRecorder.isRecording() && !tempMsgs.empty()) {
+            int64_t recTick = mRecordTick.load(std::memory_order_relaxed);
+            for (const auto& tm : tempMsgs) {
+                if (tm.timestamp != 0) continue; // skip player-originated events
+                RecordedMidiEvent recEvt;
+                recEvt.tick = recTick;
+                recEvt.status = tm.status;
+                recEvt.data1 = tm.data1;
+                recEvt.data2 = tm.data2;
+                recEvt.trackId = 0;
+                mRecorder.record(recEvt);
+            }
+        }
+
+        // m7: Feed FluidSynth with the drained batch directly (no re-push, no reorder)
+        if (!tempMsgs.empty()) {
+            if (mSynth) {
+                mSynth->processLiveMidi(tempMsgs);
+            }
         }
 
         // Wait for new messages or shutdown signal

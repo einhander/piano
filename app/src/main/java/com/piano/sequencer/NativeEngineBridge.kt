@@ -40,6 +40,8 @@ object NativeEngineBridge {
     external fun nativeSetTransportState(state: Int)
     external fun nativeGetCurrentTick(): Double
     external fun nativeGetFramePosition(): Long
+    external fun nativeGetBPM(): Double
+    external fun nativeGetPpq(): Int
 
     // Project loading
     external fun nativeLoadProject(json: String)
@@ -104,4 +106,22 @@ object NativeEngineBridge {
         ppq: Int,
         tempo: Int
     ): Boolean
+
+    // MIDI file slot playback
+    // NOTE: call from a worker thread, never the main thread.
+    // nativeLoadMidiFileSlot does blocking file I/O + parse (tens of ms).
+    external fun nativeLoadMidiFileSlot(slot: Int, filePath: String, tempo: Double, loop: Boolean): Int
+    external fun nativeStartMidiFileSlot(slot: Int): Int
+    external fun nativeStopMidiFileSlot(slot: Int): Int
+    external fun nativeIsMidiFileSlotPlaying(slot: Int): Boolean
+    external fun nativeSetMidiFileSlotLoop(slot: Int, loop: Boolean)
+    external fun nativeSetMidiFileSlotTempo(slot: Int, bpm: Double)
+    external fun nativeGetMidiFileSlotInfo(slot: Int): String
+    external fun nativeFreeMidiFileSlot(slot: Int)
+
+    // Recorded MIDI export
+    // NOTE: call from a worker thread, never the main thread.
+    // Recorded ticks follow the transport bpm/ppq; the export tempo param must match.
+    external fun nativeGetRecordedEventCount(): Int
+    external fun nativeWriteRecordedMidiFile(filePath: String, ppq: Int, tempo: Int): Boolean
 }

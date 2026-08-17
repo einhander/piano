@@ -318,6 +318,20 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetFramePosition(JNIEnv* env, 
     return 0;
 }
 
+JNIEXPORT jdouble JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetBPM(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return inst->getBPM();
+    return 120.0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetPpq(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getPpq());
+    return 960;
+}
+
 // Project loading
 JNIEXPORT void JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeLoadProject(JNIEnv* env, jclass, jstring json) {
@@ -630,6 +644,13 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeSetOverdub(
 }
 
 // MIDI export
+// NOTE: events ByteArray layout — RecordedMidiEvent is 16 bytes:
+//   [0..7]  int64_t  tick (little-endian)
+//   [8]     uint8_t  status
+//   [9]     uint8_t  data1
+//   [10]    uint8_t  data2
+//   [11]    uint8_t  trackId
+//   [12..15] padding (5 bytes) — do NOT rely on padding content
 JNIEXPORT jboolean JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeWriteMidiFile(
     JNIEnv* env, jclass, jstring filePath, jbyteArray events,
@@ -660,6 +681,133 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeWriteMidiFile(
     }
     env->ReleaseStringUTFChars(filePath, path);
 
+    return result;
+}
+
+// ── MIDI file slot playback ──
+// Worker-thread functions: call from a worker thread, never the main thread.
+// loadMidiFileSlot does blocking file I/O + parse (tens of ms).
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeLoadMidiFileSlot(
+    JNIEnv* env, jclass, jint slot, jstring filePath, jdouble tempo, jboolean loop) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return -1;
+
+    const char* path = env->GetStringUTFChars(filePath, nullptr);
+    if (!path) return -1;
+
+    jint result = inst->loadMidiFileSlot(
+        static_cast<int>(slot),
+        path,
+        static_cast<float>(tempo),
+        loop != 0
+    );
+
+    env->ReleaseStringUTFChars(filePath, path);
+    return result;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeStartMidiFileSlot(
+    JNIEnv* env, jclass, jint slot) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return -1;
+    inst->startMidiFileSlot(static_cast<int>(slot));
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeStopMidiFileSlot(
+    JNIEnv* env, jclass, jint slot) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return -1;
+    inst->stopMidiFileSlot(static_cast<int>(slot));
+    return 0;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeIsMidiFileSlotPlaying(
+    JNIEnv* env, jclass, jint slot) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return JNI_FALSE;
+    return inst->isMidiFileSlotPlaying(static_cast<int>(slot)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetMidiFileSlotLoop(
+    JNIEnv* env, jclass, jint slot, jboolean loop) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setMidiFileSlotLoop(static_cast<int>(slot), loop != 0);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetMidiFileSlotTempo(
+    JNIEnv* env, jclass, jint slot, jdouble bpm) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setMidiFileSlotTempo(static_cast<int>(slot), static_cast<float>(bpm));
+    }
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMidiFileSlotInfo(
+    JNIEnv* env, jclass, jint slot) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return env->NewStringUTF("{}");
+
+    MidiFilePlayer::SlotInfo info = inst->getMidiFileSlotInfo(static_cast<int>(slot));
+
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+        "{\"eventCount\":%d,\"lengthTicks\":%lld,\"ppq\":%d,\"initialTempo\":%.1f}",
+        info.eventCount,
+        (long long)info.lengthTicks,
+        info.ppq,
+        info.initialTempo);
+
+    jstring result = env->NewStringUTF(buf);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return env->NewStringUTF("{}");
+    }
+    return result;
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeFreeMidiFileSlot(
+    JNIEnv* env, jclass, jint slot) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->freeMidiFileSlot(static_cast<int>(slot));
+    }
+}
+
+// ── Recorded MIDI export ──
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetRecordedEventCount(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return 0;
+    return static_cast<jint>(inst->getRecordedEventCount());
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeWriteRecordedMidiFile(
+    JNIEnv* env, jclass, jstring filePath, jint ppq, jint tempo) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return JNI_FALSE;
+
+    const char* path = env->GetStringUTFChars(filePath, nullptr);
+    if (!path) return JNI_FALSE;
+
+    jboolean result = inst->writeRecordedMidiFile(
+        path, static_cast<int>(ppq), static_cast<uint32_t>(tempo));
+
+    env->ReleaseStringUTFChars(filePath, path);
     return result;
 }
 

@@ -20,13 +20,12 @@ MidiQueue::~MidiQueue() {
 
 bool MidiQueue::push(const MidiMessage& msg) {
     // MPSC-safe: use CAS loop to atomically claim write slot
-    // uint32_t arithmetic: wrap-around on overflow is well-defined (mod 2^32)
+    // Monotonic counters: w >= r always holds, so (w - r) is the correct occupied count.
     while (true) {
         uint32_t writePos = mWritePos.load(std::memory_order_relaxed);
         uint32_t readPos = mReadPos.load(std::memory_order_acquire);
-        // Mask both positions to handle uint32_t wraparound correctly
-        uint32_t used = (writePos & (mCapacity - 1)) - (readPos & (mCapacity - 1));
-        if (used >= static_cast<uint32_t>(mCapacity)) {
+        // Monotonic subtraction — no false-drops from mask wrap-around
+        if (writePos - readPos >= static_cast<uint32_t>(mCapacity)) {
             mDroppedCount.fetch_add(1);
             return false;  // Queue full
         }

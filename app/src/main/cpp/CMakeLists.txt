@@ -41,6 +41,7 @@ add_library(native-lib SHARED
     engine/MasterBus.cpp
     engine/LaunchQuantizer.cpp
     engine/NativeEngine.cpp
+    engine/MidiFilePlayer.cpp
     midi/MidiFileParser.cpp
     midi/MidiFileWriter.cpp
 )

@@ -56,6 +56,10 @@ public:
     // Process live MIDI from queue — called from MIDI thread (NOT audio callback)
     void processLiveMidi(MidiQueue* queue);
 
+    // Process live MIDI from a pre-drained batch — called from MIDI thread (NOT audio callback)
+    // Used when the queue needs to be drained once and shared between recorder + synth.
+    void processLiveMidi(const std::vector<MidiMessage>& batch);
+
     // Set polyphony
     void setPolyphony(int polyphony);
 

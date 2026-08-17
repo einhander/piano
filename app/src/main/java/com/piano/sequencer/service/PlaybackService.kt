@@ -43,6 +43,45 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         fun setChannelProgram(channel: Int, bank: Int, program: Int): Boolean =
             this@PlaybackService.setChannelProgram(channel, bank, program)
         fun getChannelProgram(channel: Int): Int = this@PlaybackService.getChannelProgram(channel)
+
+        // Recording control
+        fun startRecording() = this@PlaybackService.startRecording()
+        fun stopRecording() = this@PlaybackService.stopRecording()
+        fun isRecording(): Boolean = this@PlaybackService.isRecording()
+        fun getBPM(): Double = this@PlaybackService.getBPM()
+        fun getPpq(): Int = this@PlaybackService.getPpq()
+
+        // MIDI file slot playback
+        fun loadMidiFileSlot(slot: Int, filePath: String, tempo: Double, loop: Boolean): Int =
+            this@PlaybackService.loadMidiFileSlot(slot, filePath, tempo, loop)
+
+        fun startMidiFileSlot(slot: Int): Int =
+            this@PlaybackService.startMidiFileSlot(slot)
+
+        fun stopMidiFileSlot(slot: Int): Int =
+            this@PlaybackService.stopMidiFileSlot(slot)
+
+        fun isMidiFileSlotPlaying(slot: Int): Boolean =
+            this@PlaybackService.isMidiFileSlotPlaying(slot)
+
+        fun setMidiFileSlotLoop(slot: Int, loop: Boolean) =
+            this@PlaybackService.setMidiFileSlotLoop(slot, loop)
+
+        fun setMidiFileSlotTempo(slot: Int, bpm: Double) =
+            this@PlaybackService.setMidiFileSlotTempo(slot, bpm)
+
+        fun getMidiFileSlotInfo(slot: Int): String =
+            this@PlaybackService.getMidiFileSlotInfo(slot)
+
+        fun freeMidiFileSlot(slot: Int) =
+            this@PlaybackService.freeMidiFileSlot(slot)
+
+        // Recorded MIDI export
+        fun getRecordedEventCount(): Int =
+            this@PlaybackService.getRecordedEventCount()
+
+        fun writeRecordedMidiFile(filePath: String, ppq: Int, tempo: Int): Boolean =
+            this@PlaybackService.writeRecordedMidiFile(filePath, ppq, tempo)
     }
 
     override fun onCreate() {
@@ -114,12 +153,60 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         NativeEngineBridge.nativeSetChannelProgram(channel, bank, program)
     fun getChannelProgram(channel: Int): Int = NativeEngineBridge.nativeGetChannelProgram(channel)
 
+    // Recording control
+    fun startRecording() = NativeEngineBridge.nativeStartRecording()
+    fun stopRecording() = NativeEngineBridge.nativeStopRecording()
+    fun isRecording(): Boolean = NativeEngineBridge.nativeIsRecording()
+    fun setRecordArmed(trackId: Int, armed: Boolean) =
+        NativeEngineBridge.nativeSetRecordArmed(trackId, armed)
+    fun setOverdub(overdub: Boolean) = NativeEngineBridge.nativeSetOverdub(overdub)
+
+    // Transport getters (for export)
+    fun getBPM(): Double = NativeEngineBridge.nativeGetBPM()
+    fun getPpq(): Int = NativeEngineBridge.nativeGetPpq()
+
     // Export recorded MIDI to file
     fun exportMidiFile(callback: (String?) -> Unit) {
         // Get recorded events from native engine
         // For now, return null — full implementation would pass events through JNI
         callback(null)
     }
+
+    // MIDI file slot playback
+    // NOTE: call from a worker thread, never the main thread.
+    // loadMidiFileSlot does blocking file I/O + parse (tens of ms).
+    fun loadMidiFileSlot(slot: Int, filePath: String, tempo: Double, loop: Boolean): Int =
+        NativeEngineBridge.nativeLoadMidiFileSlot(slot, filePath, tempo, loop)
+
+    fun startMidiFileSlot(slot: Int): Int =
+        NativeEngineBridge.nativeStartMidiFileSlot(slot)
+
+    fun stopMidiFileSlot(slot: Int): Int =
+        NativeEngineBridge.nativeStopMidiFileSlot(slot)
+
+    fun isMidiFileSlotPlaying(slot: Int): Boolean =
+        NativeEngineBridge.nativeIsMidiFileSlotPlaying(slot)
+
+    fun setMidiFileSlotLoop(slot: Int, loop: Boolean) =
+        NativeEngineBridge.nativeSetMidiFileSlotLoop(slot, loop)
+
+    fun setMidiFileSlotTempo(slot: Int, bpm: Double) =
+        NativeEngineBridge.nativeSetMidiFileSlotTempo(slot, bpm)
+
+    fun getMidiFileSlotInfo(slot: Int): String =
+        NativeEngineBridge.nativeGetMidiFileSlotInfo(slot)
+
+    fun freeMidiFileSlot(slot: Int) =
+        NativeEngineBridge.nativeFreeMidiFileSlot(slot)
+
+    // Recorded MIDI export
+    // NOTE: call from a worker thread, never the main thread.
+    // Recorded ticks follow the transport bpm/ppq; the export tempo param must match.
+    fun getRecordedEventCount(): Int =
+        NativeEngineBridge.nativeGetRecordedEventCount()
+
+    fun writeRecordedMidiFile(filePath: String, ppq: Int, tempo: Int): Boolean =
+        NativeEngineBridge.nativeWriteRecordedMidiFile(filePath, ppq, tempo)
 
     private fun requestAudioFocus() {
         if (audioFocusRequest != null) return
