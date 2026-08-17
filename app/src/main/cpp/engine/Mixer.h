@@ -24,14 +24,14 @@ public:
     void setSolo(int trackId, bool solo);
 
     // Mix tracks into stereo output buffer
-    // Each track's mono data is already pre-multiplied by volume/pan
+    // Each track's stereo data (interleaved L/R) is pre-multiplied by volume
     // output: stereo float buffer (interleaved L/R), numFrames * 2 elements
     void mix(float* output, int numFrames);
 
     // Get peak meter (RMS) for track — atomic read, safe for UI thread
     float getPeakMeter(int trackId) const;
 
-    // Get pre-allocated mono buffer for a track (for writing audio data)
+    // Get pre-allocated stereo buffer for a track (interleaved L/R, for writing audio data)
     // Safe for audio callback — pointer is stable after init()
     float* getTrackBuffer(int trackId) const;
 
@@ -48,7 +48,7 @@ private:
         std::atomic<bool> mute{false};
         std::atomic<bool> solo{false};
         std::atomic<float> peakMeter{0.0f};
-        float* buffer = nullptr;  // Pre-allocated mono buffer
+        float* buffer = nullptr;  // Pre-allocated stereo buffer (interleaved L/R)
     };
 
     static constexpr int kMaxTracks = 16;

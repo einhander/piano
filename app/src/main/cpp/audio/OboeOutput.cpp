@@ -24,6 +24,22 @@ OboeOutput::~OboeOutput() {
 }
 
 oboe::Result OboeOutput::open() {
+    // Idempotent: the engine is a process-level singleton that survives activity
+    // recreation (AGENTS.md) — on re-bind, reuse the live stream instead of
+    // leaking it. A stopped stream can be restarted. A dead stream (error/closed)
+    // is closed and reopened.
+    if (mStream != nullptr) {
+        oboe::StreamState st = mState.load(std::memory_order_acquire);
+        // Dead states: Closed / Disconnected (stream errors surface through the
+        // error callback, which lands in Closed — there is no Error state).
+        if (st != oboe::StreamState::Closed &&
+            st != oboe::StreamState::Disconnected) {
+            return oboe::Result::OK;
+        }
+        mStream->close();
+        mStream = nullptr;
+    }
+
     // Try exclusive first (lowest latency), fall back to shared
     oboe::SharingMode modes[] = {
         oboe::SharingMode::Exclusive,
@@ -65,14 +81,25 @@ oboe::Result OboeOutput::start() {
     if (mStream == nullptr) {
         return oboe::Result::ErrorNull;
     }
-    return mStream->start();
+    oboe::Result result = mStream->start();
+    if (result == oboe::Result::OK) {
+        // Track the started state — isAudioPlaying() must not treat an
+        // open-but-not-started stream as playing (that made the first Play
+        // tap take the stop branch, so the stream never started → no sound).
+        mState.store(oboe::StreamState::Started);
+    }
+    return result;
 }
 
 oboe::Result OboeOutput::stop() {
     if (mStream == nullptr) {
         return oboe::Result::ErrorNull;
     }
-    return mStream->stop();
+    oboe::Result result = mStream->stop();
+    if (result == oboe::Result::OK) {
+        mState.store(oboe::StreamState::Stopped);
+    }
+    return result;
 }
 
 oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, void* data, int32_t numFrames) {

@@ -57,8 +57,12 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     mLaunchQuantizer.init(&mTransport);
 
     // Initialize Mixer and MasterBus
-    mMixer.init(16, bufferSize);
-    mMasterBus.init(bufferSize);
+    // Size to kMaxSynthFrames (the safeFrames clamp in onAudioFrame), not the
+    // hardcoded init bufferSize — the Oboe burst can exceed it (e.g. 960 in
+    // shared mode), which would overflow the track/master buffers in the RT
+    // callback.
+    mMixer.init(16, kMaxSynthFrames);
+    mMasterBus.init(kMaxSynthFrames);
 
     // Route FluidSynth output through Mixer track 0
     mMixer.setVolume(0, 1.0f);
@@ -101,11 +105,11 @@ oboe::Result NativeEngine::stopAudio() {
 bool NativeEngine::isAudioPlaying() const {
     OboeOutput* inst = OboeOutput::getInstance();
     if (!inst) return false;
-    oboe::StreamState state = inst->getState();
-    return state == oboe::StreamState::Open
-        || state == oboe::StreamState::Starting
-        || state == oboe::StreamState::Started
-        || state == oboe::StreamState::Started;
+    // Only "Started" counts as playing. open() leaves the stream in the Open
+    // state (not yet started); treating Open as playing made the first Play
+    // tap take the stop branch — the stream was never started and no source
+    // produced sound (synth renders in the audio callback only).
+    return inst->getState() == oboe::StreamState::Started;
 }
 
 bool NativeEngine::isEngineInitialized() const {
@@ -278,12 +282,9 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
         }
     }
 
-    // Route synth output through Mixer track 0
-    // Mixer expects mono track data; convert stereo to mono by averaging
-    float* track0Mono = mMixer.getTrackBuffer(0);
-    for (int i = 0; i < safeFrames; i++) {
-        track0Mono[i] = (mSynthBuffer[i * 2] + mSynthBuffer[i * 2 + 1]) * 0.5f;
-    }
+    // Route synth output through Mixer track 0 (stereo copy)
+    float* track0 = mMixer.getTrackBuffer(0);
+    std::memcpy(track0, mSynthBuffer, safeFrames * 2 * sizeof(float));
 
     // Reset meters at start of playback
     mMixer.resetMeters();

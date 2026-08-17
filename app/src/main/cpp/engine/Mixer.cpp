@@ -25,10 +25,10 @@ void Mixer::init(int trackCount, int maxFramesPerBuffer) {
     mTrackCount = trackCount;
     mMaxFrames = maxFramesPerBuffer;
 
-    // Allocate mono buffers for each track
+    // Allocate stereo buffers (interleaved L/R) for each track
     for (int i = 0; i < kMaxTracks; i++) {
-        mTracks[i].buffer = new float[maxFramesPerBuffer];
-        std::memset(mTracks[i].buffer, 0, maxFramesPerBuffer * sizeof(float));
+        mTracks[i].buffer = new float[maxFramesPerBuffer * 2];
+        std::memset(mTracks[i].buffer, 0, maxFramesPerBuffer * 2 * sizeof(float));
     }
 
     // Allocate stereo output buffer
@@ -104,23 +104,24 @@ void Mixer::mix(float* output, int numFrames) {
             continue;
         }
 
-        // Equal-power panning gains
-        float leftGain = std::cos(pan * 3.14159265f / 4.0f);
-        float rightGain = std::sin(pan * 3.14159265f / 4.0f);
+        // Equal-power panning gains (pan in [-1,1], 0=center)
+        float leftGain = std::cos((pan + 1.0f) * 3.14159265f / 4.0f);
+        float rightGain = std::sin((pan + 1.0f) * 3.14159265f / 4.0f);
 
         // Accumulate track into output with panning
         float* trackBuf = mTracks[t].buffer;
         float trackRms = 0.0f;
 
         for (int i = 0; i < numFrames; i++) {
-            float sample = trackBuf[i] * vol;
+            float sampleL = trackBuf[i * 2] * vol;
+            float sampleR = trackBuf[i * 2 + 1] * vol;
 
-            // RMS calculation
-            trackRms += sample * sample;
+            // RMS calculation (left channel)
+            trackRms += sampleL * sampleL;
 
-            // Write to stereo output (interleaved)
-            output[i * 2] += sample * leftGain;   // Left
-            output[i * 2 + 1] += sample * rightGain;  // Right
+            // Channel-matched stereo panning: L→L, R→R
+            output[i * 2]     += sampleL * leftGain;   // Left
+            output[i * 2 + 1] += sampleR * rightGain;  // Right
         }
 
         // Store peak RMS (sqrt already applied by caller, or store squared)

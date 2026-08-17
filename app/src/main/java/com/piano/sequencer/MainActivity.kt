@@ -49,7 +49,6 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var layout: LinearLayout
     private lateinit var statusText: TextView
-    private lateinit var playButton: Button
     private lateinit var c4Button: Button
     private lateinit var d4Button: Button
     private lateinit var e4Button: Button
@@ -293,6 +292,17 @@ class MainActivity : AppCompatActivity() {
                 // death). If the engine survived (activity recreation) the
                 // state is intact — the sfcount guard inside skips the restore.
                 restorePersistedState()
+                // Audio always-on: start after engine init + state restore
+                Thread({
+                    playbackService?.startAudio()
+                    val playing = playbackService?.isAudioPlaying() == true
+                    val underruns = playbackService?.getUnderrunCount() ?: 0
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        statusText.text = if (playing) "Piano Sequencer — running (underruns: $underruns)"
+                                         else "Piano Sequencer — audio start failed"
+                    }
+                }, "AudioAutoStart").apply { isDaemon = true }.start()
             }
             refreshLog()
             // Wire up MIDI files panel
@@ -360,10 +370,6 @@ class MainActivity : AppCompatActivity() {
             text = "Piano Sequencer"
             textSize = 20f
         }
-        playButton = Button(this).apply {
-            text = "Play"
-            setOnClickListener { toggleAudio() }
-        }
         c4Button = Button(this).apply {
             text = "C4 (60)"
             setOnClickListener {
@@ -426,7 +432,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
         layout.addView(statusText)
-        layout.addView(playButton)
         layout.addView(c4Button)
         layout.addView(d4Button)
         layout.addView(e4Button)
@@ -645,6 +650,9 @@ class MainActivity : AppCompatActivity() {
             midiStatusText.text = "MIDI: no devices"
         }
 
+        // Start (not just bind) so the service survives activity re-creation —
+        // no audio gap on rotation/back-forward (always-on).
+        startForegroundService(Intent(this, PlaybackService::class.java))
         bindService(Intent(this, PlaybackService::class.java), serviceConnection, BIND_AUTO_CREATE)
 
         // Live re-enumeration: listen for MIDI device add/remove events
@@ -822,9 +830,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        withService { it.stopAudio() }
-        playButton.text = "Play"
-        statusText.text = "Piano Sequencer — stopped"
         // m7: cancel any active learn timeout
         midiFilesPanel.cancelLearnTimeout()
     }
@@ -856,21 +861,6 @@ class MainActivity : AppCompatActivity() {
         // loaded SoundFont every time the user left and returned (back button
         // -> new empty engine on re-create). Native resources are reclaimed
         // on process death; the engine must survive activity recreation.
-    }
-
-    private fun toggleAudio() {
-        withService { service ->
-            if (service.isAudioPlaying()) {
-                service.stopAudio()
-                playButton.text = "Play"
-                statusText.text = "Piano Sequencer — stopped"
-            } else {
-                service.startAudio()
-                playButton.text = "Stop"
-                val underruns = service.getUnderrunCount()
-                statusText.text = "Piano Sequencer — playing (underruns: $underruns)"
-            }
-        }
     }
 
     // ── Phase 2: MIDI file slot management ──

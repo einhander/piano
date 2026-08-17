@@ -110,11 +110,6 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         }
     }
 
-    fun stopAudio() {
-        NativeEngineBridge.nativeStopAudio()
-        AppLogger.info("PlaybackService", "Audio stopped")
-    }
-
     fun isAudioPlaying(): Boolean = NativeEngineBridge.nativeIsAudioPlaying()
 
     fun isEngineInitialized(): Boolean = NativeEngineBridge.nativeIsEngineInitialized()
@@ -262,18 +257,39 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
             this, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        val stopIntent = PendingIntent.getService(
+            this, 1,
+            Intent(this, PlaybackService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
         return Notification.Builder(this, channelId)
             .setContentTitle("Piano Sequencer")
             .setContentText("Audio engine running")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_media_pause, "Stop", stopIntent).build())
             .build()
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            stopSelf()
+        }
+        // Never sticky: a sticky-recreated service (process death, null intent)
+        // cannot produce audio on its own — engine init only happens in
+        // onServiceConnected — so it would hold audio focus and show "running"
+        // while silent. The activity's startForegroundService (re)starts the
+        // service whenever the app is present; surviving activity re-creation
+        // depends on the started state, not stickiness.
+        return START_NOT_STICKY
+    }
+
     companion object {
         private const val NOTIFICATION_ID = 1
+        private const val ACTION_STOP = "com.piano.sequencer.action.STOP"
     }
 }

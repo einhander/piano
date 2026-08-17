@@ -14,8 +14,16 @@ extern "C" {
 JNIEXPORT jboolean JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeInit(JNIEnv* env, jclass) {
     try {
-        new OboeOutput();
-        new NativeEngine();
+        // Idempotent: the singletons are process-level and must survive activity
+        // recreation (AGENTS.md). Re-creating them on every service bind leaked
+        // the old Oboe stream + NativeEngine (and its MIDI thread) on every
+        // back/forward navigation.
+        if (OboeOutput::getInstance() == nullptr) {
+            new OboeOutput();
+        }
+        if (NativeEngine::getInstance() == nullptr) {
+            new NativeEngine();
+        }
         return true;
     } catch (...) {
         return false;
@@ -72,9 +80,9 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeIsAudioPlaying(JNIEnv* env, jc
         return false;
     }
     oboe::StreamState state = inst->getState();
-    return state == oboe::StreamState::Open
-        || state == oboe::StreamState::Starting
-        || state == oboe::StreamState::Started;
+    // Only "Started" counts as playing — an open-but-not-started stream must
+    // not be reported as playing (matches NativeEngine::isAudioPlaying).
+    return state == oboe::StreamState::Started;
 }
 
 JNIEXPORT jboolean JNICALL
