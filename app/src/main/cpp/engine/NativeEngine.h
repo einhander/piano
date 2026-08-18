@@ -158,6 +158,10 @@ public:
     MidiFilePlayer::SlotInfo getMidiFileSlotInfo(int slot) const;
     void freeMidiFileSlot(int slot);
 
+    // Timing trace: frame position when LOAD/START were consumed
+    int64_t getMidiFileSlotLoadFrame(int slot) const;
+    int64_t getMidiFileSlotStartFrame(int slot) const;
+
     // Recorded MIDI export (worker thread)
     // NOTE: call from a worker thread, never the main thread.
     // Recorded ticks follow the transport bpm/ppq; the export tempo param must match.

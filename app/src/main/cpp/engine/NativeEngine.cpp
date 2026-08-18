@@ -249,7 +249,7 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     processMidiQueue();
 
     // Process MIDI file player (real-time safe: pre-allocated slots, lock-free queues)
-    mMidiFilePlayer.process(numFrames, mSampleRate, &mLiveMidiQueue);
+    mMidiFilePlayer.process(numFrames, mSampleRate, mTransport.framePosition.load(std::memory_order_acquire), &mLiveMidiQueue);
 
     // Process sequencer/clip scheduler events
     mSequencer.processFrame();
@@ -658,6 +658,14 @@ MidiFilePlayer::SlotInfo NativeEngine::getMidiFileSlotInfo(int slot) const {
 
 void NativeEngine::freeMidiFileSlot(int slot) {
     mMidiFilePlayer.freeSlot(slot);
+}
+
+int64_t NativeEngine::getMidiFileSlotLoadFrame(int slot) const {
+    return mMidiFilePlayer.getLoadConsumeFrame(slot);
+}
+
+int64_t NativeEngine::getMidiFileSlotStartFrame(int slot) const {
+    return mMidiFilePlayer.getStartConsumeFrame(slot);
 }
 
 // Recorded MIDI export

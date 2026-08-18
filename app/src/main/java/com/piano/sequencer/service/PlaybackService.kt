@@ -194,6 +194,17 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun freeMidiFileSlot(slot: Int) =
         NativeEngineBridge.nativeFreeMidiFileSlot(slot)
 
+    // Timing trace — cheap atomic reads, safe from any thread (unlike the heavy
+    // slot operations above, which must run on a worker thread).
+    fun getMidiFileSlotLoadFrame(slot: Int): Long =
+        NativeEngineBridge.nativeGetMidiFileSlotLoadFrame(slot)
+
+    fun getMidiFileSlotStartFrame(slot: Int): Long =
+        NativeEngineBridge.nativeGetMidiFileSlotStartFrame(slot)
+
+    fun getFramePosition(): Long =
+        NativeEngineBridge.nativeGetFramePosition()
+
     // Recorded MIDI export
     // NOTE: call from a worker thread, never the main thread.
     // Recorded ticks follow the transport bpm/ppq; the export tempo param must match.

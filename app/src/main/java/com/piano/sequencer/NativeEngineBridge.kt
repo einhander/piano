@@ -119,6 +119,10 @@ object NativeEngineBridge {
     external fun nativeGetMidiFileSlotInfo(slot: Int): String
     external fun nativeFreeMidiFileSlot(slot: Int)
 
+    // Timing trace
+    external fun nativeGetMidiFileSlotLoadFrame(slot: Int): Long
+    external fun nativeGetMidiFileSlotStartFrame(slot: Int): Long
+
     // Recorded MIDI export
     // NOTE: call from a worker thread, never the main thread.
     // Recorded ticks follow the transport bpm/ppq; the export tempo param must match.

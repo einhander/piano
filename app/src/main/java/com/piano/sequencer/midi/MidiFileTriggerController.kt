@@ -3,6 +3,7 @@ package com.piano.sequencer.midi
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.widget.Toast
 import com.piano.sequencer.AppLogger
 import com.piano.sequencer.service.PlaybackService
@@ -108,7 +109,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
 
         val result = noteStateMachine.noteOn(note)
         when (result) {
-            NoteToggleStateMachine.Result.TOGGLE_ON -> triggerSlot(cell)
+            NoteToggleStateMachine.Result.TOGGLE_ON -> triggerSlot(cell, SystemClock.uptimeMillis())
             NoteToggleStateMachine.Result.TOGGLE_OFF -> stopSlotForNote(note)
             NoteToggleStateMachine.Result.IGNORED -> {} // key repeat
         }
@@ -136,11 +137,14 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      * Worker thread. Handles -4 (busy) with up to 3 retries @50ms.
      * Public for panel callbacks (SequencerActivity).
      */
-    fun triggerSlot(cell: SequencerCell) {
+    fun triggerSlot(cell: SequencerCell, t0: Long = SystemClock.uptimeMillis()) {
         slotExecutor.execute {
             val svc = service ?: return@execute
             val slot = allocateSlot(cell.note)
+            val t1 = SystemClock.uptimeMillis()
             val isPlaying = svc.isMidiFileSlotPlaying(slot)
+
+            AppLogger.info("TRIG", "press note=${cell.note} slot=$slot qwait=${t1 - t0}ms")
 
             if (!isPlaying) {
                 val loaded = loadedFilePerSlot[slot]
@@ -148,6 +152,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     loaded.first == cell.filePath &&
                     loaded.second == cell.channel
                 if (!alreadyLoaded) {
+                    val t2 = SystemClock.uptimeMillis()
                     var loadResult = svc.loadMidiFileSlot(
                         slot, cell.filePath, cell.tempo, cell.loop,
                         cell.channel
@@ -161,6 +166,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                         )
                         retries++
                     }
+                    val t3 = SystemClock.uptimeMillis()
                     if (loadResult != 0) {
                         val msg = when (loadResult) {
                             -1 -> "Invalid file or engine"
@@ -169,10 +175,12 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                             -4 -> "Slot busy (after retries)"
                             else -> "Error $loadResult"
                         }
+                        AppLogger.info("TRIG", "load slot=$slot result=$loadResult ${t3 - t2}ms (t0+${t3 - t0}ms)")
                         showToast(msg)
                         return@execute
                     }
                     loadedFilePerSlot[slot] = cell.filePath to cell.channel
+                    AppLogger.info("TRIG", "load slot=$slot result=$loadResult ${t3 - t2}ms (t0+${t3 - t0}ms)")
                 }
             }
 
@@ -180,7 +188,21 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 svc.stopMidiFileSlot(slot)
                 noteStateMachine.stopPlaying(cell.note)
             } else {
+                val t4 = SystemClock.uptimeMillis()
                 svc.startMidiFileSlot(slot)
+                AppLogger.info("TRIG", "start slot=$slot total=${t4 - t0}ms")
+
+                // Tail: read the frame markers ~100ms later. The command queue is
+                // drained every audio callback (~1.3ms), so the command is consumed
+                // with wide margin. Start path only — on the stop path the markers
+                // would be stale from a previous trigger.
+                mainHandler.postDelayed({
+                    val s = service ?: return@postDelayed
+                    val lf = s.getMidiFileSlotLoadFrame(slot)
+                    val sf = s.getMidiFileSlotStartFrame(slot)
+                    val nf = s.getFramePosition()
+                    AppLogger.info("TRIG", "tail slot=$slot loadFrame=$lf startFrame=$sf nowFrame=$nf")
+                }, 100)
             }
         }
     }

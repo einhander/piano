@@ -66,6 +66,10 @@ struct MidiFileSlot {
 
     // Event index pointer (reset on loop wrap)
     int32_t eventIndex = 0;
+
+    // Timing trace: frame position when LOAD/START commands were consumed by audio thread
+    std::atomic<int64_t> loadConsumeFrame{-1};
+    std::atomic<int64_t> startConsumeFrame{-1};
 };
 
 // Forward declaration for the live MIDI queue push
@@ -92,8 +96,9 @@ public:
     // Audio-thread: process all active slots for this audio frame.
     // frameCount: number of audio frames in this callback.
     // sampleRate: device sample rate.
+    // framePos: current transport frame position (for timing trace).
     // liveMidiQueue: pointer to the live MIDI queue to push fired events into.
-    void process(int frameCount, int sampleRate, MidiQueue* liveMidiQueue);
+    void process(int frameCount, int sampleRate, int64_t framePos, MidiQueue* liveMidiQueue);
 
     // Worker-thread: enqueue START command (via command queue).
     // Safe to call from worker thread; never the audio callback.
@@ -124,6 +129,14 @@ public:
         float initialTempo = 120.0f;
     };
     SlotInfo getSlotInfo(int slot) const;
+
+    // Timing trace: frame position when LOAD/START were consumed by the audio thread.
+    // Convention: marker = frame position at the START of the callback that consumed
+    // the command (read before the framePosition fetch_add); the first event actually
+    // fires within [marker, marker + 64 frames] (~1.33ms @48kHz). Deltas between
+    // markers are valid. -1 = never consumed.
+    int64_t getLoadConsumeFrame(int slot) const;
+    int64_t getStartConsumeFrame(int slot) const;
 
 private:
     // Flush all active notes for a slot (send Note Offs).

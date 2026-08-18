@@ -213,7 +213,7 @@ int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop, i
 
 // ── Audio thread: process ──
 
-void MidiFilePlayer::process(int frameCount, int sampleRate, MidiQueue* liveMidiQueue) {
+void MidiFilePlayer::process(int frameCount, int sampleRate, int64_t framePos, MidiQueue* liveMidiQueue) {
     if (!liveMidiQueue) return;
 
     // Drain commands from the queue (worker thread pushes, audio thread consumes)
@@ -235,6 +235,7 @@ void MidiFilePlayer::process(int frameCount, int sampleRate, MidiQueue* liveMidi
                 s->eventIndex = 0;
                 s->currentTick = 0.0;
                 std::memset(s->activeNotes, 0, sizeof(s->activeNotes));
+                s->loadConsumeFrame.store(framePos, std::memory_order_relaxed);
                 break;
             }
             case MidiFileCmdType::START: {
@@ -248,6 +249,7 @@ void MidiFilePlayer::process(int frameCount, int sampleRate, MidiQueue* liveMidi
                     std::memset(s->activeNotes, 0, sizeof(s->activeNotes));
                 }
                 s->playing.store(true, std::memory_order_release);
+                s->startConsumeFrame.store(framePos, std::memory_order_relaxed);
                 break;
             }
             case MidiFileCmdType::STOP: {
@@ -497,6 +499,16 @@ MidiFilePlayer::SlotInfo MidiFilePlayer::getSlotInfo(int slot) const {
     info.ppq = s.ppq;
     info.initialTempo = s.initialTempo;
     return info;
+}
+
+int64_t MidiFilePlayer::getLoadConsumeFrame(int slot) const {
+    if (slot < 0 || slot >= kMaxSlots) return -1;
+    return mSlots[slot].loadConsumeFrame.load(std::memory_order_acquire);
+}
+
+int64_t MidiFilePlayer::getStartConsumeFrame(int slot) const {
+    if (slot < 0 || slot >= kMaxSlots) return -1;
+    return mSlots[slot].startConsumeFrame.load(std::memory_order_acquire);
 }
 
 // ── Worker-thread: wait for FREE command to be consumed ──

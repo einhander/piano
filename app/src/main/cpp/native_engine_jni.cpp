@@ -794,6 +794,24 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeFreeMidiFileSlot(
     }
 }
 
+// ── Timing trace: slot LOAD/START frame positions ──
+
+JNIEXPORT jlong JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMidiFileSlotLoadFrame(
+    JNIEnv* env, jclass, jint slot) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return -1;
+    return static_cast<jlong>(inst->getMidiFileSlotLoadFrame(static_cast<int>(slot)));
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMidiFileSlotStartFrame(
+    JNIEnv* env, jclass, jint slot) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return -1;
+    return static_cast<jlong>(inst->getMidiFileSlotStartFrame(static_cast<int>(slot)));
+}
+
 // ── Recorded MIDI export ──
 
 JNIEXPORT jint JNICALL
