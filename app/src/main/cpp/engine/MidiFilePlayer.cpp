@@ -56,9 +56,11 @@ MidiFilePlayer::~MidiFilePlayer() = default;
 
 // ── Worker thread: load ──
 
-int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop) {
+int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop, int channel) {
     if (slot < 0 || slot >= kMaxSlots) return -1;
     if (!filePath) return -1;
+    // channel < -1 or > 15 → invalid
+    if (channel < -1 || channel > 15) return -1;
 
     MidiFileSlot* s = &mSlots[slot];
 
@@ -165,6 +167,13 @@ int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop) {
         uint8_t type = evt.status & 0xF0;
         if (type == 0x90 && evt.data2 == 0) {
             outEvt.status = 0x80; // convert to note-off
+        }
+
+        // D3: channel remap — when channel >= 0, remap all events to that channel.
+        // Safe because MidiFileParser only stores channel-voice events (0x80-0xEF);
+        // meta (0xFF) and sysex (0xF0+) are dropped by the parser.
+        if (channel >= 0) {
+            outEvt.status = (outEvt.status & 0xF0) | static_cast<uint8_t>(channel);
         }
 
         s->events[count] = outEvt;

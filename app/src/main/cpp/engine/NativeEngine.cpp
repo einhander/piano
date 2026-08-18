@@ -628,8 +628,8 @@ bool NativeEngine::writeMidiFile(const char* filePath,
 }
 
 // MIDI file slot playback
-int NativeEngine::loadMidiFileSlot(int slot, const char* filePath, float bpm, bool loop) {
-    return mMidiFilePlayer.load(slot, filePath, bpm, loop);
+int NativeEngine::loadMidiFileSlot(int slot, const char* filePath, float bpm, bool loop, int channel) {
+    return mMidiFilePlayer.load(slot, filePath, bpm, loop, channel);
 }
 
 void NativeEngine::startMidiFileSlot(int slot) {

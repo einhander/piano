@@ -16,7 +16,8 @@ data class MidiFileAssignment(
     val note: Int,
     val filePath: String,
     val loop: Boolean,
-    val tempo: Double // BPM, 20–300
+    val tempo: Double, // BPM, 20–300
+    val channel: Int = -1 // D3: -1 = from file, 0-15 = remap all events
 )
 
 /**
@@ -31,7 +32,26 @@ class MidiFileMappingStore(private val prefs: SharedPreferences) {
 
     companion object {
         private const val KEY = "midi_file_map"
-        private val JSON = Json { ignoreUnknownKeys = true }
+        private val JSON = Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
+        }
+        @Volatile
+        private var instance: MidiFileMappingStore? = null
+
+        /** Process-level singleton — avoids the M2 two-instance divergence bug. */
+        fun get(context: android.content.Context): MidiFileMappingStore {
+            instance ?: run {
+                synchronized(MidiFileMappingStore::class) {
+                    instance ?: run {
+                        instance = MidiFileMappingStore(
+                            context.getSharedPreferences("piano_prefs", android.content.Context.MODE_PRIVATE)
+                        )
+                    }
+                }
+            }
+            return instance!!
+        }
     }
 
     private val lock = Any()

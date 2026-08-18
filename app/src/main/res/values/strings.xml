@@ -31,4 +31,8 @@
     <string name="instrument_program_fallback">Default</string>
     <string name="instrument_unknown">—</string>
     <string name="instrument_apply_failed">Could not apply instrument</string>
+
+    <!-- Sequensor -->
+    <string name="sequensor_title">Sequensor</string>
+    <string name="sequensor_hint">Assign a MIDI file to a controller pad: tap [Learn key], then press the pad. The channel selector remaps ALL events of the file (incl. all-notes-off) to the chosen channel; From file keeps the file\'s own channels. Remove a mapping with Delete or re-tapping Learn key.</string>
 </resources>

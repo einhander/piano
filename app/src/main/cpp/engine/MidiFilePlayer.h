@@ -87,7 +87,7 @@ public:
     // Worker-thread: parse file and enqueue LOAD command.
     // Returns 0 on success, -1 (path invalid/no free slot), -2 (file too long),
     // -3 (command queue full), -4 (slot is active/playing — busy).
-    int load(int slot, const char* filePath, float bpm, bool loop);
+    int load(int slot, const char* filePath, float bpm, bool loop, int channel = -1);
 
     // Audio-thread: process all active slots for this audio frame.
     // frameCount: number of audio frames in this callback.
