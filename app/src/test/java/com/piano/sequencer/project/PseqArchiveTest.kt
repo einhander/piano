@@ -6,6 +6,7 @@ import java.util.zip.ZipOutputStream
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -38,6 +39,15 @@ class PseqArchiveTest {
         name = "Test",
         createdAt = "2026-08-19T12:00:00Z"
     )
+
+    /** Builds a zip archive containing a hand-written project.json. */
+    private fun writeJsonZip(pseq: File, jsonText: String) {
+        ZipOutputStream(pseq.outputStream()).use { zip ->
+            zip.putNextEntry(ZipEntry("project.json"))
+            zip.write(jsonText.toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
+        }
+    }
 
     // ── write / read round-trip ──
 
@@ -134,12 +144,7 @@ class PseqArchiveTest {
     @Test
     fun badVersion() {
         val pseq = tempFile("pseq_badver_", ".pseq")
-        val jsonText = """{"formatVersion":99,"name":"Bad","createdAt":"2026-08-19T12:00:00Z"}"""
-        ZipOutputStream(pseq.outputStream()).use { zip ->
-            zip.putNextEntry(ZipEntry("project.json"))
-            zip.write(jsonText.toByteArray(Charsets.UTF_8))
-            zip.closeEntry()
-        }
+        writeJsonZip(pseq, """{"formatVersion":99,"name":"Bad","createdAt":"2026-08-19T12:00:00Z"}""")
 
         val e = assertThrows(PseqFormatException::class.java) {
             PseqArchive.readDocument(pseq.inputStream())
@@ -154,6 +159,85 @@ class PseqArchiveTest {
 
         assertThrows(PseqFormatException::class.java) {
             PseqArchive.readDocument(pseq.inputStream())
+        }
+    }
+
+    // ── document validation ──
+
+    @Test
+    fun readDocumentAbsoluteCellPath() {
+        val pseq = tempFile("pseq_abs_", ".pseq")
+        val jsonText = """{"formatVersion":1,"name":"X","createdAt":"2026-08-19T12:00:00Z","cells":[{"id":1,"filePath":"/abs/path"}]}"""
+        writeJsonZip(pseq, jsonText)
+
+        assertThrows(PseqFormatException::class.java) {
+            PseqArchive.readDocument(pseq.inputStream())
+        }
+    }
+
+    @Test
+    fun readDocumentBadChannelCount() {
+        val pseq = tempFile("pseq_chans_", ".pseq")
+        val channels = (0 until 15).joinToString(",") { "0" }
+        val jsonText = """{"formatVersion":1,"name":"X","createdAt":"2026-08-19T12:00:00Z","channels":[$channels]}"""
+        writeJsonZip(pseq, jsonText)
+
+        assertThrows(PseqFormatException::class.java) {
+            PseqArchive.readDocument(pseq.inputStream())
+        }
+    }
+
+    @Test
+    fun readDocumentDuplicateCellIds() {
+        val pseq = tempFile("pseq_dupid_", ".pseq")
+        val jsonText = """{"formatVersion":1,"name":"X","createdAt":"2026-08-19T12:00:00Z","cells":[{"id":1,"filePath":"midi/a.mid"},{"id":1,"filePath":"midi/b.mid"}]}"""
+        writeJsonZip(pseq, jsonText)
+
+        assertThrows(PseqFormatException::class.java) {
+            PseqArchive.readDocument(pseq.inputStream())
+        }
+    }
+
+    // ── entry name validation (zip-slip) ──
+
+    @Test
+    fun isArchiveEntry() {
+        assertTrue(PseqArchive.isArchiveEntry("project.json"))
+        assertTrue(PseqArchive.isArchiveEntry("midi/foo.mid"))
+        assertFalse(PseqArchive.isArchiveEntry("midi/"))
+        assertFalse(PseqArchive.isArchiveEntry("midi//foo.mid"))
+        assertFalse(PseqArchive.isArchiveEntry("midi/sub/foo.mid"))
+        assertFalse(PseqArchive.isArchiveEntry("midi/../../evil.mid"))
+        assertFalse(PseqArchive.isArchiveEntry("foo.mid"))
+        assertFalse(PseqArchive.isArchiveEntry("soundfonts/x.sf2"))
+        // "my..song.mid" is a legal name; only the exact segment ".." is traversal
+        assertTrue(PseqArchive.isArchiveEntry("midi/my..song.mid"))
+        assertFalse(PseqArchive.isArchiveEntry("midi/.."))
+    }
+
+    @Test
+    fun extractEntryTraversalName() {
+        val pseq = tempFile("pseq_traversal_", ".pseq")
+        ZipOutputStream(pseq.outputStream()).use { zip ->
+            zip.putNextEntry(ZipEntry("midi/../../evil.mid"))
+            zip.write(byteArrayOf(1, 2, 3))
+            zip.closeEntry()
+        }
+        val dest = tempFile("pseq_evil_", ".mid")
+
+        assertThrows(PseqFormatException::class.java) {
+            PseqArchive.extractEntry(pseq.inputStream(), "midi/../../evil.mid", dest)
+        }
+    }
+
+    @Test
+    fun extractEntryMissingEntry() {
+        val pseq = tempFile("pseq_noentry_", ".pseq")
+        PseqArchive.write(pseq.outputStream(), baseDoc(), emptyMap())
+        val dest = tempFile("pseq_dest_", ".mid")
+
+        assertThrows(PseqFormatException::class.java) {
+            PseqArchive.extractEntry(pseq.inputStream(), "midi/nope.mid", dest)
         }
     }
 
@@ -179,12 +263,7 @@ class PseqArchiveTest {
     @Test
     fun unknownKeysTolerated() {
         val pseq = tempFile("pseq_unknown_", ".pseq")
-        val jsonText = """{"formatVersion":1,"name":"X","createdAt":"2026-08-19T12:00:00Z","futureField":42}"""
-        ZipOutputStream(pseq.outputStream()).use { zip ->
-            zip.putNextEntry(ZipEntry("project.json"))
-            zip.write(jsonText.toByteArray(Charsets.UTF_8))
-            zip.closeEntry()
-        }
+        writeJsonZip(pseq, """{"formatVersion":1,"name":"X","createdAt":"2026-08-19T12:00:00Z","futureField":42}""")
 
         val doc = PseqArchive.readDocument(pseq.inputStream())
         assertEquals("X", doc.name)
