@@ -16,6 +16,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -274,6 +275,7 @@ class InstrumentActivity : AppCompatActivity() {
             hint = getString(R.string.instrument_search_hint)
             maxLines = 1
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            isFocusableInTouchMode = true
             setPadding(dp(8), dp(8), dp(8), dp(8))
         }
 
@@ -322,6 +324,8 @@ class InstrumentActivity : AppCompatActivity() {
         search.requestFocus()
         // requestFocus() alone does not reliably raise the IME on all devices
         dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        val imm = getSystemService(InputMethodManager::class.java)
+        search.post { imm?.showSoftInput(search, InputMethodManager.SHOW_IMPLICIT) }
     }
 
     // "name (bank N)" when the preset lives outside bank 0, so identical

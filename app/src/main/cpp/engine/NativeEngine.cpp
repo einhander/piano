@@ -591,6 +591,7 @@ bool NativeEngine::shouldPlayCountInClick(int64_t frame) const {
 // Recording control
 void NativeEngine::startRecording() {
     // M4: pass 0 — mRecordTick is already the tick source, record() won't subtract again
+    mRecordTickAccumulator = 0.0; // clear cross-session stale offset before new recording
     mRecorder.start(0);
     mRecordTick.store(0, std::memory_order_release);
     // m9: removed transport state side effect — recording tick advances in onAudioFrame

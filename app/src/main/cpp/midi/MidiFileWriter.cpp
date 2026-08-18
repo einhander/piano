@@ -93,6 +93,15 @@ void MidiFileWriter::writeTrack(std::vector<uint8_t>& buf,
             return a.tick < b.tick;
         });
 
+    if (!sortedEvents.empty()) {
+        int64_t minTick = sortedEvents[0].tick;
+        if (minTick > 0) {
+            for (auto& e : sortedEvents) {
+                e.tick -= minTick;
+            }
+        }
+    }
+
     // Write tempo event at tick 0
     writeVlq(buf, 0);
     writeMetaTempo(buf, tempo);

@@ -5,7 +5,7 @@
 //     app/src/main/cpp/tests/midi_file_io_test.cpp \
 //     -o /tmp/midi_file_io_test
 // Run (from repo root):
-//   /tmp/midi_file_io_test test_files/Test.mid test_files/Test2.mid
+//   /tmp/midi_file_io_test test_files/Test.mid test_files/Test2.mid test_files/Test3.mid
 
 #include "midi/MidiFileParser.h"
 #include "midi/MidiFileWriter.h"
@@ -43,6 +43,7 @@ static bool eventsMatch(const std::vector<RecordedMidiEvent>& a,
 int main(int argc, char** argv) {
     const char* testMid = (argc > 1) ? argv[1] : "test_files/Test.mid";
     const char* testMid2 = (argc > 2) ? argv[2] : "test_files/Test2.mid";
+    const char* testMid3 = (argc > 3) ? argv[3] : "test_files/Test3.mid";
 
     // ── Test 1: Parse Test.mid ──
     {
@@ -210,54 +211,84 @@ int main(int argc, char** argv) {
         printf("Test2.mid: PASS (31 events, tempo, tpb)\n");
     }
 
-    // ── Test 3: Round-trip Test2.mid events ──
+    // ── Test 3: Parse Test3.mid ──
     {
         std::vector<RecordedMidiEvent> events;
         std::vector<std::pair<int64_t, uint32_t>> tempoMap;
         std::vector<std::pair<int64_t, std::pair<int, int>>> timeSigs;
         int tpb = 0;
 
-        if (!MidiFileParser().parse(testMid2, events, tempoMap, timeSigs, &tpb)) {
-            return fail("Round-trip: Test2.mid parse failed");
+        if (!MidiFileParser().parse(testMid3, events, tempoMap, timeSigs, &tpb)) {
+            return fail("Test3.mid: parse returned false");
         }
 
-        // Write to temp file
-        const char* tmpPath = "/tmp/midi_roundtrip_test.mid";
-        if (!MidiFileWriter().write(tmpPath, events, 0, 960, 500000)) {
-            return fail("Round-trip: write failed");
+        if ((int)events.size() != 6) {
+            return fail("Test3.mid: expected 6 events, got %zu", events.size());
         }
 
-        // Re-parse
-        std::vector<RecordedMidiEvent> events2;
-        std::vector<std::pair<int64_t, uint32_t>> tempoMap2;
-        std::vector<std::pair<int64_t, std::pair<int, int>>> timeSigs2;
-        int tpb2 = 0;
-
-        if (!MidiFileParser().parse(tmpPath, events2, tempoMap2, timeSigs2, &tpb2)) {
-            return fail("Round-trip: re-parse failed");
-        }
-
-        if ((int)events2.size() != 31) {
-            return fail("Round-trip: expected 31 events after round-trip, got %zu", events2.size());
-        }
-
-        // Compare (tick, status, data1, data2) — trackId not preserved
+        struct Et { int64_t tick; uint8_t st; uint8_t d1; uint8_t d2; };
+        Et expected[] = {
+            {8151, 0x91, 0x39, 0x40},
+            {8358, 0x91, 0x3e, 0x5f},
+            {8358, 0x91, 0x3c, 0x5f},
+            {10432, 0x81, 0x3c, 0x40},
+            {10432, 0x81, 0x39, 0x40},
+            {10470, 0x81, 0x3e, 0x40},
+        };
         for (size_t i = 0; i < events.size(); i++) {
-            if (events[i].tick != events2[i].tick ||
-                events[i].status != events2[i].status ||
-                events[i].data1 != events2[i].data1 ||
-                events[i].data2 != events2[i].data2) {
+            if (events[i].tick != expected[i].tick || events[i].status != expected[i].st ||
+                events[i].data1 != expected[i].d1 || events[i].data2 != expected[i].d2) {
                 char buf[256];
                 snprintf(buf, sizeof(buf),
-                    "Round-trip event[%zu]: expected (%lld, 0x%02X, 0x%02X, 0x%02X), "
+                    "Test3.mid event[%zu]: expected (%lld, 0x%02X, 0x%02X, 0x%02X), "
                     "got (%lld, 0x%02X, 0x%02X, 0x%02X)",
-                    i, (long long)events[i].tick, events[i].status, events[i].data1, events[i].data2,
-                    (long long)events2[i].tick, events2[i].status, events2[i].data1, events2[i].data2);
+                    i, (long long)expected[i].tick, expected[i].st, expected[i].d1, expected[i].d2,
+                    (long long)events[i].tick, events[i].status, events[i].data1, events[i].data2);
                 return fail(buf);
             }
         }
 
-        printf("Round-trip: PASS\n");
+        int test3TrackId = events[0].trackId;
+        for (const auto& e : events) {
+            if (e.trackId != test3TrackId) return fail("Test3.mid: trackId mismatch");
+        }
+
+        if ((int)tempoMap.size() != 1 || tempoMap[0].first != 0 || tempoMap[0].second != 500000) {
+            return fail("Test3.mid: tempo map mismatch");
+        }
+
+        printf("Test3.mid: PASS (6 events, tempo, trackId=%d)\n", test3TrackId);
+    }
+
+    // ── Test 4: Trim leading gap round-trip ──
+    {
+        std::vector<RecordedMidiEvent> events = {
+            {5000, 0xB0, 0x10, 0x20, 0},
+            {5200, 0xB0, 0x11, 0x21, 0},
+            {5200, 0xB0, 0x12, 0x22, 0},
+        };
+
+        const char* tmpPath = "/tmp/trim_round_trip.mid";
+        if (!MidiFileWriter().write(tmpPath, events, 0, 960, 500000)) {
+            return fail("TrimRoundTrip: write failed");
+        }
+
+        std::vector<RecordedMidiEvent> parsed;
+        std::vector<std::pair<int64_t, uint32_t>> tempoMap;
+        std::vector<std::pair<int64_t, std::pair<int, int>>> timeSigs;
+        int tpb = 0;
+        if (!MidiFileParser().parse(tmpPath, parsed, tempoMap, timeSigs, &tpb)) {
+            return fail("TrimRoundTrip: parse failed");
+        }
+        if ((int)parsed.size() != 3) return fail("TrimRoundTrip: expected 3 events, got %zu", parsed.size());
+        const int64_t expectedTicks[] = {0, 200, 200};
+        for (size_t i = 0; i < parsed.size(); i++) {
+            if (parsed[i].tick != expectedTicks[i] || parsed[i].status != events[i].status ||
+                parsed[i].data1 != events[i].data1 || parsed[i].data2 != events[i].data2) {
+                return fail("TrimRoundTrip: event[%zu] mismatch", i);
+            }
+        }
+        printf("TrimRoundTrip: PASS\n");
     }
 
     // ── Test 4: Empty events ──
