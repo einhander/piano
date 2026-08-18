@@ -12,9 +12,13 @@ import android.provider.OpenableColumns
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.piano.sequencer.midi.MidiFileLearnState
 import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.MidiFileTriggerController
+import com.piano.sequencer.midi.MidiRecordSession
+import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.service.PlaybackService
 import com.piano.sequencer.ui.MidiFilesPanel
 import java.io.File
@@ -24,12 +28,13 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Sequencer activity — MIDI file pad assignment screen.
  *
  * Hosts the MidiFilesPanel with per-cell controls.
- * Handles record export flow, file import, and test-play.
+ * Handles per-cell record (with overwrite confirm), per-cell export to SAF, file import, and test-play.
  */
 class SequencerActivity : AppCompatActivity() {
 
@@ -42,7 +47,35 @@ class SequencerActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed) return
             service = (binder as PlaybackService.PlaybackBinder).getService()
             MidiFileTriggerController.get(this@SequencerActivity).bind(this@SequencerActivity, service!!)
-            panel.refresh()
+            refreshPanel()
+
+            // F2: Restore per-cell recording UI across rotation (engine keeps recording).
+            // The holder is process-level; wait out any in-flight start/stop from a
+            // previous activity instance before reading engine state.
+            val svc = service!!
+            executor.execute {
+                var tries = 0
+                while (MidiRecordSession.inFlight && tries < 20) {
+                    Thread.sleep(50)
+                    tries++
+                }
+                if (MidiRecordSession.inFlight) return@execute
+                if (svc.isRecording()) {
+                    val id = MidiRecordSession.cellId
+                        ?: getSharedPreferences("piano_prefs", MODE_PRIVATE).getInt("recording_cell_id", -1)
+                    if (id > 0) {
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                recordingCellId = id
+                                panel.updateCellRecordState(id)
+                            }
+                        }
+                    }
+                } else {
+                    MidiRecordSession.cellId = null
+                    getSharedPreferences("piano_prefs", MODE_PRIVATE).edit().remove("recording_cell_id").apply()
+                }
+            }
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             service = null
@@ -60,8 +93,8 @@ class SequencerActivity : AppCompatActivity() {
         uri?.let { sourceUri -> importMidiFile(sourceUri, pendingImportCellId) }
     }
 
-    // ── SAF folder picker for recorded MIDI output ──
-    private val recordFolderLauncher = registerForActivityResult(
+    // ── SAF folder picker for cell file export ──
+    private val exportFolderLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri != null) {
@@ -70,41 +103,23 @@ class SequencerActivity : AppCompatActivity() {
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
             getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
-                .putString("record_folder_uri", uri.toString())
+                .putString("export_folder_uri", uri.toString())
                 .apply()
-            Toast.makeText(this@SequencerActivity, "Record folder selected", Toast.LENGTH_SHORT).show()
-            // Complete pending export if one was waiting
-            completePendingExport(uri)
-        } else {
-            // User cancelled picker — clear pending, toast, reset UI
-            val pending = pendingExport?.takeIf { pe ->
-                pendingExport = null
-                true
-            }
-            if (pending != null) {
-                Toast.makeText(this@SequencerActivity, "Export not saved (folder not selected)", Toast.LENGTH_SHORT).show()
-                runOnUiThread {
-                    panel.updateRecordUI(false, pending.eventCount)
+            Toast.makeText(this, "Export folder selected", Toast.LENGTH_SHORT).show()
+            pendingExportCellId?.let { id ->
+                pendingExportCellId = null
+                val store = MidiFileMappingStore.get(this)
+                store.get(id)?.let { cell ->
+                    if (cell.filePath.isNotEmpty() && File(cell.filePath).exists()) {
+                        exportCellFile(cell, uri)
+                    }
                 }
             }
-            pendingExportFlag = false
-            pendingExportFlagSaved = false
+        } else {
+            pendingExportCellId = null
+            Toast.makeText(this, "Export cancelled", Toast.LENGTH_SHORT).show()
         }
     }
-
-    // ── Pending export state ──
-
-    /** Holds a pending export until the SAF folder picker returns. */
-    private data class PendingExport(
-        val service: PlaybackService,
-        val eventCount: Int
-    )
-
-    private var pendingExport: PendingExport? = null
-
-    /** Persist pending-export flag across rotation/process death. */
-    private var pendingExportFlag = false
-    private var pendingExportFlagSaved = false
 
     // ── Lifecycle ──
 
@@ -136,33 +151,17 @@ class SequencerActivity : AppCompatActivity() {
         Intent(this, PlaybackService::class.java).also { intent ->
             bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         }
-
-        // Restore pending-export flag across rotation
-        if (savedInstanceState != null) {
-            pendingExportFlagSaved = savedInstanceState.getBoolean("pendingExportFlag", false)
-        }
     }
 
     override fun onResume() {
         super.onResume()
-        panel.refresh()
+        refreshPanel()
     }
 
     override fun onPause() {
         super.onPause()
         // m7: cancel any active learn timeout
         panel.cancelLearnTimeout()
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        pendingExportFlagSaved = pendingExportFlag
-        outState.putBoolean("pendingExportFlag", pendingExportFlagSaved)
-    }
-
-    override fun onRestoreInstanceState(savedInstanceState: Bundle) {
-        super.onRestoreInstanceState(savedInstanceState)
-        pendingExportFlag = savedInstanceState.getBoolean("pendingExportFlag", false)
     }
 
     override fun onDestroy() {
@@ -184,7 +183,29 @@ class SequencerActivity : AppCompatActivity() {
     // ── Per-cell import tracking ──
     private var pendingImportCellId: Int? = null
 
-    // ── Panel callbacks (moved from MainActivity) ──
+    /** Cell currently being recorded (main-thread UI source of truth). */
+    @Volatile
+    private var recordingCellId: Int? = null
+
+    /** m6-style double-tap guard for the record toggle. */
+    private val recordBusy = AtomicBoolean(false)
+
+    /** Cell waiting for the export folder picker. */
+    private var pendingExportCellId: Int? = null
+
+    // ── Panel refresh ──
+
+    /**
+     * Rebuild the panel and re-apply the per-cell record state.
+     * refresh() recreates all row buttons (idle state), so the active
+     * "■ Stop" state must be re-applied while a recording is in progress.
+     */
+    private fun refreshPanel() {
+        panel.refresh()
+        panel.updateCellRecordState(recordingCellId)
+    }
+
+    // ── Panel callbacks ──
 
     private fun setupPanelCallbacks() {
         panel.onImportClick = { cellId ->
@@ -192,53 +213,53 @@ class SequencerActivity : AppCompatActivity() {
             midiFileImportLauncher.launch("audio/midi")
         }
 
-        panel.onRecordClick = {
-            // m3: run the whole record toggle on a worker thread
-            executor.execute {
-                try {
-                    val svc = service ?: run {
-                        runOnUiThread {
-                            Toast.makeText(this@SequencerActivity, "Service not connected", Toast.LENGTH_SHORT).show()
-                        }
-                        return@execute
-                    }
-                    val isRec = svc.isRecording()
-                    if (isRec) {
-                        // Stop recording → write to SAF folder
-                        svc.stopRecording()
-                        val eventCount = svc.getRecordedEventCount()
-                        if (eventCount > 0) {
-                            // Check if SAF folder chosen
-                            val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
-                            val recordUriStr = prefs.getString("record_folder_uri", null)
-                            if (recordUriStr == null) {
-                                // No SAF folder chosen → trigger picker
-                                // M4: hold pending export until picker returns
-                                pendingExport = PendingExport(svc, eventCount)
-                                pendingExportFlag = true
-                                pendingExportFlagSaved = false
-                                runOnUiThread {
-                                    recordFolderLauncher.launch(null)
-                                }
-                            } else {
-                                writeRecordedMidiFileToUri(svc, eventCount, Uri.parse(recordUriStr))
-                            }
-                        }
-                        runOnUiThread {
-                            panel.updateRecordUI(false, eventCount)
-                        }
-                    } else {
-                        // Start recording
-                        svc.startRecording()
-                        runOnUiThread {
-                            panel.updateRecordUI(true, 0)
-                        }
-                    }
-                } catch (e: Exception) {
-                    runOnUiThread {
-                        Toast.makeText(this@SequencerActivity, "Record error: ${e.message}", Toast.LENGTH_SHORT).show()
-                    }
+        panel.onCellRecordClick = cell@{ cellId ->
+            // m6: guard against double-tap during the worker round-trip
+            if (recordBusy.get()) {
+                Toast.makeText(this, "Please wait...", Toast.LENGTH_SHORT).show()
+                return@cell
+            }
+            recordBusy.set(true)
+            if (recordingCellId != null) {
+                // Second press stops the active recording — no dialog
+                stopRecordingFlow()
+            } else {
+                val cell = MidiFileMappingStore.get(this).get(cellId)
+                if (cell == null) {
+                    recordBusy.set(false)
+                    return@cell
                 }
+                val hasExisting = cell.filePath.isNotEmpty() && File(cell.filePath).exists()
+                if (hasExisting) {
+                    // F1: build with .create(), add cancel listener, then show
+                    val dialog = AlertDialog.Builder(this)
+                        .setTitle("Overwrite recording?")
+                        .setMessage("This cell already has a recording. The old file will be replaced.")
+                        .setPositiveButton("Overwrite") { _, _ -> startRecordingFlow(cellId) }
+                        .setNegativeButton("Cancel") { _, _ -> recordBusy.set(false) }
+                        .create()
+                    // F1: back button / outside tap dismiss via cancel() — release the guard there too
+                    dialog.setOnCancelListener { recordBusy.set(false) }
+                    dialog.show()
+                } else {
+                    startRecordingFlow(cellId)
+                }
+            }
+        }
+
+        panel.onCellExportClick = { cellId ->
+            val cell = MidiFileMappingStore.get(this).get(cellId)
+            if (cell != null && cell.filePath.isNotEmpty() && File(cell.filePath).exists()) {
+                val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+                val folderUriStr = prefs.getString("export_folder_uri", null)
+                if (folderUriStr == null) {
+                    pendingExportCellId = cellId
+                    exportFolderLauncher.launch(null)
+                } else {
+                    exportCellFile(cell, Uri.parse(folderUriStr))
+                }
+            } else {
+                Toast.makeText(this, "No file assigned", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -256,20 +277,25 @@ class SequencerActivity : AppCompatActivity() {
             val c = MidiFileTriggerController.get(this)
             c.allocateSlotForNote(note)
             c.getSlotForNote(note)?.let { c.clearLoadedFile(it) }
-            panel.refresh()
+            refreshPanel()
         }
 
         panel.onNoteUnlearned = { note ->
             MidiFileTriggerController.get(this).freeSlotForNote(note)
-            panel.refresh()
+            refreshPanel()
         }
 
         panel.onCellRemove = { cell ->
-            if (cell.note >= 0) {
-                MidiFileTriggerController.get(this).freeSlotForNote(cell.note)
+            // F3: guard — don't remove a cell that's actively being recorded
+            if (cell.id == MidiRecordSession.cellId) {
+                Toast.makeText(this, "Stop recording first", Toast.LENGTH_SHORT).show()
+            } else {
+                if (cell.note >= 0) {
+                    MidiFileTriggerController.get(this).freeSlotForNote(cell.note)
+                }
+                MidiFileMappingStore.get(this).remove(cell.id)
+                refreshPanel()
             }
-            MidiFileMappingStore.get(this).remove(cell.id)
-            panel.refresh()
         }
     }
 
@@ -309,7 +335,7 @@ class SequencerActivity : AppCompatActivity() {
                         }
                     }
                     Toast.makeText(this@SequencerActivity, "Imported: ${destFile.name}", Toast.LENGTH_SHORT).show()
-                    panel.refresh()
+                    refreshPanel()
                 }
             } catch (e: Exception) {
                 runOnUiThread {
@@ -320,116 +346,181 @@ class SequencerActivity : AppCompatActivity() {
         }
     }
 
-    // ── Record export ──
+    // ── Per-cell record ──
 
-    /**
-     * Complete a pending export with the chosen SAF URI.
-     * Called from recordFolderLauncher callback.
-     */
-    private fun completePendingExport(uri: Uri) {
-        val pending = pendingExport
-        if (pending != null) {
-            pendingExport = null
-            pendingExportFlag = false
-            pendingExportFlagSaved = false
-            writeRecordedMidiFileToUri(pending.service, pending.eventCount, uri)
-            return
-        }
-        // 4b: field lost (rotation/process death) but the flag survived — reconstruct
-        // from engine state (recorder keeps events until the next startRecording;
-        // getRecordedEventCount is JNI -> worker thread).
-        if (pendingExportFlag) {
-            pendingExportFlag = false
-            pendingExportFlagSaved = false
-            val svc = service ?: return
-            executor.execute {
-                val count = svc.getRecordedEventCount()
-                if (count > 0) {
-                    writeRecordedMidiFileToUri(svc, count, uri)
-                } else {
+    /** Start recording into the given cell (worker thread). */
+    private fun startRecordingFlow(cellId: Int) {
+        executor.execute {
+            try {
+                val svc = service ?: run {
                     runOnUiThread {
-                        Toast.makeText(this@SequencerActivity, "Nothing to export (recording lost)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "Service not connected", Toast.LENGTH_SHORT).show()
+                        recordBusy.set(false)
                     }
+                    return@execute
+                }
+                // F4: cancel any active learn mode — its capture would swallow the first key
+                MidiFileLearnState.cancel()
+                // F5: stop all active file slots + test-play; their pass-start events
+                // (timestamp == 0) would otherwise leak into the recording
+                MidiFileTriggerController.get(this).stopAllForRecording()
+                MidiRecordSession.inFlight = true
+                try {
+                    svc.startRecording()
+                    MidiRecordSession.cellId = cellId
+                    recordingCellId = cellId
+                    getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+                        .putInt("recording_cell_id", cellId)
+                        .apply()
+                } finally {
+                    MidiRecordSession.inFlight = false
+                }
+                runOnUiThread {
+                    panel.updateCellRecordState(cellId)
+                    recordBusy.set(false)
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this, "Record error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    recordBusy.set(false)
                 }
             }
         }
     }
 
-    /**
-     * Write recorded MIDI to a temp file, then copy to SAF folder.
-     * M5: uses actual BPM and PPQ from transport state.
-     */
-    private fun writeRecordedMidiFileToUri(svc: PlaybackService, eventCount: Int, uri: Uri) {
+    /** Stop the active recording and save it into the recorded cell (worker thread). */
+    private fun stopRecordingFlow() {
         executor.execute {
             try {
-                val tempDir = File(filesDir, "midi_files")
-                if (!tempDir.exists()) tempDir.mkdirs()
-                // item 9: unique temp name to avoid concurrent export collisions
-                val tempFileName = "rec_${System.currentTimeMillis()}.mid"
-                val tempFile = File(tempDir, tempFileName)
-
-                // M5: get actual transport BPM and PPQ
-                val bpm = svc.getBPM()
-                val ppq = svc.getPpq()
-                val tempoUs = (60_000_000.0 / bpm).toInt()
-
-                val success = svc.writeRecordedMidiFile(
-                    tempFile.absolutePath, ppq, tempoUs
-                )
-
-                if (success) {
-                    // Copy temp file to SAF folder
-                    val copied = copyToSaf(tempFile, uri)
+                // F2: service-null branch — DO NOT clear recordingCellId, prefs, or panel state
+                // (the engine is a process singleton and may still be recording;
+                //  recovery on (re)connect reconciles).
+                val svc = service ?: run {
                     runOnUiThread {
-                        panel.updateRecordUI(false, eventCount)
-                        if (copied) {
-                            Toast.makeText(this@SequencerActivity,
-                                "Recorded $eventCount events", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(this@SequencerActivity, "Export failed (SAF copy)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "Service not connected", Toast.LENGTH_SHORT).show()
+                        recordBusy.set(false)
+                    }
+                    return@execute
+                }
+                MidiRecordSession.inFlight = true
+                var eventCount = 0
+                var recCellId: Int? = null
+                try {
+                    svc.stopRecording()
+                    eventCount = svc.getRecordedEventCount()
+                    // Holder is authoritative (survives activity recreation); in-memory mirror for UI
+                    recCellId = MidiRecordSession.cellId
+                    MidiRecordSession.cellId = null
+                    recordingCellId = null
+                    getSharedPreferences("piano_prefs", MODE_PRIVATE).edit().remove("recording_cell_id").apply()
+                } finally {
+                    MidiRecordSession.inFlight = false
+                }
+
+                if (eventCount > 0 && recCellId != null) {
+                    val midiDir = File(getExternalFilesDir(null), "midi_files")
+                    if (!midiDir.exists()) midiDir.mkdirs()
+                    // F6: add milliseconds to recorded file name
+                    val name = "recorded_" +
+                        SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date()) + ".mid"
+                    val destFile = File(midiDir, name)
+                    val bpm = svc.getBPM()
+                    val ppq = svc.getPpq()
+                    val tempoUs = (60_000_000.0 / bpm).toInt()
+                    val ok = svc.writeRecordedMidiFile(destFile.absolutePath, ppq, tempoUs)
+                    if (ok) {
+                        runOnUiThread {
+                            val store = MidiFileMappingStore.get(this)
+                            val cell = store.get(recCellId)
+                            if (cell != null) {
+                                store.set(cell.copy(filePath = destFile.absolutePath))
+                                // Force slot reload of the new file (same pattern as onNoteLearned)
+                                if (cell.note >= 0) {
+                                    val c = MidiFileTriggerController.get(this)
+                                    c.getSlotForNote(cell.note)?.let { c.clearLoadedFile(it) }
+                                }
+                                refreshPanel()
+                                Toast.makeText(this, "Recorded: ${destFile.name} ($eventCount events)", Toast.LENGTH_SHORT).show()
+                            } else {
+                                // Cell was removed while recording — no row to refresh; just reset button states
+                                panel.updateCellRecordState(null)
+                            }
+                            // F10: release the double-tap guard only after the UI update is posted
+                            recordBusy.set(false)
+                        }
+                    } else {
+                        runOnUiThread {
+                            Toast.makeText(this, "Record save failed", Toast.LENGTH_SHORT).show()
+                            panel.updateCellRecordState(null)
+                            recordBusy.set(false)
                         }
                     }
                 } else {
                     runOnUiThread {
-                        Toast.makeText(this@SequencerActivity, "Export failed", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this,
+                            if (eventCount == 0) "Nothing recorded" else "Recording lost",
+                            Toast.LENGTH_SHORT).show()
+                        panel.updateCellRecordState(null)
+                        recordBusy.set(false)
                     }
                 }
             } catch (e: Exception) {
                 runOnUiThread {
-                    Toast.makeText(this@SequencerActivity, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Record error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    panel.updateCellRecordState(null)
+                    recordBusy.set(false)
                 }
             }
         }
     }
 
+    // ── Per-cell export ──
+
+    /** Copy the cell's file to the SAF export folder (worker thread). */
+    private fun exportCellFile(cell: SequencerCell, uri: Uri) {
+        executor.execute {
+            try {
+                val source = File(cell.filePath)
+                val copied = copyToSaf(source, uri, source.name)
+                runOnUiThread {
+                    if (copied) {
+                        Toast.makeText(this, "Exported: ${source.name}", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this, "Export failed", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                AppLogger.warn("SequencerActivity", "Cell export failed: ${e.message}")
+                runOnUiThread {
+                    Toast.makeText(this, "Export failed", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    // ── SAF copy helper ──
+
     /**
      * Copy a file to a SAF folder using DocumentFile API.
-     * m5: returns Boolean (true = copied, false = failed).
-     * m5: uses unique temp name with timestamp to avoid collisions.
+     * Does NOT delete the source file (cell files must persist).
      */
-    private fun copyToSaf(tempFile: File, destUri: Uri): Boolean {
+    private fun copyToSaf(sourceFile: File, destUri: Uri, fileName: String): Boolean {
         try {
             val docFile = DocumentsContract.buildDocumentUriUsingTree(
                 destUri,
                 DocumentsContract.getTreeDocumentId(destUri)
             )
-            // m5: unique temp name using ISO timestamp
-            val uniqueName = "rec_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.mid"
             val childUri = DocumentsContract.createDocument(
-                contentResolver, docFile, "audio/midi", uniqueName
+                contentResolver, docFile, "audio/midi", fileName
             ) ?: throw IOException("Could not create document in SAF folder")
             contentResolver.openOutputStream(childUri)?.use { out ->
-                tempFile.inputStream().use { input ->
+                sourceFile.inputStream().use { input ->
                     input.copyTo(out)
                 }
             } ?: throw IOException("Could not open output stream for $childUri")
-            // Delete temp file
-            tempFile.delete()
             return true
         } catch (e: Exception) {
             AppLogger.warn("SequencerActivity", "SAF copy failed: ${e.message}")
-            // Still delete temp
-            try { tempFile.delete() } catch (_: Exception) {}
             return false
         }
     }

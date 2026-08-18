@@ -90,9 +90,13 @@ class MidiFileTriggerController private constructor(appContext: Context) {
 
     /**
      * Handle a note-on from the MIDI callback.
+     * Returns false while recording (file triggering is paused; notes must reach engine).
      * Returns true if the event was consumed (mapped note) — caller must NOT forward to engine.
      */
     fun onNoteOn(channel: Int, note: Int, velocity: Int): Boolean {
+        // While recording, all notes must reach the engine (recorded + synthesized);
+        // file triggering is paused for the duration of the recording.
+        if (service?.isRecording() == true) return false
         // Learn state active → capture
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
             MidiFileLearnState.captureNote(note)
@@ -113,9 +117,13 @@ class MidiFileTriggerController private constructor(appContext: Context) {
 
     /**
      * Handle a note-off from the MIDI callback.
+     * Returns false while recording (file triggering is paused; notes must reach engine).
      * Returns true if consumed (mapped note).
      */
     fun onNoteOff(channel: Int, note: Int, velocity: Int): Boolean {
+        // While recording, all notes must reach the engine (recorded + synthesized);
+        // file triggering is paused for the duration of the recording.
+        if (service?.isRecording() == true) return false
         noteStateMachine.noteOff(note)
         val s = store ?: return false
         return s.findByNote(note) != null // consumed if mapped
@@ -251,6 +259,31 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     private fun cancelTestPlayAutoStop() {
         mainHandler.removeCallbacks(testPlayRunnable ?: return)
         testPlayRunnable = null
+    }
+
+    /**
+     * Stop all active file slots and test-play before a recording starts.
+     * Worker thread (slotExecutor). Their pass-start events carry timestamp == 0
+     * and would otherwise leak into the recording; also resets the toggle state
+     * machines so the first press after the recording is TOGGLE_ON.
+     */
+    fun stopAllForRecording() {
+        slotExecutor.execute {
+            val svc = service ?: return@execute
+            for (note in noteSlotMap.keys) {
+                val slot = noteSlotMap[note] ?: continue
+                if (svc.isMidiFileSlotPlaying(slot)) {
+                    svc.stopMidiFileSlot(slot)
+                }
+                noteStateMachine.stopPlaying(note)
+            }
+            if (testPlayPlaying) {
+                svc.stopMidiFileSlot(testPlaySlot)
+                testPlayPlaying = false
+                mainHandler.post { onTestPlayStateChanged?.invoke(false) }
+            }
+            cancelTestPlayAutoStop()
+        }
     }
 
     /**

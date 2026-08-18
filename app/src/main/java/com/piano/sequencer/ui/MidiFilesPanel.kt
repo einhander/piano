@@ -1,6 +1,7 @@
 package com.piano.sequencer.ui
 
 import android.content.Context
+import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
 import android.util.AttributeSet
@@ -19,20 +20,17 @@ import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.midi.noteToName
 import java.io.File
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Programmatic LinearLayout panel for MIDI file cell management.
  *
  * Displays a list of sequencer cells (SequencerCell) with per-cell controls:
  * learned key label, channel spinner, loop checkbox, tempo edit, learn, test,
- * import, and remove buttons. Also has record section.
+ * import, remove, per-cell record (red dot), and export buttons.
  *
  * House style: all views created programmatically, no layout XML.
  *
  * The store is injected by the hosting activity (SequencerActivity) constructor.
- * m3: record toggle runs on worker thread.
- * m6: double-tap guard via isRecordingUi flag.
  * m7: learn mode timeout (10s) via Handler.postDelayed.
  */
 class MidiFilesPanel @JvmOverloads constructor(
@@ -46,8 +44,11 @@ class MidiFilesPanel @JvmOverloads constructor(
     /** Called when user wants to import a .mid file via GetContent picker. */
     var onImportClick: (cellId: Int) -> Unit = {}
 
-    /** Called when user wants to start/stop recording. */
-    var onRecordClick: () -> Unit = {}
+    /** Called when the per-cell record button is pressed (start/stop). */
+    var onCellRecordClick: (cellId: Int) -> Unit = {}
+
+    /** Called when the per-cell export button is pressed. */
+    var onCellExportClick: (cellId: Int) -> Unit = {}
 
     /** Called when a test-play button is pressed. */
     var onTestPlay: (cell: SequencerCell) -> Unit = {}
@@ -76,18 +77,17 @@ class MidiFilesPanel @JvmOverloads constructor(
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    /** m6: guard against double-tap during export. */
-    private val isRecordingUi = AtomicBoolean(false)
-
     /** m7: handler for learn timeout. */
     private var learnTimeoutRunnable: Runnable? = null
 
-    /** n3: direct references to record section widgets (no text-matched scan). */
-    private var recordBtn: Button? = null
-    private var recordStatus: TextView? = null
-
     /** item 8c: direct reference to per-row test button for label update. */
     private var currentTestBtn: Button? = null
+
+    /** Per-row record buttons keyed by cell id. */
+    private val cellRecordButtons = mutableMapOf<Int, Button>()
+
+    /** Theme-default background per record button, restored when the button is not active. */
+    private val cellRecordButtonDefaults = mutableMapOf<Int, Drawable?>()
 
     // ── Channel spinner items ──
     // 1-based: "From file" + "Ch 1".."Ch 16" (internal 0..15 → display 1..16)
@@ -108,6 +108,8 @@ class MidiFilesPanel @JvmOverloads constructor(
     /** Load and display the cell list. */
     fun refresh() {
         removeAllViews()
+        cellRecordButtons.clear()
+        cellRecordButtonDefaults.clear()
 
         // ONE-TIME legacy backfill: scan midi_files dir, add files not yet in any cell
         if (store.needsLegacyBackfill()) {
@@ -146,9 +148,6 @@ class MidiFilesPanel @JvmOverloads constructor(
 
         // "＋ Add cell" button
         addAddCellButton()
-
-        // Record section
-        addRecordSection()
     }
 
     private fun addCellRow(cell: SequencerCell) {
@@ -286,6 +285,52 @@ class MidiFilesPanel @JvmOverloads constructor(
 
         container.addView(row2)
 
+        // ── Row 3: per-cell record + export ──
+        val row3 = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val dot = context.getDrawable(R.drawable.ic_record_dot)
+
+        val recordBtn = Button(context).apply {
+            text = "Record"
+            textSize = 10f
+            setPadding(4, 4, 4, 4)
+            minWidth = 0
+            layoutParams = btnParams().apply { setMargins(0, 0, marginEnd, 0) }
+            setCompoundDrawablesWithIntrinsicBounds(dot, null, null, null)
+            setCompoundDrawablePadding(dpToPx(4, context))
+        }
+
+        val exportBtn = Button(context).apply {
+            text = "Export"
+            textSize = 10f
+            setPadding(4, 4, 4, 4)
+            minWidth = 0
+            layoutParams = btnParams()
+        }
+
+        recordBtn.setOnClickListener {
+            onCellRecordClick(cell.id)
+        }
+
+        exportBtn.setOnClickListener {
+            onCellExportClick(cell.id)
+        }
+
+        row3.addView(recordBtn)
+        row3.addView(exportBtn)
+
+        container.addView(row3, LayoutParams(
+            LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
+        ).apply {
+            setMargins(0, dpToPx(2, context), 0, 0)
+        })
+
         // ── Value readers ──
         fun getChannel(): Int {
             return if (channelSpinner.selectedItemPosition == 0) -1
@@ -400,6 +445,10 @@ class MidiFilesPanel @JvmOverloads constructor(
             setTestPlayTarget(testBtn)
         }
 
+        // Track record button (+ its theme-default background for state restore)
+        cellRecordButtons[cell.id] = recordBtn
+        cellRecordButtonDefaults[cell.id] = recordBtn.background
+
         addView(container)
     }
 
@@ -421,63 +470,35 @@ class MidiFilesPanel @JvmOverloads constructor(
         addView(addBtn)
     }
 
-    private fun addRecordSection() {
-        val recordRow = LinearLayout(context).apply {
-            orientation = HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 8, 0, 0)
-        }
-
-        val recordBtn = Button(context).apply {
-            text = "Record"
-            textSize = 12f
-            setPadding(dpToPx(12, context), dpToPx(8, context), dpToPx(12, context), dpToPx(8, context))
-        }
-        recordBtn.setOnClickListener {
-            // m6: guard against double-tap during export
-            if (isRecordingUi.get()) {
-                Toast.makeText(context, "Please wait, export in progress...", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
+    /** Update per-cell record button states. recordingCellId == null → all idle. */
+    fun updateCellRecordState(recordingCellId: Int?) {
+        for ((id, btn) in cellRecordButtons) {
+            when {
+                id == recordingCellId -> {
+                    btn.text = "■ Stop"
+                    btn.setCompoundDrawablesWithIntrinsicBounds(null, null, null, null)
+                    btn.setBackgroundColor(0xFFDC1414.toInt())
+                    btn.setTextColor(0xFFFFFFFF.toInt())
+                    btn.isEnabled = true
+                }
+                recordingCellId != null -> {
+                    btn.text = "Record"
+                    val dot = context.getDrawable(R.drawable.ic_record_dot)
+                    btn.setCompoundDrawablesWithIntrinsicBounds(dot, null, null, null)
+                    btn.background = cellRecordButtonDefaults[id]
+                    btn.setTextColor(0xFF000000.toInt())
+                    btn.isEnabled = false
+                }
+                else -> {
+                    btn.text = "Record"
+                    val dot = context.getDrawable(R.drawable.ic_record_dot)
+                    btn.setCompoundDrawablesWithIntrinsicBounds(dot, null, null, null)
+                    btn.background = cellRecordButtonDefaults[id]
+                    btn.setTextColor(0xFF000000.toInt())
+                    btn.isEnabled = true
+                }
             }
-            // Disable button during export
-            isRecordingUi.set(true)
-            recordBtn.isEnabled = false
-            onRecordClick()
         }
-
-        val recordStatus = TextView(context).apply {
-            text = "No recording"
-            textSize = 11f
-            setTextColor(0xFF888888.toInt())
-            layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
-        }
-
-        // n3: save direct references to record section widgets
-        this.recordBtn = recordBtn
-        this.recordStatus = recordStatus
-
-        addView(recordRow, LayoutParams(
-            LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
-        ).apply {
-            setMargins(0, 4, 0, 4)
-        })
-    }
-
-    /** Update record button text and status. */
-    fun updateRecordUI(recording: Boolean, eventCount: Int) {
-        val btn = recordBtn
-        val status = recordStatus
-        if (btn != null) {
-            btn.text = if (recording) "Stop" else "Record"
-        }
-        if (status != null) {
-            status.text = if (recording) "Recording..."
-            else if (eventCount > 0) "$eventCount events recorded"
-            else "No recording"
-        }
-        // item 5 + gate-2 condition: release guard on BOTH start and stop paths
-        if (btn != null) btn.isEnabled = true
-        isRecordingUi.set(false)
     }
 
     /** m7: cancel learn timeout on activity pause. */
