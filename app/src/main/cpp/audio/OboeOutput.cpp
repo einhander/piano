@@ -81,6 +81,15 @@ oboe::Result OboeOutput::start() {
     if (mStream == nullptr) {
         return oboe::Result::ErrorNull;
     }
+    // Rebind path: the engine is a process-level singleton and the stream
+    // survives service rebinds (e.g. MIDI device reconnect). AAudio reports a
+    // running stream as Started and returns INVALID_STATE (-895) for start()
+    // on it — treat "already running" as success instead of a false error.
+    if (mState.load(std::memory_order_acquire) == oboe::StreamState::Started) {
+        if (mStream->getState() == oboe::StreamState::Started) {
+            return oboe::Result::OK;
+        }
+    }
     oboe::Result result = mStream->start();
     if (result == oboe::Result::OK) {
         // Track the started state — isAudioPlaying() must not treat an
