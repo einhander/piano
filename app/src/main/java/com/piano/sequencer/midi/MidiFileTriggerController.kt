@@ -11,6 +11,7 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.Executors
+import org.json.JSONObject
 
 /**
  * Process-level singleton that owns the pad→MIDI-file trigger state.
@@ -294,6 +295,18 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 testPlayPlaying = true
                 mainHandler.post { onTestPlayStateChanged?.invoke(true) }
                 cancelTestPlayAutoStop()
+                val durationMs = try {
+                    val info = JSONObject(svc.getMidiFileSlotInfo(testPlaySlot))
+                    val lengthTicks = info.optLong("lengthTicks", 0L)
+                    val ppq = info.optInt("ppq", 0)
+                    if (lengthTicks > 0L && ppq > 0 && tempo > 0.0) {
+                        (lengthTicks.toDouble() * 60000.0 / (tempo * ppq)).toLong() + 200
+                    } else {
+                        3000L
+                    }
+                } catch (_: Exception) {
+                    3000L
+                }
                 testPlayRunnable = Runnable {
                     if (testPlayGeneration == gen) {
                         slotExecutor.execute {
@@ -309,7 +322,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                         }
                     }
                 }
-                mainHandler.postDelayed(testPlayRunnable!!, 3000)
+                mainHandler.postDelayed(testPlayRunnable!!, durationMs)
             }
         }
     }

@@ -322,9 +322,11 @@ int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop, i
     cmd.loop = loop;
     cmd.startAfterLoad = startAfterLoad;
 
-    // Store initialTempo directly on the slot (before enqueueing)
-    // so getSlotInfo returns it correctly
+    // Store load metadata directly on the slot before enqueueing so getSlotInfo
+    // returns correct values immediately, before audio thread consumes LOAD.
     s->initialTempo = initialTempo;
+    s->lengthTicks = lengthTicks;
+    s->ppq = ppq;
 
     if (!cmdQueuePush(mCmdBuffer, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd)) {
         return -3; // command queue full
