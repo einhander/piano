@@ -32,7 +32,7 @@
     <string name="instrument_unknown">—</string>
     <string name="instrument_apply_failed">Could not apply instrument</string>
 
-    <!-- Sequensor -->
-    <string name="sequensor_title">Sequensor</string>
-    <string name="sequensor_hint">Assign a MIDI file to a controller pad: tap [Learn key], then press the pad. The channel selector remaps ALL events of the file (incl. all-notes-off) to the chosen channel; From file keeps the file\'s own channels. Remove a mapping with Delete or re-tapping Learn key.</string>
+    <!-- Sequencer -->
+    <string name="sequencer_title">Sequencer</string>
+    <string name="sequencer_hint">Each cell is one sequencer slot. [＋ Add cell] adds a cell; [Import .mid] in a cell assigns a MIDI file to that cell only; [Learn] binds a controller key (re-tap to unbind); [−] removes the cell (the file stays on disk). The channel selector remaps ALL events of the file (incl. all-notes-off) to the chosen channel 1–16, matching the Instruments list; From file keeps the file\'s own channels.</string>
 </resources>

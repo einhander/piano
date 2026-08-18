@@ -32,9 +32,9 @@
             android:label="@string/instruments_title" />
 
         <activity
-            android:name=".SequensorActivity"
+            android:name=".SequencerActivity"
             android:parentActivityName=".MainActivity"
-            android:label="@string/sequensor_title" />
+            android:label="@string/sequencer_title" />
 
         <service
             android:name=".service.PlaybackService"

@@ -6,25 +6,28 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * Mapping of a MIDI keyboard note number (0–127) to a MIDI file path.
+ * A sequencer cell: one slot that can hold a MIDI file with learned key, loop, tempo,
+ * and optional channel remap.
  *
  * D1: mapping key = note number only (channel-agnostic).
  * D3: single tempo per file, user-overridable, default = file's initial tempo.
  */
 @Serializable
-data class MidiFileAssignment(
-    val note: Int,
-    val filePath: String,
-    val loop: Boolean,
-    val tempo: Double, // BPM, 20–300
-    val channel: Int = -1 // D3: -1 = from file, 0-15 = remap all events
+data class SequencerCell(
+    val id: Int,
+    val note: Int = -1,        // learned MIDI key; -1 = none
+    val filePath: String = "", // "" = no file
+    val loop: Boolean = false,
+    val tempo: Double = 120.0, // BPM, 20–300
+    val channel: Int = -1      // -1 = from file, 0-15 = remap all events
 )
 
 /**
  * Persisted mapping store — JSON in SharedPreferences under key "midi_file_map".
  *
- * Format: {"36": {"note":36,"filePath":"...","loop":true,"tempo":120.0}, ...}
- * Load on init, save on every mutation. Thread-safe via synchronized.
+ * New format: array of SequencerCell objects.
+ * Legacy format: map keyed by note string → migrated to cells on load.
+ * Thread-safe via synchronized.
  *
  * M2 fix: SINGLE instance shared between MainActivity and MidiFilesPanel.
  */
@@ -55,75 +58,139 @@ class MidiFileMappingStore(private val prefs: SharedPreferences) {
     }
 
     private val lock = Any()
+    private var legacyLoad = false
 
-    /** All assignments, keyed by note number. */
-    private var _map = mutableMapOf<Int, MidiFileAssignment>()
+    /** All cells, in insertion order. */
+    private var _cells = mutableListOf<SequencerCell>()
 
     init {
         load()
     }
 
-    /** Parse JSON from prefs into _map. */
+    /** Legacy map entry format (for migration). */
+    @Serializable
+    private data class LegacyAssignment(
+        val note: Int,
+        val filePath: String,
+        val loop: Boolean,
+        val tempo: Double,
+        val channel: Int = -1
+    )
+
+    /** Parse JSON from prefs into _cells. */
     private fun load() {
         synchronized(lock) {
             val json = prefs.getString(KEY, null)
-            _map = if (json.isNullOrEmpty()) {
-                mutableMapOf()
-            } else {
-                try {
-                    val decoded: Map<String, MidiFileAssignment> =
-                        JSON.decodeFromString(json)
-                    // n5: remove no-op mapValues; just convert key type
-                    decoded.mapKeys { it.key.toInt() }.toMutableMap()
-                } catch (_: Exception) {
-                    mutableMapOf()
+            if (json.isNullOrEmpty()) {
+                _cells = mutableListOf()
+                legacyLoad = true
+                return
+            }
+            try {
+                val trimmed = json.trim()
+                if (trimmed.startsWith('[')) {
+                    // New format: array of SequencerCell
+                    val list: List<SequencerCell> = JSON.decodeFromString(json)
+                    _cells = list.toMutableList()
+                    legacyLoad = false
+                } else if (trimmed.startsWith('{')) {
+                    // Legacy format: map keyed by note string
+                    val legacyMap: Map<String, LegacyAssignment> = JSON.decodeFromString(json)
+                    _cells = legacyMap.entries
+                        .map { it.value }
+                        .sortedBy { it.note }
+                        .mapIndexed { index, legacy ->
+                            SequencerCell(
+                                id = index + 1,
+                                note = legacy.note,
+                                filePath = legacy.filePath,
+                                loop = legacy.loop,
+                                tempo = legacy.tempo,
+                                channel = legacy.channel
+                            )
+                        }
+                        .toMutableList()
+                    legacyLoad = true
+                } else {
+                    _cells = mutableListOf()
+                    legacyLoad = true
                 }
+            } catch (_: Exception) {
+                _cells = mutableListOf()
+                legacyLoad = true
             }
         }
     }
 
-    /** Write _map to prefs as JSON. */
+    /** Write _cells to prefs as JSON array. */
     private fun save() {
         synchronized(lock) {
-            val json = JSON.encodeToString(_map)
+            val json = JSON.encodeToString(_cells)
             prefs.edit().putString(KEY, json).apply()
         }
     }
 
-    /** Return all assignments (unmodifiable snapshot). */
-    fun all(): Map<Int, MidiFileAssignment> = synchronized(lock) {
-        _map.toMap()
+    /** Return all cells (unmodifiable snapshot, insertion order). */
+    fun all(): List<SequencerCell> = synchronized(lock) {
+        _cells.toList()
     }
 
-    /** Get assignment for a specific note, or null. */
-    fun get(note: Int): MidiFileAssignment? = synchronized(lock) {
-        _map[note]
+    /** Get cell by id, or null. */
+    fun get(id: Int): SequencerCell? = synchronized(lock) {
+        _cells.find { it.id == id }
     }
 
     /**
-     * Set (or replace) an assignment for a note.
-     * Re-learning the same note REPLACES the old assignment.
+     * Set (add or replace) a cell by id.
      */
-    fun set(assignment: MidiFileAssignment) {
+    fun set(cell: SequencerCell) {
         synchronized(lock) {
-            _map[assignment.note] = assignment
+            val idx = _cells.indexOfFirst { it.id == cell.id }
+            if (idx >= 0) {
+                _cells[idx] = cell
+            } else {
+                _cells.add(cell)
+            }
             save()
         }
     }
 
-    /** Remove assignment for a note. */
-    fun remove(note: Int) {
+    /** Remove cell by id. */
+    fun remove(id: Int) {
         synchronized(lock) {
-            _map.remove(note)
+            _cells.removeAll { it.id == id }
             save()
         }
     }
 
-    /** Clear all assignments. */
+    /** Find first cell with the given note; never matches note < 0. */
+    fun findByNote(note: Int): SequencerCell? = synchronized(lock) {
+        if (note < 0) return@synchronized null
+        _cells.find { it.note == note }
+    }
+
+    /** Next available id: max id + 1, or 1 when empty. */
+    fun nextId(): Int = synchronized(lock) {
+        if (_cells.isEmpty()) 1 else _cells.maxOfOrNull { it.id }!! + 1
+    }
+
+    /** Clear all cells. */
     fun clear() {
         synchronized(lock) {
-            _map.clear()
+            _cells.clear()
             save()
+        }
+    }
+
+    /** True if the loaded JSON was legacy map format or absent (needs backfill). */
+    fun needsLegacyBackfill(): Boolean = synchronized(lock) {
+        legacyLoad
+    }
+
+    /** Clear the legacy-backfill flag (called after the one-time backfill runs). */
+    fun markBackfillDone() {
+        synchronized(lock) {
+            legacyLoad = false
         }
     }
 }

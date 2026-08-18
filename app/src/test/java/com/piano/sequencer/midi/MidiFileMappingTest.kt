@@ -1,6 +1,7 @@
 package com.piano.sequencer.midi
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -17,7 +18,6 @@ class MidiFileMappingTest {
 
     // ── In-memory SharedPreferences stub ──
 
-    /** A minimal SharedPreferences implementation backed by a HashMap. */
     private class InMemorySharedPreferences : android.content.SharedPreferences {
         private val data = mutableMapOf<String?, Any?>()
         private val listeners = mutableListOf<android.content.SharedPreferences.OnSharedPreferenceChangeListener>()
@@ -91,39 +91,32 @@ class MidiFileMappingTest {
         return MidiFileMappingStore(InMemorySharedPreferences())
     }
 
-    private fun makeAssignment(note: Int, path: String, loop: Boolean = true, tempo: Double = 120.0): MidiFileAssignment {
-        return MidiFileAssignment(note, path, loop, tempo)
-    }
-
     // ── Store tests ──
 
     @Test
     fun emptyStoreLoadsAsEmpty() {
         val store = createStore()
         assertTrue(store.all().isEmpty())
-        assertNull(store.get(60))
+        assertNull(store.get(1))
     }
 
     @Test
     fun roundTripSaveAndReload() {
         val store = createStore()
-        val a1 = makeAssignment(36, "/path/to/file1.mid", loop = true, tempo = 100.0)
-        val a2 = makeAssignment(60, "/path/to/file2.mid", loop = false, tempo = 140.0)
+        val c1 = SequencerCell(id = 1, note = 60, filePath = "/path/to/file1.mid", loop = true, tempo = 100.0, channel = 3)
+        val c2 = SequencerCell(id = 2, note = 48, filePath = "/path/to/file2.mid", loop = false, tempo = 140.0, channel = -1)
 
-        store.set(a1)
-        store.set(a2)
+        store.set(c1)
+        store.set(c2)
 
-        // Reload from same store (simulates init re-read)
         val all = store.all()
         assertEquals(2, all.size)
-        assertEquals(a1, all[36])
-        assertEquals(a2, all[60])
+        assertEquals(c1, store.get(1))
+        assertEquals(c2, store.get(2))
     }
 
     @Test
     fun roundTripAcrossStores() {
-        // Simulate: one store saves, another store loads (process death scenario)
-        // Both must share the same underlying data
         val sharedData = mutableMapOf<String?, Any?>()
         val sharedPrefs = object : android.content.SharedPreferences {
             private val listeners = mutableListOf<android.content.SharedPreferences.OnSharedPreferenceChangeListener>()
@@ -138,7 +131,6 @@ class MidiFileMappingTest {
             override fun edit(): android.content.SharedPreferences.Editor = SharedEditor(this)
             override fun registerOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.add(l) }
             override fun unregisterOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.remove(l) }
-
             private inner class SharedEditor(private val p: android.content.SharedPreferences) : android.content.SharedPreferences.Editor {
                 private val edits = mutableMapOf<String?, Any?>()
                 private var removedKeys = mutableSetOf<String?>()
@@ -161,49 +153,49 @@ class MidiFileMappingTest {
         }
 
         val writer = MidiFileMappingStore(sharedPrefs)
-        val a = makeAssignment(48, "/music/test.mid", loop = true, tempo = 90.0)
-        writer.set(a)
+        val c = SequencerCell(id = 1, note = 48, filePath = "/music/test.mid", loop = true, tempo = 90.0, channel = 5)
+        writer.set(c)
 
-        // Read back from a new store sharing the same prefs
         val reader = MidiFileMappingStore(sharedPrefs)
-        val loaded = reader.get(48)!!
-        assertEquals(a.note, loaded.note)
-        assertEquals(a.filePath, loaded.filePath)
-        assertEquals(a.loop, loaded.loop)
-        assertEquals(a.tempo, loaded.tempo, 0.001)
+        val loaded = reader.get(1)!!
+        assertEquals(1, loaded.id)
+        assertEquals(c.note, loaded.note)
+        assertEquals(c.filePath, loaded.filePath)
+        assertEquals(c.loop, loaded.loop)
+        assertEquals(c.tempo, loaded.tempo, 0.001)
+        assertEquals(c.channel, loaded.channel)
     }
 
     @Test
-    fun conflictSameNoteReplacesOld() {
+    fun setReplacesSameId() {
         val store = createStore()
-        val a1 = makeAssignment(60, "/old/path.mid", loop = true, tempo = 100.0)
-        val a2 = makeAssignment(60, "/new/path.mid", loop = false, tempo = 140.0)
-
-        store.set(a1)
-        store.set(a2)
+        store.set(SequencerCell(id = 1, note = 60, filePath = "/old.mid", loop = true, tempo = 100.0, channel = 0))
+        store.set(SequencerCell(id = 1, note = 60, filePath = "/new.mid", loop = false, tempo = 140.0, channel = 5))
 
         val all = store.all()
         assertEquals(1, all.size)
-        assertEquals(a2, all[60])
+        assertEquals("/new.mid", all[0].filePath)
+        assertEquals(140.0, all[0].tempo, 0.001)
+        assertEquals(5, all[0].channel)
     }
 
     @Test
-    fun deleteRemoves() {
+    fun removeById() {
         val store = createStore()
-        store.set(makeAssignment(36, "/path.mid"))
+        store.set(SequencerCell(id = 1, note = 36, filePath = "/path.mid"))
         assertEquals(1, store.all().size)
 
-        store.remove(36)
+        store.remove(1)
         assertTrue(store.all().isEmpty())
-        assertNull(store.get(36))
+        assertNull(store.get(1))
     }
 
     @Test
     fun clearRemovesAll() {
         val store = createStore()
-        store.set(makeAssignment(36, "/a.mid"))
-        store.set(makeAssignment(60, "/b.mid"))
-        store.set(makeAssignment(84, "/c.mid"))
+        store.set(SequencerCell(id = 1, filePath = "/a.mid"))
+        store.set(SequencerCell(id = 2, filePath = "/b.mid"))
+        store.set(SequencerCell(id = 3, filePath = "/c.mid"))
         assertEquals(3, store.all().size)
 
         store.clear()
@@ -211,17 +203,287 @@ class MidiFileMappingTest {
     }
 
     @Test
-    fun differentNotesCoexist() {
+    fun nextIdEmptyReturnsOne() {
         val store = createStore()
-        store.set(makeAssignment(36, "/c3.mid"))
-        store.set(makeAssignment(48, "/c4.mid"))
-        store.set(makeAssignment(60, "/c5.mid"))
+        assertEquals(1, store.nextId())
+    }
 
+    @Test
+    fun nextIdAfterSetFiveReturnsSix() {
+        val store = createStore()
+        store.set(SequencerCell(id = 5, filePath = "/x.mid"))
+        assertEquals(6, store.nextId())
+    }
+
+    @Test
+    fun findByNoteReturnsCell() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = 60, filePath = "/test.mid"))
+        val found = store.findByNote(60)
+        assertNotNull(found)
+        assertEquals(60, found!!.note)
+    }
+
+    @Test
+    fun findByNoteNullWhenAbsent() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = 60, filePath = "/test.mid"))
+        assertNull(store.findByNote(72))
+    }
+
+    @Test
+    fun findByNoteNeverMatchesNegative() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = 60, filePath = "/test.mid"))
+        assertNull(store.findByNote(-1))
+        assertNull(store.findByNote(-5))
+    }
+
+    @Test
+    fun legacyMapJsonMigratesToCells() {
+        val sharedData = mutableMapOf<String?, Any?>()
+        val oldJson = """{"48":{"note":48,"filePath":"/music/test.mid","loop":true,"tempo":90.0,"channel":5}}"""
+        sharedData["midi_file_map"] = oldJson
+
+        val sharedPrefs = object : android.content.SharedPreferences {
+            private val listeners = mutableListOf<android.content.SharedPreferences.OnSharedPreferenceChangeListener>()
+            override fun getAll(): Map<String, Any?> = sharedData.filterKeys { it != null }.mapKeys { it.key!! }.toMap()
+            override fun getString(key: String, default: String?): String? = sharedData[key] as? String ?: default
+            override fun getStringSet(key: String, default: Set<String>?): Set<String>? = sharedData[key] as? Set<String> ?: default
+            override fun getInt(key: String, default: Int): Int = (sharedData[key] as? Number)?.toInt() ?: default
+            override fun getLong(key: String, default: Long): Long = (sharedData[key] as? Number)?.toLong() ?: default
+            override fun getFloat(key: String, default: Float): Float = (sharedData[key] as? Number)?.toFloat() ?: default
+            override fun getBoolean(key: String, default: Boolean): Boolean = sharedData[key] as? Boolean ?: default
+            override fun contains(key: String): Boolean = sharedData.containsKey(key)
+            override fun edit(): android.content.SharedPreferences.Editor = SharedEditor(this)
+            override fun registerOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.add(l) }
+            override fun unregisterOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.remove(l) }
+            private inner class SharedEditor(private val p: android.content.SharedPreferences) : android.content.SharedPreferences.Editor {
+                private val edits = mutableMapOf<String?, Any?>()
+                private var removedKeys = mutableSetOf<String?>()
+                override fun putString(key: String?, value: String?): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putStringSet(key: String?, values: Set<String>?): android.content.SharedPreferences.Editor { edits[key] = values; return this }
+                override fun putInt(key: String?, value: Int): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putLong(key: String?, value: Long): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putFloat(key: String?, value: Float): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putBoolean(key: String?, value: Boolean): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun remove(key: String?): android.content.SharedPreferences.Editor { removedKeys.add(key); return this }
+                override fun clear(): android.content.SharedPreferences.Editor { edits["__CLEAR__"] = true; return this }
+                override fun commit(): Boolean {
+                    if (edits.containsKey("__CLEAR__")) { sharedData.clear(); removedKeys.clear() }
+                    else { for ((k, v) in edits) sharedData[k] = v; for (k in removedKeys) sharedData.remove(k) }
+                    for (l in listeners) l.onSharedPreferenceChanged(p, null)
+                    edits.clear(); removedKeys.clear(); return true
+                }
+                override fun apply() { commit() }
+            }
+        }
+
+        val store = MidiFileMappingStore(sharedPrefs)
         val all = store.all()
-        assertEquals(3, all.size)
-        assertNotNull(all[36])
-        assertNotNull(all[48])
-        assertNotNull(all[60])
+        assertEquals(1, all.size)
+        assertEquals(1, all[0].id)
+        assertEquals(48, all[0].note)
+        assertEquals("/music/test.mid", all[0].filePath)
+        assertTrue(all[0].loop)
+        assertEquals(90.0, all[0].tempo, 0.001)
+        assertEquals(5, all[0].channel)
+        assertTrue(store.needsLegacyBackfill())
+    }
+
+    @Test
+    fun legacyJsonWithoutChannelDefaultsToMinusOne() {
+        val sharedData = mutableMapOf<String?, Any?>()
+        val oldJson = """{"48":{"note":48,"filePath":"/t.mid","loop":false,"tempo":120.0}}"""
+        sharedData["midi_file_map"] = oldJson
+
+        val sharedPrefs = object : android.content.SharedPreferences {
+            private val listeners = mutableListOf<android.content.SharedPreferences.OnSharedPreferenceChangeListener>()
+            override fun getAll(): Map<String, Any?> = sharedData.filterKeys { it != null }.mapKeys { it.key!! }.toMap()
+            override fun getString(key: String, default: String?): String? = sharedData[key] as? String ?: default
+            override fun getStringSet(key: String, default: Set<String>?): Set<String>? = sharedData[key] as? Set<String> ?: default
+            override fun getInt(key: String, default: Int): Int = (sharedData[key] as? Number)?.toInt() ?: default
+            override fun getLong(key: String, default: Long): Long = (sharedData[key] as? Number)?.toLong() ?: default
+            override fun getFloat(key: String, default: Float): Float = (sharedData[key] as? Number)?.toFloat() ?: default
+            override fun getBoolean(key: String, default: Boolean): Boolean = sharedData[key] as? Boolean ?: default
+            override fun contains(key: String): Boolean = sharedData.containsKey(key)
+            override fun edit(): android.content.SharedPreferences.Editor = SharedEditor(this)
+            override fun registerOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.add(l) }
+            override fun unregisterOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.remove(l) }
+            private inner class SharedEditor(private val p: android.content.SharedPreferences) : android.content.SharedPreferences.Editor {
+                private val edits = mutableMapOf<String?, Any?>()
+                private var removedKeys = mutableSetOf<String?>()
+                override fun putString(key: String?, value: String?): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putStringSet(key: String?, values: Set<String>?): android.content.SharedPreferences.Editor { edits[key] = values; return this }
+                override fun putInt(key: String?, value: Int): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putLong(key: String?, value: Long): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putFloat(key: String?, value: Float): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putBoolean(key: String?, value: Boolean): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun remove(key: String?): android.content.SharedPreferences.Editor { removedKeys.add(key); return this }
+                override fun clear(): android.content.SharedPreferences.Editor { edits["__CLEAR__"] = true; return this }
+                override fun commit(): Boolean {
+                    if (edits.containsKey("__CLEAR__")) { sharedData.clear(); removedKeys.clear() }
+                    else { for ((k, v) in edits) sharedData[k] = v; for (k in removedKeys) sharedData.remove(k) }
+                    for (l in listeners) l.onSharedPreferenceChanged(p, null)
+                    edits.clear(); removedKeys.clear(); return true
+                }
+                override fun apply() { commit() }
+            }
+        }
+
+        val store = MidiFileMappingStore(sharedPrefs)
+        val all = store.all()
+        assertEquals(1, all.size)
+        assertEquals(-1, all[0].channel)
+    }
+
+    @Test
+    fun newFormatJsonNoBackfill() {
+        val sharedData = mutableMapOf<String?, Any?>()
+        val newJson = """[{"id":1,"note":48,"filePath":"/t.mid","loop":true,"tempo":90.0,"channel":5}]"""
+        sharedData["midi_file_map"] = newJson
+
+        val sharedPrefs = object : android.content.SharedPreferences {
+            private val listeners = mutableListOf<android.content.SharedPreferences.OnSharedPreferenceChangeListener>()
+            override fun getAll(): Map<String, Any?> = sharedData.filterKeys { it != null }.mapKeys { it.key!! }.toMap()
+            override fun getString(key: String, default: String?): String? = sharedData[key] as? String ?: default
+            override fun getStringSet(key: String, default: Set<String>?): Set<String>? = sharedData[key] as? Set<String> ?: default
+            override fun getInt(key: String, default: Int): Int = (sharedData[key] as? Number)?.toInt() ?: default
+            override fun getLong(key: String, default: Long): Long = (sharedData[key] as? Number)?.toLong() ?: default
+            override fun getFloat(key: String, default: Float): Float = (sharedData[key] as? Number)?.toFloat() ?: default
+            override fun getBoolean(key: String, default: Boolean): Boolean = sharedData[key] as? Boolean ?: default
+            override fun contains(key: String): Boolean = sharedData.containsKey(key)
+            override fun edit(): android.content.SharedPreferences.Editor = SharedEditor(this)
+            override fun registerOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.add(l) }
+            override fun unregisterOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.remove(l) }
+            private inner class SharedEditor(private val p: android.content.SharedPreferences) : android.content.SharedPreferences.Editor {
+                private val edits = mutableMapOf<String?, Any?>()
+                private var removedKeys = mutableSetOf<String?>()
+                override fun putString(key: String?, value: String?): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putStringSet(key: String?, values: Set<String>?): android.content.SharedPreferences.Editor { edits[key] = values; return this }
+                override fun putInt(key: String?, value: Int): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putLong(key: String?, value: Long): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putFloat(key: String?, value: Float): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putBoolean(key: String?, value: Boolean): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun remove(key: String?): android.content.SharedPreferences.Editor { removedKeys.add(key); return this }
+                override fun clear(): android.content.SharedPreferences.Editor { edits["__CLEAR__"] = true; return this }
+                override fun commit(): Boolean {
+                    if (edits.containsKey("__CLEAR__")) { sharedData.clear(); removedKeys.clear() }
+                    else { for ((k, v) in edits) sharedData[k] = v; for (k in removedKeys) sharedData.remove(k) }
+                    for (l in listeners) l.onSharedPreferenceChanged(p, null)
+                    edits.clear(); removedKeys.clear(); return true
+                }
+                override fun apply() { commit() }
+            }
+        }
+
+        val store = MidiFileMappingStore(sharedPrefs)
+        val all = store.all()
+        assertEquals(1, all.size)
+        assertEquals(1, all[0].id)
+        assertEquals(48, all[0].note)
+        assertEquals("/t.mid", all[0].filePath)
+        assertTrue(all[0].loop)
+        assertEquals(90.0, all[0].tempo, 0.001)
+        assertEquals(5, all[0].channel)
+        assertFalse(store.needsLegacyBackfill())
+    }
+
+    @Test
+    fun twoLegacyEntriesGetIdsOneAndTwoInAscendingNoteOrder() {
+        val sharedData = mutableMapOf<String?, Any?>()
+        val oldJson = """{"60":{"note":60,"filePath":"/c5.mid","loop":false,"tempo":140.0},"48":{"note":48,"filePath":"/c4.mid","loop":true,"tempo":100.0}}"""
+        sharedData["midi_file_map"] = oldJson
+
+        val sharedPrefs = object : android.content.SharedPreferences {
+            private val listeners = mutableListOf<android.content.SharedPreferences.OnSharedPreferenceChangeListener>()
+            override fun getAll(): Map<String, Any?> = sharedData.filterKeys { it != null }.mapKeys { it.key!! }.toMap()
+            override fun getString(key: String, default: String?): String? = sharedData[key] as? String ?: default
+            override fun getStringSet(key: String, default: Set<String>?): Set<String>? = sharedData[key] as? Set<String> ?: default
+            override fun getInt(key: String, default: Int): Int = (sharedData[key] as? Number)?.toInt() ?: default
+            override fun getLong(key: String, default: Long): Long = (sharedData[key] as? Number)?.toLong() ?: default
+            override fun getFloat(key: String, default: Float): Float = (sharedData[key] as? Number)?.toFloat() ?: default
+            override fun getBoolean(key: String, default: Boolean): Boolean = sharedData[key] as? Boolean ?: default
+            override fun contains(key: String): Boolean = sharedData.containsKey(key)
+            override fun edit(): android.content.SharedPreferences.Editor = SharedEditor(this)
+            override fun registerOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.add(l) }
+            override fun unregisterOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.remove(l) }
+            private inner class SharedEditor(private val p: android.content.SharedPreferences) : android.content.SharedPreferences.Editor {
+                private val edits = mutableMapOf<String?, Any?>()
+                private var removedKeys = mutableSetOf<String?>()
+                override fun putString(key: String?, value: String?): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putStringSet(key: String?, values: Set<String>?): android.content.SharedPreferences.Editor { edits[key] = values; return this }
+                override fun putInt(key: String?, value: Int): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putLong(key: String?, value: Long): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putFloat(key: String?, value: Float): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putBoolean(key: String?, value: Boolean): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun remove(key: String?): android.content.SharedPreferences.Editor { removedKeys.add(key); return this }
+                override fun clear(): android.content.SharedPreferences.Editor { edits["__CLEAR__"] = true; return this }
+                override fun commit(): Boolean {
+                    if (edits.containsKey("__CLEAR__")) { sharedData.clear(); removedKeys.clear() }
+                    else { for ((k, v) in edits) sharedData[k] = v; for (k in removedKeys) sharedData.remove(k) }
+                    for (l in listeners) l.onSharedPreferenceChanged(p, null)
+                    edits.clear(); removedKeys.clear(); return true
+                }
+                override fun apply() { commit() }
+            }
+        }
+
+        val store = MidiFileMappingStore(sharedPrefs)
+        val all = store.all()
+        assertEquals(2, all.size)
+        assertEquals(1, all[0].id)
+        assertEquals(48, all[0].note)
+        assertEquals("/c4.mid", all[0].filePath)
+        assertEquals(2, all[1].id)
+        assertEquals(60, all[1].note)
+        assertEquals("/c5.mid", all[1].filePath)
+    }
+
+    @Test
+    fun markBackfillDoneClearsFlag() {
+        val sharedData = mutableMapOf<String?, Any?>()
+        val oldJson = """{"48":{"note":48,"filePath":"/t.mid","loop":true,"tempo":90.0,"channel":5}}"""
+        sharedData["midi_file_map"] = oldJson
+
+        val sharedPrefs = object : android.content.SharedPreferences {
+            private val listeners = mutableListOf<android.content.SharedPreferences.OnSharedPreferenceChangeListener>()
+            override fun getAll(): Map<String, Any?> = sharedData.filterKeys { it != null }.mapKeys { it.key!! }.toMap()
+            override fun getString(key: String, default: String?): String? = sharedData[key] as? String ?: default
+            override fun getStringSet(key: String, default: Set<String>?): Set<String>? = sharedData[key] as? Set<String> ?: default
+            override fun getInt(key: String, default: Int): Int = (sharedData[key] as? Number)?.toInt() ?: default
+            override fun getLong(key: String, default: Long): Long = (sharedData[key] as? Number)?.toLong() ?: default
+            override fun getFloat(key: String, default: Float): Float = (sharedData[key] as? Number)?.toFloat() ?: default
+            override fun getBoolean(key: String, default: Boolean): Boolean = sharedData[key] as? Boolean ?: default
+            override fun contains(key: String): Boolean = sharedData.containsKey(key)
+            override fun edit(): android.content.SharedPreferences.Editor = SharedEditor(this)
+            override fun registerOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.add(l) }
+            override fun unregisterOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.remove(l) }
+            private inner class SharedEditor(private val p: android.content.SharedPreferences) : android.content.SharedPreferences.Editor {
+                private val edits = mutableMapOf<String?, Any?>()
+                private var removedKeys = mutableSetOf<String?>()
+                override fun putString(key: String?, value: String?): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putStringSet(key: String?, values: Set<String>?): android.content.SharedPreferences.Editor { edits[key] = values; return this }
+                override fun putInt(key: String?, value: Int): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putLong(key: String?, value: Long): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putFloat(key: String?, value: Float): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun putBoolean(key: String?, value: Boolean): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+                override fun remove(key: String?): android.content.SharedPreferences.Editor { removedKeys.add(key); return this }
+                override fun clear(): android.content.SharedPreferences.Editor { edits["__CLEAR__"] = true; return this }
+                override fun commit(): Boolean {
+                    if (edits.containsKey("__CLEAR__")) { sharedData.clear(); removedKeys.clear() }
+                    else { for ((k, v) in edits) sharedData[k] = v; for (k in removedKeys) sharedData.remove(k) }
+                    for (l in listeners) l.onSharedPreferenceChanged(p, null)
+                    edits.clear(); removedKeys.clear(); return true
+                }
+                override fun apply() { commit() }
+            }
+        }
+
+        val store = MidiFileMappingStore(sharedPrefs)
+        assertTrue(store.needsLegacyBackfill())
+        store.markBackfillDone()
+        assertFalse(store.needsLegacyBackfill())
     }
 
     // ── NoteToggleStateMachine tests (M3: tri-state Result enum) ──
@@ -403,114 +665,5 @@ class MidiFileMappingTest {
         assertEquals("C#-1", noteToName(1))
         assertEquals("F#4", noteToName(66))
         assertEquals("G#4", noteToName(68))
-    }
-
-    // ── Channel field tests ──
-
-    @Test
-    fun channelDefaultsToMinusOne() {
-        val a = makeAssignment(60, "/path.mid")
-        assertEquals(-1, a.channel)
-    }
-
-    @Test
-    fun channelRoundTrip() {
-        val sharedData = mutableMapOf<String?, Any?>()
-        val sharedPrefs = object : android.content.SharedPreferences {
-            private val listeners = mutableListOf<android.content.SharedPreferences.OnSharedPreferenceChangeListener>()
-            override fun getAll(): Map<String, Any?> = sharedData.filterKeys { it != null }.mapKeys { it.key!! }.toMap()
-            override fun getString(key: String, default: String?): String? = sharedData[key] as? String ?: default
-            override fun getStringSet(key: String, default: Set<String>?): Set<String>? = sharedData[key] as? Set<String> ?: default
-            override fun getInt(key: String, default: Int): Int = (sharedData[key] as? Number)?.toInt() ?: default
-            override fun getLong(key: String, default: Long): Long = (sharedData[key] as? Number)?.toLong() ?: default
-            override fun getFloat(key: String, default: Float): Float = (sharedData[key] as? Number)?.toFloat() ?: default
-            override fun getBoolean(key: String, default: Boolean): Boolean = sharedData[key] as? Boolean ?: default
-            override fun contains(key: String): Boolean = sharedData.containsKey(key)
-            override fun edit(): android.content.SharedPreferences.Editor = SharedEditor(this)
-            override fun registerOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.add(l) }
-            override fun unregisterOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.remove(l) }
-            private inner class SharedEditor(private val p: android.content.SharedPreferences) : android.content.SharedPreferences.Editor {
-                private val edits = mutableMapOf<String?, Any?>()
-                private var removedKeys = mutableSetOf<String?>()
-                override fun putString(key: String?, value: String?): android.content.SharedPreferences.Editor { edits[key] = value; return this }
-                override fun putStringSet(key: String?, values: Set<String>?): android.content.SharedPreferences.Editor { edits[key] = values; return this }
-                override fun putInt(key: String?, value: Int): android.content.SharedPreferences.Editor { edits[key] = value; return this }
-                override fun putLong(key: String?, value: Long): android.content.SharedPreferences.Editor { edits[key] = value; return this }
-                override fun putFloat(key: String?, value: Float): android.content.SharedPreferences.Editor { edits[key] = value; return this }
-                override fun putBoolean(key: String?, value: Boolean): android.content.SharedPreferences.Editor { edits[key] = value; return this }
-                override fun remove(key: String?): android.content.SharedPreferences.Editor { removedKeys.add(key); return this }
-                override fun clear(): android.content.SharedPreferences.Editor { edits["__CLEAR__"] = true; return this }
-                override fun commit(): Boolean {
-                    if (edits.containsKey("__CLEAR__")) { sharedData.clear(); removedKeys.clear() }
-                    else { for ((k, v) in edits) sharedData[k] = v; for (k in removedKeys) sharedData.remove(k) }
-                    for (l in listeners) l.onSharedPreferenceChanged(p, null)
-                    edits.clear(); removedKeys.clear(); return true
-                }
-                override fun apply() { commit() }
-            }
-        }
-
-        // Write with channel=5
-        val writer = MidiFileMappingStore(sharedPrefs)
-        val a = MidiFileAssignment(48, "/music/test.mid", loop = true, tempo = 90.0, channel = 5)
-        writer.set(a)
-
-        // Read back from a new store
-        val reader = MidiFileMappingStore(sharedPrefs)
-        val loaded = reader.get(48)!!
-        assertEquals(5, loaded.channel)
-        assertEquals(a.note, loaded.note)
-        assertEquals(a.filePath, loaded.filePath)
-        assertEquals(a.loop, loaded.loop)
-        assertEquals(a.tempo, loaded.tempo, 0.001)
-    }
-
-    @Test
-    fun backwardCompatibilityOldDataLoadsWithDefaultChannel() {
-        // Simulate old data that has no "ch" field (pre-channel)
-        val sharedData = mutableMapOf<String?, Any?>()
-        // Write only the old fields (no "ch") — use the store's internal key
-        val oldJson = """{"48":{"note":48,"filePath":"/music/test.mid","loop":true,"tempo":90.0}}"""
-        sharedData["midi_file_map"] = oldJson
-
-        val sharedPrefs = object : android.content.SharedPreferences {
-            private val listeners = mutableListOf<android.content.SharedPreferences.OnSharedPreferenceChangeListener>()
-            override fun getAll(): Map<String, Any?> = sharedData.filterKeys { it != null }.mapKeys { it.key!! }.toMap()
-            override fun getString(key: String, default: String?): String? = sharedData[key] as? String ?: default
-            override fun getStringSet(key: String, default: Set<String>?): Set<String>? = sharedData[key] as? Set<String> ?: default
-            override fun getInt(key: String, default: Int): Int = (sharedData[key] as? Number)?.toInt() ?: default
-            override fun getLong(key: String, default: Long): Long = (sharedData[key] as? Number)?.toLong() ?: default
-            override fun getFloat(key: String, default: Float): Float = (sharedData[key] as? Number)?.toFloat() ?: default
-            override fun getBoolean(key: String, default: Boolean): Boolean = sharedData[key] as? Boolean ?: default
-            override fun contains(key: String): Boolean = sharedData.containsKey(key)
-            override fun edit(): android.content.SharedPreferences.Editor = SharedEditor(this)
-            override fun registerOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.add(l) }
-            override fun unregisterOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.remove(l) }
-            private inner class SharedEditor(private val p: android.content.SharedPreferences) : android.content.SharedPreferences.Editor {
-                private val edits = mutableMapOf<String?, Any?>()
-                private var removedKeys = mutableSetOf<String?>()
-                override fun putString(key: String?, value: String?): android.content.SharedPreferences.Editor { edits[key] = value; return this }
-                override fun putStringSet(key: String?, values: Set<String>?): android.content.SharedPreferences.Editor { edits[key] = values; return this }
-                override fun putInt(key: String?, value: Int): android.content.SharedPreferences.Editor { edits[key] = value; return this }
-                override fun putLong(key: String?, value: Long): android.content.SharedPreferences.Editor { edits[key] = value; return this }
-                override fun putFloat(key: String?, value: Float): android.content.SharedPreferences.Editor { edits[key] = value; return this }
-                override fun putBoolean(key: String?, value: Boolean): android.content.SharedPreferences.Editor { edits[key] = value; return this }
-                override fun remove(key: String?): android.content.SharedPreferences.Editor { removedKeys.add(key); return this }
-                override fun clear(): android.content.SharedPreferences.Editor { edits["__CLEAR__"] = true; return this }
-                override fun commit(): Boolean {
-                    if (edits.containsKey("__CLEAR__")) { sharedData.clear(); removedKeys.clear() }
-                    else { for ((k, v) in edits) sharedData[k] = v; for (k in removedKeys) sharedData.remove(k) }
-                    for (l in listeners) l.onSharedPreferenceChanged(p, null)
-                    edits.clear(); removedKeys.clear(); return true
-                }
-                override fun apply() { commit() }
-            }
-        }
-
-        val reader = MidiFileMappingStore(sharedPrefs)
-        val loaded = reader.get(48)!!
-        assertEquals(-1, loaded.channel) // default for old data
-        assertEquals(48, loaded.note)
-        assertEquals("/music/test.mid", loaded.filePath)
     }
 }

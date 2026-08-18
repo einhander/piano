@@ -72,7 +72,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     private val testPlaySlot = 15
     private var testPlayRunnable: Runnable? = null
 
-    /** Main-thread callback for test-play UI updates (set by SequensorActivity, cleared in onDestroy). */
+    /** Main-thread callback for test-play UI updates (set by SequencerActivity, cleared in onDestroy). */
     var onTestPlayStateChanged: ((Boolean) -> Unit)? = null
 
     // ── Binding ──
@@ -99,12 +99,12 @@ class MidiFileTriggerController private constructor(appContext: Context) {
             return true
         }
         val s = store ?: return false
-        val assignment = s.get(note)
-        if (assignment == null) return false // unmapped → caller forwards
+        val cell = s.findByNote(note)
+        if (cell == null) return false // unmapped → caller forwards
 
         val result = noteStateMachine.noteOn(note)
         when (result) {
-            NoteToggleStateMachine.Result.TOGGLE_ON -> triggerSlot(assignment)
+            NoteToggleStateMachine.Result.TOGGLE_ON -> triggerSlot(cell)
             NoteToggleStateMachine.Result.TOGGLE_OFF -> stopSlotForNote(note)
             NoteToggleStateMachine.Result.IGNORED -> {} // key repeat
         }
@@ -118,7 +118,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     fun onNoteOff(channel: Int, note: Int, velocity: Int): Boolean {
         noteStateMachine.noteOff(note)
         val s = store ?: return false
-        return s.get(note) != null // consumed if mapped
+        return s.findByNote(note) != null // consumed if mapped
     }
 
     // ── Trigger logic ──
@@ -126,30 +126,30 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     /**
      * Trigger a slot: load if not loaded (m8 skip), then start/stop.
      * Worker thread. Handles -4 (busy) with up to 3 retries @50ms.
-     * Public for panel callbacks (SequensorActivity).
+     * Public for panel callbacks (SequencerActivity).
      */
-    fun triggerSlot(assignment: MidiFileAssignment) {
+    fun triggerSlot(cell: SequencerCell) {
         slotExecutor.execute {
             val svc = service ?: return@execute
-            val slot = allocateSlot(assignment.note)
+            val slot = allocateSlot(cell.note)
             val isPlaying = svc.isMidiFileSlotPlaying(slot)
 
             if (!isPlaying) {
                 val loaded = loadedFilePerSlot[slot]
                 val alreadyLoaded = loaded != null &&
-                    loaded.first == assignment.filePath &&
-                    loaded.second == assignment.channel
+                    loaded.first == cell.filePath &&
+                    loaded.second == cell.channel
                 if (!alreadyLoaded) {
                     var loadResult = svc.loadMidiFileSlot(
-                        slot, assignment.filePath, assignment.tempo, assignment.loop,
-                        assignment.channel
+                        slot, cell.filePath, cell.tempo, cell.loop,
+                        cell.channel
                     )
                     var retries = 0
                     while (loadResult == -4 && retries < 3) {
                         Thread.sleep(50)
                         loadResult = svc.loadMidiFileSlot(
-                            slot, assignment.filePath, assignment.tempo, assignment.loop,
-                            assignment.channel
+                            slot, cell.filePath, cell.tempo, cell.loop,
+                            cell.channel
                         )
                         retries++
                     }
@@ -164,13 +164,13 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                         showToast(msg)
                         return@execute
                     }
-                    loadedFilePerSlot[slot] = assignment.filePath to assignment.channel
+                    loadedFilePerSlot[slot] = cell.filePath to cell.channel
                 }
             }
 
             if (svc.isMidiFileSlotPlaying(slot)) {
                 svc.stopMidiFileSlot(slot)
-                noteStateMachine.stopPlaying(assignment.note)
+                noteStateMachine.stopPlaying(cell.note)
             } else {
                 svc.startMidiFileSlot(slot)
             }
@@ -299,7 +299,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         }
     }
 
-    /** Allocate a slot for a learned note (public for SequensorActivity). */
+    /** Allocate a slot for a learned note (public for SequencerActivity). */
     fun allocateSlotForNote(note: Int): Int {
         return noteSlotMap.getOrPut(note) {
             val slot = nextSlotIndex.getAndIncrement() % 15

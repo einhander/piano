@@ -7,25 +7,14 @@ import android.content.ServiceConnection
 import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
-import android.os.Parcelable
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
-import android.text.InputType
-import android.widget.ArrayAdapter
-import android.widget.Button
-import android.widget.CheckBox
-import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.Spinner
-import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import com.piano.sequencer.midi.MidiFileAssignment
-import com.piano.sequencer.midi.MidiFileLearnState
 import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.MidiFileTriggerController
-import com.piano.sequencer.midi.noteToName
 import com.piano.sequencer.service.PlaybackService
 import com.piano.sequencer.ui.MidiFilesPanel
 import java.io.File
@@ -37,14 +26,12 @@ import java.util.Locale
 import java.util.concurrent.Executors
 
 /**
- * Sequensor activity — MIDI file pad assignment screen.
+ * Sequencer activity — MIDI file pad assignment screen.
  *
- * Hosts the MidiFilesPanel with per-row channel selector.
+ * Hosts the MidiFilesPanel with per-cell controls.
  * Handles record export flow, file import, and test-play.
- *
- * D4: "Sequensor" (user-specified spelling).
  */
-class SequensorActivity : AppCompatActivity() {
+class SequencerActivity : AppCompatActivity() {
 
     private lateinit var panel: MidiFilesPanel
     private lateinit var panelContainer: LinearLayout
@@ -54,8 +41,7 @@ class SequensorActivity : AppCompatActivity() {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder) {
             if (isFinishing || isDestroyed) return
             service = (binder as PlaybackService.PlaybackBinder).getService()
-            MidiFileTriggerController.get(this@SequensorActivity).bind(this@SequensorActivity, service!!)
-            panel.bindService(service!!)
+            MidiFileTriggerController.get(this@SequencerActivity).bind(this@SequencerActivity, service!!)
             panel.refresh()
         }
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -64,14 +50,14 @@ class SequensorActivity : AppCompatActivity() {
     }
 
     private val executor = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "SequensorWorker").apply { isDaemon = true }
+        Thread(r, "SequencerWorker").apply { isDaemon = true }
     }
 
     // ── SAF file picker for MIDI import ──
     private val midiFileImportLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
-        uri?.let { sourceUri -> importMidiFile(sourceUri) }
+        uri?.let { sourceUri -> importMidiFile(sourceUri, pendingImportCellId) }
     }
 
     // ── SAF folder picker for recorded MIDI output ──
@@ -86,7 +72,7 @@ class SequensorActivity : AppCompatActivity() {
             getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
                 .putString("record_folder_uri", uri.toString())
                 .apply()
-            Toast.makeText(this@SequensorActivity, "Record folder selected", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@SequencerActivity, "Record folder selected", Toast.LENGTH_SHORT).show()
             // Complete pending export if one was waiting
             completePendingExport(uri)
         } else {
@@ -96,7 +82,7 @@ class SequensorActivity : AppCompatActivity() {
                 true
             }
             if (pending != null) {
-                Toast.makeText(this@SequensorActivity, "Export not saved (folder not selected)", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@SequencerActivity, "Export not saved (folder not selected)", Toast.LENGTH_SHORT).show()
                 runOnUiThread {
                     panel.updateRecordUI(false, pending.eventCount)
                 }
@@ -124,7 +110,7 @@ class SequensorActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_sequensor)
+        setContentView(R.layout.activity_sequencer)
 
         setSupportActionBar(findViewById(R.id.toolbar))
         supportActionBar?.apply {
@@ -195,10 +181,14 @@ class SequensorActivity : AppCompatActivity() {
         return true
     }
 
+    // ── Per-cell import tracking ──
+    private var pendingImportCellId: Int? = null
+
     // ── Panel callbacks (moved from MainActivity) ──
 
     private fun setupPanelCallbacks() {
-        panel.onImportClick = {
+        panel.onImportClick = { cellId ->
+            pendingImportCellId = cellId
             midiFileImportLauncher.launch("audio/midi")
         }
 
@@ -208,7 +198,7 @@ class SequensorActivity : AppCompatActivity() {
                 try {
                     val svc = service ?: run {
                         runOnUiThread {
-                            Toast.makeText(this@SequensorActivity, "Service not connected", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@SequencerActivity, "Service not connected", Toast.LENGTH_SHORT).show()
                         }
                         return@execute
                     }
@@ -246,68 +236,49 @@ class SequensorActivity : AppCompatActivity() {
                     }
                 } catch (e: Exception) {
                     runOnUiThread {
-                        Toast.makeText(this@SequensorActivity, "Record error: ${e.message}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@SequencerActivity, "Record error: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
         }
 
-        panel.onNoteTrigger = { note, filePath, loop, tempo, channel ->
-            val assignment = MidiFileAssignment(note, filePath, loop, tempo, channel)
-            MidiFileTriggerController.get(this).triggerSlot(assignment)
+        panel.onTestPlay = { cell ->
+            MidiFileTriggerController.get(this).testPlay(cell.filePath, cell.loop, cell.tempo, cell.channel)
         }
 
-        panel.onTestPlay = { note, filePath, loop, tempo, channel ->
-            // item 8: test-play with load result check, generation counter,
-            // stop-on-second-tap, worker-thread JNI
-            MidiFileTriggerController.get(this).testPlay(filePath, loop, tempo, channel)
-        }
-
-        panel.onFileDelete = { filePath ->
-            // Free any slot mapped to this file
-            val controller = MidiFileTriggerController.get(this)
-            val store = MidiFileMappingStore.get(this)
-            for ((note, assignment) in store.all()) {
-                if (assignment.filePath == filePath) {
-                    store.remove(note)
-                    controller.freeSlotForNote(note)
-                }
+        panel.onSettingChange = { cell ->
+            if (cell.note >= 0) {
+                MidiFileTriggerController.get(this).onSettingChanged(cell.note, cell.loop, cell.tempo, cell.channel)
             }
+        }
+
+        panel.onNoteLearned = { cell, note ->
+            val c = MidiFileTriggerController.get(this)
+            c.allocateSlotForNote(note)
+            c.getSlotForNote(note)?.let { c.clearLoadedFile(it) }
             panel.refresh()
         }
 
-        panel.onSettingChange = { note, loop, tempo, channel ->
-            val controller = MidiFileTriggerController.get(this)
-            controller.onSettingChanged(note, loop, tempo, channel)
-        }
-
-        panel.onNoteLearned = { note, filePath, loop, tempo, channel ->
-            // Allocate a slot for this note
-            MidiFileTriggerController.get(this).allocateSlotForNote(note)
-            // Clear any stale loaded-file tracking for this slot
-            val controller = MidiFileTriggerController.get(this)
-            val slot = controller.getSlotForNote(note)
-            if (slot != null) {
-                controller.clearLoadedFile(slot)
-            }
-            panel.refresh()
-        }
-
-        panel.onMappingRemove = { note ->
+        panel.onNoteUnlearned = { note ->
             MidiFileTriggerController.get(this).freeSlotForNote(note)
+            panel.refresh()
         }
 
-        panel.onRefresh = {
+        panel.onCellRemove = { cell ->
+            if (cell.note >= 0) {
+                MidiFileTriggerController.get(this).freeSlotForNote(cell.note)
+            }
+            MidiFileMappingStore.get(this).remove(cell.id)
             panel.refresh()
         }
     }
 
     // ── MIDI import ──
 
-    private fun importMidiFile(sourceUri: Uri) {
+    private fun importMidiFile(sourceUri: Uri, cellId: Int?) {
         executor.execute {
             try {
-                val midiDir = File(this@SequensorActivity.getExternalFilesDir(null), "midi_files")
+                val midiDir = File(this@SequencerActivity.getExternalFilesDir(null), "midi_files")
                 if (!midiDir.exists()) midiDir.mkdirs()
                 // Deduplicate: find a unique name
                 var baseName = try {
@@ -330,14 +301,21 @@ class SequensorActivity : AppCompatActivity() {
                     }
                 } ?: throw IOException("Could not open input stream for $sourceUri")
                 runOnUiThread {
-                    Toast.makeText(this@SequensorActivity, "Imported: ${destFile.name}", Toast.LENGTH_SHORT).show()
+                    if (cellId != null) {
+                        val store = MidiFileMappingStore.get(this@SequencerActivity)
+                        val cur = store.get(cellId)
+                        if (cur != null) {
+                            store.set(cur.copy(filePath = destFile.absolutePath))
+                        }
+                    }
+                    Toast.makeText(this@SequencerActivity, "Imported: ${destFile.name}", Toast.LENGTH_SHORT).show()
                     panel.refresh()
                 }
             } catch (e: Exception) {
                 runOnUiThread {
-                    Toast.makeText(this@SequensorActivity, "Import failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@SequencerActivity, "Import failed: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
-                AppLogger.warn("SequensorActivity", "MIDI import failed: ${e.message}")
+                AppLogger.warn("SequencerActivity", "MIDI import failed: ${e.message}")
             }
         }
     }
@@ -370,7 +348,7 @@ class SequensorActivity : AppCompatActivity() {
                     writeRecordedMidiFileToUri(svc, count, uri)
                 } else {
                     runOnUiThread {
-                        Toast.makeText(this@SequensorActivity, "Nothing to export (recording lost)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@SequencerActivity, "Nothing to export (recording lost)", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -381,7 +359,7 @@ class SequensorActivity : AppCompatActivity() {
      * Write recorded MIDI to a temp file, then copy to SAF folder.
      * M5: uses actual BPM and PPQ from transport state.
      */
-    private fun writeRecordedMidiFileToUri(service: PlaybackService, eventCount: Int, uri: Uri) {
+    private fun writeRecordedMidiFileToUri(svc: PlaybackService, eventCount: Int, uri: Uri) {
         executor.execute {
             try {
                 val tempDir = File(filesDir, "midi_files")
@@ -391,11 +369,11 @@ class SequensorActivity : AppCompatActivity() {
                 val tempFile = File(tempDir, tempFileName)
 
                 // M5: get actual transport BPM and PPQ
-                val bpm = service.getBPM()
-                val ppq = service.getPpq()
+                val bpm = svc.getBPM()
+                val ppq = svc.getPpq()
                 val tempoUs = (60_000_000.0 / bpm).toInt()
 
-                val success = service.writeRecordedMidiFile(
+                val success = svc.writeRecordedMidiFile(
                     tempFile.absolutePath, ppq, tempoUs
                 )
 
@@ -405,20 +383,20 @@ class SequensorActivity : AppCompatActivity() {
                     runOnUiThread {
                         panel.updateRecordUI(false, eventCount)
                         if (copied) {
-                            Toast.makeText(this@SequensorActivity,
+                            Toast.makeText(this@SequencerActivity,
                                 "Recorded $eventCount events", Toast.LENGTH_SHORT).show()
                         } else {
-                            Toast.makeText(this@SequensorActivity, "Export failed (SAF copy)", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@SequencerActivity, "Export failed (SAF copy)", Toast.LENGTH_SHORT).show()
                         }
                     }
                 } else {
                     runOnUiThread {
-                        Toast.makeText(this@SequensorActivity, "Export failed", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@SequencerActivity, "Export failed", Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (e: Exception) {
                 runOnUiThread {
-                    Toast.makeText(this@SequensorActivity, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@SequencerActivity, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -449,7 +427,7 @@ class SequensorActivity : AppCompatActivity() {
             tempFile.delete()
             return true
         } catch (e: Exception) {
-            AppLogger.warn("SequensorActivity", "SAF copy failed: ${e.message}")
+            AppLogger.warn("SequencerActivity", "SAF copy failed: ${e.message}")
             // Still delete temp
             try { tempFile.delete() } catch (_: Exception) {}
             return false

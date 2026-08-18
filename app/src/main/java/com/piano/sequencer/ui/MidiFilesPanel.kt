@@ -13,27 +13,24 @@ import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
-import com.piano.sequencer.AppLogger
 import com.piano.sequencer.R
-import com.piano.sequencer.midi.MidiFileAssignment
-import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.MidiFileLearnState
+import com.piano.sequencer.midi.MidiFileMappingStore
+import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.midi.noteToName
-import com.piano.sequencer.service.PlaybackService
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Programmatic LinearLayout panel for MIDI file key mapping management.
+ * Programmatic LinearLayout panel for MIDI file cell management.
  *
- * Displays a list of .mid files in getExternalFilesDir(null)/midi_files/,
- * with per-file controls: learned key label, channel selector, loop checkbox,
- * tempo edit, learn key, play/stop test, delete file. Also has import .mid
- * and record sections.
+ * Displays a list of sequencer cells (SequencerCell) with per-cell controls:
+ * learned key label, channel spinner, loop checkbox, tempo edit, learn, test,
+ * import, and remove buttons. Also has record section.
  *
  * House style: all views created programmatically, no layout XML.
  *
- * M2: receives single store instance from MainActivity constructor.
+ * The store is injected by the hosting activity (SequencerActivity) constructor.
  * m3: record toggle runs on worker thread.
  * m6: double-tap guard via isRecordingUi flag.
  * m7: learn mode timeout (10s) via Handler.postDelayed.
@@ -47,37 +44,25 @@ class MidiFilesPanel @JvmOverloads constructor(
     // ── Callbacks set by the hosting activity ──
 
     /** Called when user wants to import a .mid file via GetContent picker. */
-    var onImportClick: () -> Unit = {}
+    var onImportClick: (cellId: Int) -> Unit = {}
 
     /** Called when user wants to start/stop recording. */
     var onRecordClick: () -> Unit = {}
 
-    /** Called when a mapped note key is pressed (start/stop slot). */
-    var onNoteTrigger: (note: Int, filePath: String, loop: Boolean, tempo: Double, channel: Int) -> Unit =
-        { _, _, _, _, _ -> }
-
     /** Called when a test-play button is pressed. */
-    var onTestPlay: (note: Int, filePath: String, loop: Boolean, tempo: Double, channel: Int) -> Unit =
-        { _, _, _, _, _ -> }
+    var onTestPlay: (cell: SequencerCell) -> Unit = {}
 
-    /** Called when a file is deleted (also frees slot). */
-    var onFileDelete: (filePath: String) -> Unit = {}
-
-    /** Called when loop/tempo/channel settings change for a mapped file. */
-    var onSettingChange: (note: Int, loop: Boolean, tempo: Double, channel: Int) -> Unit = { _, _, _, _ -> }
+    /** Called when loop/tempo/channel settings change for a mapped cell. */
+    var onSettingChange: (cell: SequencerCell) -> Unit = {}
 
     /** Called when a note is learned (saved to store). */
-    var onNoteLearned: (note: Int, filePath: String, loop: Boolean, tempo: Double, channel: Int) -> Unit =
-        { _, _, _, _, _ -> }
+    var onNoteLearned: (cell: SequencerCell, note: Int) -> Unit = { _, _ -> }
 
     /** Called when a mapping is removed (also frees slot). */
-    var onMappingRemove: (note: Int) -> Unit = {}
+    var onNoteUnlearned: (note: Int) -> Unit = {}
 
-    /** Called when record status changes (event count). */
-    var onRecordStatus: (eventCount: Int) -> Unit = {}
-
-    /** Refresh the file list (called on resume, after import, after record, after delete). */
-    var onRefresh: () -> Unit = {}
+    /** Called when a cell is removed (file stays on disk). */
+    var onCellRemove: (cell: SequencerCell) -> Unit = {}
 
     // ── State ──
 
@@ -89,7 +74,6 @@ class MidiFilesPanel @JvmOverloads constructor(
         this.store = store
     }
 
-    private var service: PlaybackService? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     /** m6: guard against double-tap during export. */
@@ -104,23 +88,10 @@ class MidiFilesPanel @JvmOverloads constructor(
 
     /** item 8c: direct reference to per-row test button for label update. */
     private var currentTestBtn: Button? = null
-    private var currentTestNote: Int = -1
-
-    /** Per-row UI state: note → row widgets. */
-    private data class RowWidgets(
-        val channelSpinner: Spinner,
-        val loopCheck: CheckBox,
-        val tempoEdit: EditText,
-        val learnBtn: Button,
-        val testBtn: Button,
-        val deleteBtn: Button
-    )
-
-    private val rowWidgets = mutableMapOf<Int, RowWidgets>()
 
     // ── Channel spinner items ──
-
-    private val channelItems = listOf("From file") + (0..15).map { "Ch $it" }
+    // 1-based: "From file" + "Ch 1".."Ch 16" (internal 0..15 → display 1..16)
+    private val channelItems = listOf("From file") + (1..16).map { "Ch $it" }
 
     // ── Construction ──
 
@@ -134,27 +105,30 @@ class MidiFilesPanel @JvmOverloads constructor(
         background = context.getDrawable(R.drawable.card_frame)
     }
 
-    /** Bind the playback service (called from hosting activity onCreate). */
-    fun bindService(service: PlaybackService) {
-        this.service = service
-    }
-
-    /** Load and display the file list. */
+    /** Load and display the cell list. */
     fun refresh() {
         removeAllViews()
 
-        // Get list of .mid files from external files dir
-        val midiDir = File(context.getExternalFilesDir(null), "midi_files")
-        val files = midiDir.listFiles { _, name -> name.endsWith(".mid", ignoreCase = true) }
-            ?.sortedBy { it.name.lowercase() }
-            ?.toList()
-            ?: emptyList()
+        // ONE-TIME legacy backfill: scan midi_files dir, add files not yet in any cell
+        if (store.needsLegacyBackfill()) {
+            val midiDir = File(context.getExternalFilesDir(null), "midi_files")
+            val midFiles = midiDir.listFiles { _, name -> name.endsWith(".mid", ignoreCase = true) }
+                ?.toList()
+                ?: emptyList()
+            val existingPaths = store.all().map { it.filePath }.toSet()
+            for (file in midFiles) {
+                if (file.absolutePath !in existingPaths) {
+                    store.set(SequencerCell(id = store.nextId(), filePath = file.absolutePath))
+                }
+            }
+        }
+        store.markBackfillDone()
 
-        val assignments = store.all()
+        val cells = store.all()
 
-        if (files.isEmpty()) {
+        if (cells.isEmpty()) {
             val emptyText = TextView(context).apply {
-                text = "No MIDI files. Tap [Import .mid] to add one."
+                text = "No cells. Tap [＋ Add cell] to add one."
                 textSize = 12f
                 setPadding(12, 12, 12, 12)
                 setTextColor(0xFF888888.toInt())
@@ -165,70 +139,76 @@ class MidiFilesPanel @JvmOverloads constructor(
                 setMargins(12, 12, 12, 12)
             })
         } else {
-            for (file in files) {
-                addFileRow(file, assignments)
+            for (cell in cells) {
+                addCellRow(cell)
             }
         }
 
-        // Import button
-        addImportButton()
+        // "＋ Add cell" button
+        addAddCellButton()
 
         // Record section
         addRecordSection()
     }
 
-    private fun addFileRow(file: File, assignments: Map<Int, MidiFileAssignment>) {
-        // Find assignment for this file path (reverse lookup)
-        val assignment = assignments.values.find { it.filePath == file.absolutePath }
-        val note = assignment?.note ?: -1
-
-        val row = LinearLayout(context).apply {
+    private fun addCellRow(cell: SequencerCell) {
+        val container = LinearLayout(context).apply {
             orientation = VERTICAL
-            setPadding(12, 8, 12, 8)
+            setPadding(8, 4, 8, 4)
             setBackgroundColor(0xFFF5F5F5.toInt())
-            setMinimumHeight(120)
+            setMinimumHeight(60)
+            layoutParams = LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 4, 0, 4)
+            }
         }
 
-        // Top row: filename, key label, channel, loop, tempo, buttons
-        val topRow = LinearLayout(context).apply {
+        // ── Row 1: controls ──
+        val row1 = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, 4)
+            layoutParams = LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
+            )
         }
 
-        // File name (truncated)
+        // File name
         val nameText = TextView(context).apply {
-            text = truncateFileName(file.name)
+            text = if (cell.filePath.isNotEmpty()) {
+                val name = File(cell.filePath).name
+                if (name.length > 25) "${name.substring(0, 22)}..." else name
+            } else "—"
             textSize = 12f
             setTextColor(0xFF000000.toInt())
-            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         }
 
-        // Learned key label
+        // Key label
         val keyLabel = TextView(context).apply {
-            text = if (note >= 0) noteToName(note) else "—"
+            text = if (cell.note >= 0) noteToName(cell.note) else "—"
             textSize = 12f
             setTextColor(0xFF444444.toInt())
-            layoutParams = LinearLayout.LayoutParams(
+            layoutParams = LayoutParams(
                 LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT
             ).apply {
                 setMargins(8, 0, 8, 0)
             }
         }
 
-        // Channel selector Spinner
+        // Channel spinner
         val channelSpinner = Spinner(context).apply {
             val adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, channelItems)
             setAdapter(adapter)
-            // Default: "From file" (-1) or the assignment's channel
-            val ch = assignment?.channel ?: -1
-            setSelection(if (ch >= 0) ch + 1 else 0)
+            // Internal 0..15 → display 1..16; -1 → position 0
+            setSelection(if (cell.channel == -1) 0 else cell.channel + 1)
         }
 
         // Loop checkbox
         val loopCheck = CheckBox(context).apply {
-            isChecked = assignment?.loop ?: false
+            isChecked = cell.loop
             textSize = 11f
+            minWidth = 0
         }
 
         // Tempo edit
@@ -236,52 +216,80 @@ class MidiFilesPanel @JvmOverloads constructor(
             hint = "Tempo"
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or
                 android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(if (assignment != null) assignment.tempo.toInt().toString() else "120")
-            layoutParams = LinearLayout.LayoutParams(60, LayoutParams.WRAP_CONTENT)
+            setText(cell.tempo.toInt().toString())
+            layoutParams = LayoutParams(
+                dpToPx(56, context), LayoutParams.WRAP_CONTENT
+            )
             textSize = 11f
         }
 
-        // Learn key button
+        row1.addView(nameText)
+        row1.addView(keyLabel)
+        row1.addView(channelSpinner)
+        row1.addView(loopCheck)
+        row1.addView(tempoEdit)
+
+        container.addView(row1, LayoutParams(
+            LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
+        ).apply {
+            setMargins(0, 0, 0, dpToPx(4, context))
+        })
+
+        // ── Row 2: buttons ──
+        val row2 = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            layoutParams = LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        fun btnParams(): LayoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+
+        val marginEnd = dpToPx(4, context)
+
         val learnBtn = Button(context).apply {
-            text = "Learn key"
-            textSize = 11f
+            text = "Learn"
+            textSize = 10f
+            setPadding(4, 4, 4, 4)
+            minWidth = 0
+            layoutParams = btnParams().apply { setMargins(0, 0, marginEnd, 0) }
         }
 
-        // Test play/stop button
         val testBtn = Button(context).apply {
             text = "▶ Test"
-            textSize = 11f
-        }
-
-        // Delete button
-        val deleteBtn = Button(context).apply {
-            text = "Delete"
-            textSize = 11f
-        }
-
-        topRow.addView(nameText)
-        topRow.addView(keyLabel)
-        topRow.addView(channelSpinner)
-        topRow.addView(loopCheck)
-        topRow.addView(tempoEdit)
-        topRow.addView(learnBtn)
-        topRow.addView(testBtn)
-        topRow.addView(deleteBtn)
-
-        // Status line
-        val statusText = TextView(context).apply {
             textSize = 10f
-            setTextColor(0xFF888888.toInt())
-            setPadding(0, 2, 0, 2)
+            setPadding(4, 4, 4, 4)
+            minWidth = 0
+            layoutParams = btnParams().apply { setMargins(0, 0, marginEnd, 0) }
         }
 
-        row.addView(topRow)
-        row.addView(statusText)
+        val importBtn = Button(context).apply {
+            text = "Import .mid"
+            textSize = 10f
+            setPadding(4, 4, 4, 4)
+            minWidth = 0
+            layoutParams = btnParams().apply { setMargins(0, 0, marginEnd, 0) }
+        }
 
-        // ── Button handlers ──
+        val removeBtn = Button(context).apply {
+            text = "−"
+            textSize = 10f
+            setPadding(4, 4, 4, 4)
+            minWidth = 0
+            layoutParams = btnParams()
+        }
 
+        row2.addView(learnBtn)
+        row2.addView(testBtn)
+        row2.addView(importBtn)
+        row2.addView(removeBtn)
+
+        container.addView(row2)
+
+        // ── Value readers ──
         fun getChannel(): Int {
-            return channelSpinner.selectedItemPosition - 1 // 0→-1 (From file), 1→0, etc.
+            return if (channelSpinner.selectedItemPosition == 0) -1
+            else channelSpinner.selectedItemPosition - 1
         }
 
         fun getLoop(): Boolean = loopCheck.isChecked
@@ -291,31 +299,33 @@ class MidiFilesPanel @JvmOverloads constructor(
             return try { str.toDouble().coerceIn(20.0, 300.0) } catch (_: NumberFormatException) { 120.0 }
         }
 
+        // ── Button handlers ──
+
         learnBtn.setOnClickListener {
-            if (note >= 0) {
-                // Unlearn: remove mapping and free slot
-                store.remove(note)
-                onMappingRemove(note)
-                rowWidgets.remove(note)
-                refresh()
+            if (cell.note >= 0) {
+                // UNLEARN
+                val cur = store.get(cell.id) ?: return@setOnClickListener
+                store.set(cur.copy(note = -1))
+                onNoteUnlearned(cell.note)
             } else {
-                // Enter learn mode
+                // LEARN
                 cancelLearnTimeout()
                 MidiFileLearnState.startLearning { learnedNote ->
                     mainHandler.post {
-                        val assignment = MidiFileAssignment(
-                            note = learnedNote,
-                            filePath = file.absolutePath,
-                            loop = getLoop(),
-                            tempo = getTempo(),
-                            channel = getChannel()
-                        )
-                        store.set(assignment)
-                        onNoteLearned(learnedNote, file.absolutePath, getLoop(), getTempo(), getChannel())
-                        refresh()
+                        // CRITICAL: re-read from store to avoid stale capture
+                        val cur = store.get(cell.id) ?: return@post
+                        // NOTE UNIQUENESS: ensure no other cell claims this note
+                        for (c2 in store.all()) {
+                            if (c2.note == learnedNote && c2.id != cur.id) {
+                                store.set(c2.copy(note = -1))
+                            }
+                        }
+                        val updated = cur.copy(note = learnedNote)
+                        store.set(updated)
+                        onNoteLearned(updated, learnedNote)
                     }
                 }
-                // m7: 10s timeout — cancel learn if no key pressed
+                // m7: 10s timeout
                 learnTimeoutRunnable = Runnable {
                     if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
                         MidiFileLearnState.cancel()
@@ -328,103 +338,87 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         testBtn.setOnClickListener {
-            if (assignment != null) {
-                val cur = store.get(assignment.note) ?: return@setOnClickListener
-                store.set(cur.copy(loop = getLoop(), tempo = getTempo(), channel = getChannel()))
-                onSettingChange(cur.note, getLoop(), getTempo(), getChannel())
+            // CRITICAL: re-read from store
+            val cur = store.get(cell.id) ?: return@setOnClickListener
+            if (cur.filePath.isEmpty()) {
+                Toast.makeText(context, "No file assigned", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
             }
-            onTestPlay(
-                assignment?.note ?: 0,
-                file.absolutePath,
-                getLoop(),
-                getTempo(),
-                getChannel()
-            )
+            val updated = cur.copy(loop = getLoop(), tempo = getTempo(), channel = getChannel())
+            store.set(updated)
+            if (updated.note >= 0) {
+                onSettingChange(updated)
+            }
+            onTestPlay(updated)
         }
 
-        deleteBtn.setOnClickListener {
-            // Free slot if mapped
-            if (note >= 0) {
-                store.remove(note)
-                onMappingRemove(note)
-            }
-            onFileDelete(file.absolutePath)
-            // Delete the file
-            if (file.delete()) {
-                mainHandler.post { refresh() }
-            }
+        importBtn.setOnClickListener {
+            onImportClick(cell.id)
+        }
+
+        removeBtn.setOnClickListener {
+            // CRITICAL: re-read from store
+            val cur = store.get(cell.id) ?: return@setOnClickListener
+            onCellRemove(cur)
         }
 
         // Save settings on change
         loopCheck.setOnCheckedChangeListener { _, isChecked ->
-            if (assignment != null) {
-                val cur = store.get(assignment.note) ?: return@setOnCheckedChangeListener
-                store.set(cur.copy(loop = isChecked))
-                onSettingChange(cur.note, isChecked, cur.tempo, cur.channel)
+            val cur = store.get(cell.id) ?: return@setOnCheckedChangeListener
+            val updated = cur.copy(loop = isChecked)
+            store.set(updated)
+            if (updated.note >= 0) {
+                onSettingChange(updated)
             }
         }
 
         tempoEdit.setOnFocusChangeListener { _, hasFocus ->
-            if (!hasFocus && assignment != null) {
-                val cur = store.get(assignment.note) ?: return@setOnFocusChangeListener
-                val tempo = getTempo()
-                store.set(cur.copy(tempo = tempo))
-                onSettingChange(cur.note, loopCheck.isChecked, tempo, cur.channel)
+            if (!hasFocus) {
+                val cur = store.get(cell.id) ?: return@setOnFocusChangeListener
+                val updated = cur.copy(tempo = getTempo())
+                store.set(updated)
+                if (updated.note >= 0) {
+                    onSettingChange(updated)
+                }
             }
         }
 
         channelSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
-                if (assignment != null) {
-                    val cur = store.get(assignment.note) ?: return@onItemSelected
-                    val ch = position - 1 // 0→-1, 1→0
-                    store.set(cur.copy(channel = ch))
-                    onSettingChange(cur.note, loopCheck.isChecked, cur.tempo, ch)
+                val cur = store.get(cell.id) ?: return@onItemSelected
+                val updated = cur.copy(channel = getChannel())
+                store.set(updated)
+                if (updated.note >= 0) {
+                    onSettingChange(updated)
                 }
             }
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
         }
 
-        // Store widgets for later updates
-        if (note >= 0) {
-            rowWidgets[note] = RowWidgets(channelSpinner, loopCheck, tempoEdit, learnBtn, testBtn, deleteBtn)
-            // item 8c: track test button for label updates
-            setTestPlayTarget(note, testBtn)
+        // item 8c: track test button for label updates (last row with file wins)
+        if (cell.filePath.isNotEmpty()) {
+            setTestPlayTarget(testBtn)
         }
 
-        // Populate status line from slot info
-        if (assignment != null) {
-            val svc = service
-            if (svc != null) {
-                statusText.text = "loop=${assignment.loop} tempo=${String.format("%.1f", assignment.tempo)}bpm ch=${assignment.channel}"
+        addView(container)
+    }
+
+    private fun addAddCellButton() {
+        val addBtn = Button(context).apply {
+            text = "＋ Add cell"
+            textSize = 12f
+            setPadding(dpToPx(12, context), dpToPx(8, context), dpToPx(12, context), dpToPx(8, context))
+            layoutParams = LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, dpToPx(8, context), 0, dpToPx(4, context))
             }
         }
-
-        addView(row, LayoutParams(
-            LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
-        ).apply {
-            setMargins(0, 4, 0, 4)
-        })
-    }
-
-    private fun truncateFileName(name: String): String {
-        return if (name.length > 25) "${name.substring(0, 22)}..." else name
-    }
-
-    private fun addImportButton() {
-        val importBtn = Button(context).apply {
-            text = "Import .mid"
-            textSize = 12f
-            setPadding(12, 8, 12, 8)
+        addBtn.setOnClickListener {
+            store.set(SequencerCell(id = store.nextId()))
+            refresh()
         }
-        importBtn.setOnClickListener {
-            onImportClick()
-        }
-        addView(importBtn, LayoutParams(
-            LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
-        ).apply {
-            setMargins(0, 8, 0, 4)
-        })
+        addView(addBtn)
     }
 
     private fun addRecordSection() {
@@ -437,7 +431,7 @@ class MidiFilesPanel @JvmOverloads constructor(
         val recordBtn = Button(context).apply {
             text = "Record"
             textSize = 12f
-            setPadding(12, 8, 12, 8)
+            setPadding(dpToPx(12, context), dpToPx(8, context), dpToPx(12, context), dpToPx(8, context))
         }
         recordBtn.setOnClickListener {
             // m6: guard against double-tap during export
@@ -455,7 +449,7 @@ class MidiFilesPanel @JvmOverloads constructor(
             text = "No recording"
             textSize = 11f
             setTextColor(0xFF888888.toInt())
-            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         }
 
         // n3: save direct references to record section widgets
@@ -481,10 +475,7 @@ class MidiFilesPanel @JvmOverloads constructor(
             else if (eventCount > 0) "$eventCount events recorded"
             else "No recording"
         }
-        // item 5 + gate-2 condition: release guard on BOTH start and stop paths —
-        // the guard is only for the export window (stop tap -> export complete).
-        // (Before: only the stop path released it -> after the start tap the button
-        // stayed disabled + guard latched -> user could not stop the recording.)
+        // item 5 + gate-2 condition: release guard on BOTH start and stop paths
         if (btn != null) btn.isEnabled = true
         isRecordingUi.set(false)
     }
@@ -504,9 +495,12 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
     }
 
-    /** Called when a test-play button is pressed for a specific note. */
-    fun setTestPlayTarget(note: Int, btn: Button) {
-        currentTestNote = note
+    /** Called when a test-play button is pressed for a specific cell. */
+    fun setTestPlayTarget(btn: Button) {
         currentTestBtn = btn
+    }
+
+    private fun dpToPx(dp: Int, context: Context): Int {
+        return (dp * context.resources.displayMetrics.density).toInt()
     }
 }

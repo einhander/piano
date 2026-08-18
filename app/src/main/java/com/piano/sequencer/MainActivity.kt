@@ -324,9 +324,9 @@ class MainActivity : AppCompatActivity() {
         layout.addView(instrumentsButton)
         layout.addView(settingsButton)
         layout.addView(Button(this).apply {
-            text = "Sequensor"
+            text = "Sequencer"
             setOnClickListener {
-                startActivity(Intent(this@MainActivity, SequensorActivity::class.java))
+                startActivity(Intent(this@MainActivity, SequencerActivity::class.java))
             }
         })
         setContentView(layout)
