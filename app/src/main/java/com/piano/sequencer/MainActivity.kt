@@ -28,12 +28,22 @@ import java.util.Locale
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.piano.sequencer.midi.MidiDeviceManager
+import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.MidiInputReceiver
 import com.piano.sequencer.midi.MidiFileTriggerController
+import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.midi.noteToName
-import com.piano.sequencer.project.Project
+import com.piano.sequencer.project.PseqArchive
+import com.piano.sequencer.project.PseqCell
+import com.piano.sequencer.project.PseqDocument
+import com.piano.sequencer.project.PseqFormatException
 import com.piano.sequencer.project.ProjectRepository
 import com.piano.sequencer.service.PlaybackService
+import java.io.ByteArrayInputStream
+import java.io.IOException
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.util.LinkedHashMap
 
 class MainActivity : AppCompatActivity() {
 
@@ -135,6 +145,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // SAF document creator for .pseq project save
+    private val saveProjectLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        if (uri != null) saveProjectToUri(uri)
+    }
+
+    // SAF document opener for .pseq project load. MIME is unreliable for
+    // .pseq (same reason as the SF2 picker) — content is validated on load.
+    private val loadProjectLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) loadProjectFromUri(uri)
+    }
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as? PlaybackService.PlaybackBinder
@@ -204,6 +229,14 @@ class MainActivity : AppCompatActivity() {
             action(playbackService!!)
         } else {
             Toast.makeText(this, "Service not connected", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Toast on the main thread; no-op if the activity is finishing/destroyed. */
+    private fun uiToast(msg: String, length: Int = Toast.LENGTH_SHORT) {
+        runOnUiThread {
+            if (isFinishing || isDestroyed) return@runOnUiThread
+            Toast.makeText(this, msg, length).show()
         }
     }
 
@@ -528,41 +561,214 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun saveProject() {
-        val project = Project(name = "Session ${System.currentTimeMillis() / 1000}")
-        projectRepo.saveProject(project) { result ->
-            runOnUiThread {
-                result.onSuccess {
-                    Toast.makeText(this@MainActivity, "Project saved: ${project.id}", Toast.LENGTH_LONG).show()
-                }.onFailure {
-                    Toast.makeText(this@MainActivity, "Save failed: ${it.message}", Toast.LENGTH_SHORT).show()
+    // ── .pseq project save / load ──
+
+    /**
+     * Save the current session (settings + cells + MIDI files) as a .pseq
+     * archive to the SAF uri. File I/O + engine reads run on a worker thread
+     * (JNI calls must never run on main); toasts on main.
+     */
+    private fun saveProjectToUri(uri: Uri) {
+        Thread({
+            try {
+                val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+
+                // Settings from prefs (soundFont = SF2 file name only, not bundled)
+                val sf2Path = prefs.getString("sf2_path", null)
+                val soundFont = sf2Path?.let { File(it).name }
+                val polyphony = prefs.getInt("polyphony", 64)
+                val masterGain = prefs.getFloat("master_gain", 1.0f)
+                val channels = (0 until 16).map { prefs.getInt("chan_prog_$it", 0) }
+
+                // Transport from the engine (JNI — worker thread)
+                val svc = playbackService
+                val bpm = svc?.getBPM() ?: 120.0
+                val ppq = svc?.getPpq() ?: 480
+
+                // Cells: absolute path → archive-relative "midi/<basename>",
+                // deduping colliding basenames so every cell.filePath matches
+                // a real archive entry (the cell keeps pointing at its entry).
+                val midiFiles = LinkedHashMap<String, File>()
+                val cells = MidiFileMappingStore.get(this).all().map { cell ->
+                    if (cell.filePath.isEmpty()) return@map cell
+                    val entry = PseqArchive.uniqueDestName("midi/${File(cell.filePath).name}") { it in midiFiles }
+                    midiFiles[entry] = File(cell.filePath)
+                    cell.copy(filePath = entry)
                 }
+
+                val now = LocalDateTime.now()
+                val doc = PseqDocument(
+                    formatVersion = PseqArchive.FORMAT_VERSION,
+                    name = "Session " + now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")),
+                    createdAt = now.toString(), // ISO-8601
+                    bpm = bpm,
+                    ppq = ppq,
+                    numerator = 4,
+                    denominator = 4,
+                    masterGain = masterGain,
+                    polyphony = polyphony,
+                    soundFont = soundFont,
+                    channels = channels,
+                    cells = cells.map { PseqCell(it.id, it.note, it.filePath, it.loop, it.tempo, it.channel) }
+                )
+
+                val out = contentResolver.openOutputStream(uri)
+                    ?: throw IOException("Cannot open output stream")
+                PseqArchive.write(out, doc, midiFiles) // write() closes the stream
+
+                AppLogger.info("MainActivity", "Project saved: ${doc.name} (${midiFiles.size} midi file(s))")
+                uiToast("Project saved")
+            } catch (e: Exception) {
+                AppLogger.error("MainActivity", "Project save failed: $e")
+                uiToast("Save failed: ${e.message}")
             }
-        }
+        }, "PseqSave").apply { isDaemon = true }.start()
     }
 
-    private fun loadProject() {
-        projectRepo.listProjects { projects ->
-            if (projects.isEmpty()) {
-                runOnUiThread {
-                    Toast.makeText(this@MainActivity, "No saved projects", Toast.LENGTH_SHORT).show()
+    /**
+     * Load a .pseq archive from the SAF uri: settings + cells + MIDI files.
+     * Order matters (a failure before the first state change leaves nothing
+     * modified): parse/validate the document, then extract MIDI files (temp
+     * file + rename), then cells, SF2, prefs, engine. Worker thread; toasts
+     * on main.
+     */
+    private fun loadProjectFromUri(uri: Uri) {
+        Thread({
+            try {
+                // 1. Buffer the archive once — SAF streams are one-shot, so
+                //    every PseqArchive call gets a fresh ByteArrayInputStream.
+                val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IOException("Cannot open input stream")
+                val source = { ByteArrayInputStream(bytes) }
+
+                // 2. Parse + validate (PseqFormatException message is user-readable)
+                val doc = PseqArchive.readDocument(source())
+
+                // 3. Extract MIDI files: temp file + rename, so a failure never
+                //    leaves a partial file at a final name. An entry missing
+                //    from the archive degrades the cell to no-file (the archive
+                //    is the source of truth) — it does not abort the load.
+                val extDir = getExternalFilesDir(null)
+                    ?: throw IOException("External storage unavailable")
+                val midiDir = File(extDir, "midi_files")
+                if (!midiDir.exists()) midiDir.mkdirs()
+                val entries = PseqArchive.listEntries(source())
+                val entryToDest = LinkedHashMap<String, String>()
+                for (cell in doc.cells) {
+                    val entry = cell.filePath
+                    if (entry.isEmpty() || entryToDest.containsKey(entry) || entry !in entries) continue
+                    val destName = PseqArchive.uniqueDestName(File(entry).name) { File(midiDir, it).exists() }
+                    val temp = File.createTempFile("pseq_", ".tmp", midiDir)
+                    try {
+                        PseqArchive.extractEntry(source(), entry, temp)
+                        if (!temp.renameTo(File(midiDir, destName))) {
+                            throw IOException("Rename failed: ${temp.name} -> $destName")
+                        }
+                    } catch (e: Exception) {
+                        temp.delete()
+                        throw e
+                    }
+                    entryToDest[entry] = destName
                 }
-                return@listProjects
-            }
-            val project = projects[0]
-            projectRepo.loadProject(project.id) { result ->
-                runOnUiThread {
-                    result.onSuccess { loaded ->
-                        // Serialize and send to native engine
-                        val json = com.piano.sequencer.project.ProjectSerializer.toJson(loaded)
-                        NativeEngineBridge.nativeLoadProject(json)
-                        Toast.makeText(this@MainActivity, "Loaded: ${loaded.name}", Toast.LENGTH_LONG).show()
-                    }.onFailure {
-                        Toast.makeText(this@MainActivity, "Load failed: ${it.message}", Toast.LENGTH_SHORT).show()
+
+                // 4. Cells: clear + set. The store is synchronized; onCellSaved
+                //    only enqueues a cache preload (no JNI/UI on this thread).
+                // Stop all active file slots + test-play first: a successful
+                // load must not keep the old project's loops playing, and the
+                // stale toggle state would make the first press on a re-mapped
+                // note a silent TOGGLE_OFF. Worker-safe (enqueues only).
+                MidiFileTriggerController.get(this).stopAllForRecording()
+                val store = MidiFileMappingStore.get(this)
+                store.clear()
+                for (cell in doc.cells) {
+                    val destName = cell.filePath.takeIf { it.isNotEmpty() }?.let { entryToDest[it] }
+                    store.set(
+                        SequencerCell(
+                            id = cell.id,
+                            note = cell.note,
+                            filePath = destName?.let { File(midiDir, it).absolutePath } ?: "",
+                            loop = cell.loop,
+                            tempo = cell.tempo,
+                            channel = cell.channel
+                        )
+                    )
+                }
+                // The archive is now the mapping's source of truth — suppress
+                // the legacy backfill (MidiFilesPanel.refresh) so orphan
+                // old-project .mid files are not re-added as cells.
+                store.markBackfillDone()
+
+                // 5. SF2: name only in the archive — load it if the file is on
+                //    this device, otherwise keep the current one. The pref is
+                //    written only on success (or when the engine is not up yet —
+                //    boot restore will load it), so a failed load never
+                //    clobbers a working sf2_path.
+                var sf2Missing = false
+                var sf2Unavailable = false
+                val sf2Name = doc.soundFont
+                if (sf2Name != null) {
+                    // User-provided archive data: reject path separators.
+                    if (sf2Name.contains('/')) {
+                        sf2Missing = true
+                    } else {
+                        val sf2File = File(extDir, sf2Name)
+                        if (sf2File.exists()) {
+                            val svc = playbackService
+                            val id = svc?.loadSoundFont(sf2File.absolutePath) ?: -1
+                            if (id >= 0 || svc == null) {
+                                getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+                                    .putString("sf2_path", sf2File.absolutePath).apply()
+                            } else {
+                                sf2Unavailable = true
+                                AppLogger.warn("MainActivity", "Failed to load SF2 on project load: ${sf2File.absolutePath} (error: $id)")
+                            }
+                        } else {
+                            sf2Missing = true
+                        }
                     }
                 }
+
+                // 6. Prefs (single Editor, single apply)
+                val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+                val editor = prefs.edit()
+                    .putInt("polyphony", doc.polyphony)
+                    .putFloat("master_gain", doc.masterGain)
+                for (ch in 0 until 16) {
+                    editor.putInt("chan_prog_$ch", doc.channels[ch])
+                }
+                editor.apply()
+
+                // 7. Engine (JNI — worker thread; same passthroughs as
+                //    restorePersistedState; setBPM via the bridge, which has
+                //    no PlaybackService passthrough).
+                val svc = playbackService
+                if (svc != null) {
+                    svc.setPolyphony(doc.polyphony)
+                    svc.setMasterGain(doc.masterGain)
+                    for (ch in 0 until 16) {
+                        val packed = doc.channels[ch]
+                        svc.setChannelProgram(ch, packed shr 8, packed and 0xFF)
+                    }
+                    NativeEngineBridge.nativeSetBPM(doc.bpm)
+                }
+
+                // 8. UI: the cell grid (SequencerActivity → MidiFilesPanel)
+                //    re-reads the singleton store in onResume → refreshPanel,
+                //    so no explicit refresh is needed here.
+                val msg = if (sf2Missing || sf2Unavailable) {
+                    "Project loaded: ${doc.name} — SF2 $sf2Name not available, keeping current"
+                } else {
+                    "Project loaded: ${doc.name}"
+                }
+                uiToast(msg, Toast.LENGTH_LONG)
+            } catch (e: PseqFormatException) {
+                AppLogger.error("MainActivity", "Project load failed: $e")
+                uiToast("Load failed: ${e.message}", Toast.LENGTH_LONG)
+            } catch (e: Exception) {
+                AppLogger.error("MainActivity", "Project load failed: $e")
+                uiToast("Load failed: ${e.message}")
             }
-        }
+        }, "PseqLoad").apply { isDaemon = true }.start()
     }
 
     /**
@@ -575,8 +781,8 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Projects")
             .setItems(actions) { _, which ->
                 when (which) {
-                    0 -> saveProject()
-                    1 -> loadProject()
+                    0 -> saveProjectLauncher.launch("project.pseq")
+                    1 -> loadProjectLauncher.launch(arrayOf("*/*"))
                 }
             }
             .show()
