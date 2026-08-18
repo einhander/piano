@@ -565,34 +565,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun exportMidiFile() {
-        // Get recorded events from native engine and write to MIDI file
-        withService { service ->
-            service.exportMidiFile { filePath ->
-                runOnUiThread {
-                    if (filePath != null) {
-                        Toast.makeText(this@MainActivity, "MIDI exported: $filePath", Toast.LENGTH_LONG).show()
-                    } else {
-                        Toast.makeText(this@MainActivity, "No recorded events to export", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-        }
-    }
-
     /**
-     * "Projects" entry point: the three project actions as a house-style
+     * "Projects" entry point: the two project actions as a house-style
      * item list dialog (same pattern as the MIDI device picker).
      */
     private fun showProjectsDialog() {
-        val actions = arrayOf("Save Project", "Load Project", "Export MIDI")
+        val actions = arrayOf("Save Project", "Load Project")
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("Projects")
             .setItems(actions) { _, which ->
                 when (which) {
                     0 -> saveProject()
                     1 -> loadProject()
-                    2 -> exportMidiFile()
                 }
             }
             .show()

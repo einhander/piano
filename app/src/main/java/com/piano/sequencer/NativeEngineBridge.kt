@@ -98,15 +98,6 @@ object NativeEngineBridge {
     external fun nativeIsRecording(): Boolean
     external fun nativeSetOverdub(overdub: Boolean)
 
-    // MIDI export
-    external fun nativeWriteMidiFile(
-        filePath: String,
-        events: ByteArray,
-        eventCount: Int,
-        ppq: Int,
-        tempo: Int
-    ): Boolean
-
     // MIDI file slot playback
     // NOTE: call from a worker thread, never the main thread.
     // nativeLoadMidiFileSlot does blocking file I/O + parse (tens of ms).

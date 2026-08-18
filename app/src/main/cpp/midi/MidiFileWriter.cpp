@@ -38,7 +38,7 @@ void MidiFileWriter::writeVlq(std::vector<uint8_t>& buf, uint32_t value) {
 void MidiFileWriter::writeHeader(std::vector<uint8_t>& buf, int format, int numTracks, int ppq) {
     // MThd header
     const char headerId[] = "MThd";
-    buf.insert(buf.end(), std::begin(headerId), std::end(headerId));
+    buf.insert(buf.end(), headerId, headerId + 4);
     writeUint32(buf, 6);  // header size
     writeUint16(buf, static_cast<uint16_t>(format));
     writeUint16(buf, static_cast<uint16_t>(numTracks));
@@ -74,7 +74,7 @@ void MidiFileWriter::writeMidiEvent(std::vector<uint8_t>& buf,
     // Note Off (0x80), Note On (0x90), Control Change (0xB0),
     // Program Change (0xC0), Channel Pressure (0xD0), Pitch Bend (0xE0)
     if (statusClass == 0x80 || statusClass == 0x90 ||
-        statusClass == 0xB0 || statusClass == 0xE0) {
+        statusClass == 0xA0 || statusClass == 0xB0 || statusClass == 0xE0) {
         buf.push_back(event.data1);
         buf.push_back(event.data2);
     } else if (statusClass == 0xC0 || statusClass == 0xD0) {
@@ -88,12 +88,13 @@ void MidiFileWriter::writeTrack(std::vector<uint8_t>& buf,
                                  int ppq, uint32_t tempo) {
     // Sort events by tick
     std::vector<RecordedMidiEvent> sortedEvents = events;
-    std::sort(sortedEvents.begin(), sortedEvents.end(),
+    std::stable_sort(sortedEvents.begin(), sortedEvents.end(),
         [](const RecordedMidiEvent& a, const RecordedMidiEvent& b) {
             return a.tick < b.tick;
         });
 
     // Write tempo event at tick 0
+    writeVlq(buf, 0);
     writeMetaTempo(buf, tempo);
 
     int32_t prevTick = 0;
@@ -117,32 +118,19 @@ bool MidiFileWriter::write(const char* filePath,
     std::vector<uint8_t> output;
 
     // Reserve space: header (14 bytes) + track chunk
-    int numTracks = (format == 1) ? static_cast<int>(events.size()) : 1;
+    int numTracks = 1;
     output.reserve(14 + 8 + 4096);  // header + track header + estimated track data
 
     // Write header
     writeHeader(output, format, numTracks, ppq);
 
-    // Write track(s)
-    if (format == 0) {
-        // Single track with all events
-        const char trkId[] = {'M', 'T', 'r', 'k'};
-        output.insert(output.end(), trkId, trkId + 4);
-        std::vector<uint8_t> trackBuf;
-        writeTrack(trackBuf, events, ppq, tempo);
-        writeUint32(output, static_cast<uint32_t>(trackBuf.size()));
-        output.insert(output.end(), trackBuf.begin(), trackBuf.end());
-    } else {
-        // Multi-track: one track per event (simplified — each event gets its own track)
-        // For proper multi-track, events should be grouped by trackId
-        // Here we put all events in a single track for format 1 too
-        const char trkId[] = {'M', 'T', 'r', 'k'};
-        output.insert(output.end(), trkId, trkId + 4);
-        std::vector<uint8_t> trackBuf;
-        writeTrack(trackBuf, events, ppq, tempo);
-        writeUint32(output, static_cast<uint32_t>(trackBuf.size()));
-        output.insert(output.end(), trackBuf.begin(), trackBuf.end());
-    }
+    // Write single track
+    const char trkId[] = {'M', 'T', 'r', 'k'};
+    output.insert(output.end(), trkId, trkId + 4);
+    std::vector<uint8_t> trackBuf;
+    writeTrack(trackBuf, events, ppq, tempo);
+    writeUint32(output, static_cast<uint32_t>(trackBuf.size()));
+    output.insert(output.end(), trackBuf.begin(), trackBuf.end());
 
     // Write to file
     std::ofstream file(filePath, std::ios::binary);

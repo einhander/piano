@@ -258,15 +258,34 @@ class NoteToggleStateMachine {
     /**
      * Process a note-on event.
      *
-     * TOGGLE_ON  — first event or after note-off while stopped → start slot
-     * TOGGLE_OFF — was playing, user released (noteOff), pressing again → stop slot
-     * IGNORED    — key repeat (note-on without note-off between) → nothing
+     * loop == false (one-shot): every fresh press (re)starts playback; key repeat
+     * (note-on without note-off between) is IGNORED.
+     *
+     * loop == true (toggle): press after note-off while stopped → TOGGLE_ON;
+     * press after note-off while playing → TOGGLE_OFF; key repeat → IGNORED.
+     *
+     * TOGGLE_ON  — start slot
+     * TOGGLE_OFF — stop slot
+     * IGNORED    — key repeat (loop=false) or key repeat (loop=true) → nothing
+     *
+     * Caveat: a genuinely lost note-off (USB glitch, port disconnect) makes the
+     * next fresh press look like a key repeat and be IGNORED; the press after a
+     * real release works normally. Applies to both modes.
      *
      * Thread-safe: synchronized for concurrent access from MIDI binder thread
      * and main thread.
      */
-    fun noteOn(note: Int): Result {
+    fun noteOn(note: Int, loop: Boolean): Result {
         synchronized(this) {
+            if (!loop) {
+                // One-shot mode: every fresh press (re)starts; key repeat (no
+                // note-off between) must not retrigger.
+                if (lastEvent[note] == true) return Result.IGNORED
+                lastEvent[note] = true
+                isPlaying[note] = true
+                return Result.TOGGLE_ON
+            }
+            // Loop mode: existing toggle logic, unchanged.
             val wasNoteOff = lastEvent[note] == false
             val firstEvent = lastEvent[note] == null
             lastEvent[note] = true

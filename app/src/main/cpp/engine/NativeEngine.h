@@ -141,11 +141,6 @@ public:
     // Returns a thread-safe copy (N7: by-value — getEvents() returns a prvalue).
     std::vector<RecordedMidiEvent> getRecordedEvents();
 
-    // MIDI export
-    bool writeMidiFile(const char* filePath,
-                       const std::vector<RecordedMidiEvent>& events,
-                       int ppq, uint32_t tempo);
-
     // MIDI file slot playback (worker thread for load, audio thread for process)
     // NOTE: call from a worker thread, never the main thread.
     // loadMidiFileSlot does blocking file I/O + parse (tens of ms).

@@ -163,13 +163,6 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun getBPM(): Double = NativeEngineBridge.nativeGetBPM()
     fun getPpq(): Int = NativeEngineBridge.nativeGetPpq()
 
-    // Export recorded MIDI to file
-    fun exportMidiFile(callback: (String?) -> Unit) {
-        // Get recorded events from native engine
-        // For now, return null — full implementation would pass events through JNI
-        callback(null)
-    }
-
     // MIDI file slot playback
     // NOTE: call from a worker thread, never the main thread.
     // loadMidiFileSlot does blocking file I/O + parse (tens of ms).

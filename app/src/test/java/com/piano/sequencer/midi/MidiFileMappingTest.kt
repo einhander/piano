@@ -491,7 +491,7 @@ class MidiFileMappingTest {
     @Test
     fun freshPressTogglesOn() {
         val sm = NoteToggleStateMachine()
-        val result = sm.noteOn(60)
+        val result = sm.noteOn(60, loop = true)
         assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, result)
         assertTrue(sm.isPlaying(60))
     }
@@ -500,10 +500,10 @@ class MidiFileMappingTest {
     fun keyRepeatReturnsIgnored() {
         val sm = NoteToggleStateMachine()
         // First noteOn → TOGGLE_ON
-        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(60))
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(60, loop = true))
         assertTrue(sm.isPlaying(60))
         // Second noteOn without noteOff → IGNORED
-        assertEquals(NoteToggleStateMachine.Result.IGNORED, sm.noteOn(60))
+        assertEquals(NoteToggleStateMachine.Result.IGNORED, sm.noteOn(60, loop = true))
         // Still playing
         assertTrue(sm.isPlaying(60))
     }
@@ -511,7 +511,7 @@ class MidiFileMappingTest {
     @Test
     fun noteOffDoesNotStop() {
         val sm = NoteToggleStateMachine()
-        sm.noteOn(60)
+        sm.noteOn(60, loop = true)
         assertTrue(sm.isPlaying(60))
         sm.noteOff(60)
         // Still playing (loop keeps playing after release)
@@ -522,20 +522,20 @@ class MidiFileMappingTest {
     fun pressReleasePressStops() {
         val sm = NoteToggleStateMachine()
         // First press → TOGGLE_ON
-        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(60))
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(60, loop = true))
         assertTrue(sm.isPlaying(60))
         // Release
         sm.noteOff(60)
         // Second press → TOGGLE_OFF (was playing, now toggles off)
-        assertEquals(NoteToggleStateMachine.Result.TOGGLE_OFF, sm.noteOn(60))
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_OFF, sm.noteOn(60, loop = true))
         assertTrue(!sm.isPlaying(60))
     }
 
     @Test
     fun multipleNotesIndependent() {
         val sm = NoteToggleStateMachine()
-        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(60))
-        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(61))
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(60, loop = true))
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(61, loop = true))
         assertTrue(sm.isPlaying(60))
         assertTrue(sm.isPlaying(61))
         sm.noteOff(60)
@@ -546,8 +546,8 @@ class MidiFileMappingTest {
     @Test
     fun resetClearsAll() {
         val sm = NoteToggleStateMachine()
-        sm.noteOn(60)
-        sm.noteOn(61)
+        sm.noteOn(60, loop = true)
+        sm.noteOn(61, loop = true)
         sm.reset()
         assertTrue(!sm.isPlaying(60))
         assertTrue(!sm.isPlaying(61))
@@ -559,19 +559,19 @@ class MidiFileMappingTest {
         // Note-off before any note-on should not crash
         sm.noteOff(60)
         // Now press → should still toggle ON (first event ever)
-        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(60))
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(60, loop = true))
         assertTrue(sm.isPlaying(60))
     }
 
     @Test
     fun stopPlayingResetsState() {
         val sm = NoteToggleStateMachine()
-        sm.noteOn(60)
+        sm.noteOn(60, loop = true)
         assertTrue(sm.isPlaying(60))
         sm.stopPlaying(60)
         assertTrue(!sm.isPlaying(60))
         // Next press should be TOGGLE_ON again (state reset)
-        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(60))
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(60, loop = true))
         assertTrue(sm.isPlaying(60))
     }
 
@@ -582,7 +582,7 @@ class MidiFileMappingTest {
         val count = 100
         for (i in 0 until count) {
             executor.submit {
-                sm.noteOn(60)
+                sm.noteOn(60, loop = true)
             }
         }
         executor.shutdown()

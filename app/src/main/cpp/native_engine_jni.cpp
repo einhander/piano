@@ -651,47 +651,6 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeSetOverdub(
     if (inst) inst->setOverdub(overdub != 0);
 }
 
-// MIDI export
-// NOTE: events ByteArray layout — RecordedMidiEvent is 16 bytes:
-//   [0..7]  int64_t  tick (little-endian)
-//   [8]     uint8_t  status
-//   [9]     uint8_t  data1
-//   [10]    uint8_t  data2
-//   [11]    uint8_t  trackId
-//   [12..15] padding (5 bytes) — do NOT rely on padding content
-JNIEXPORT jboolean JNICALL
-Java_com_piano_sequencer_NativeEngineBridge_nativeWriteMidiFile(
-    JNIEnv* env, jclass, jstring filePath, jbyteArray events,
-    jint eventCount, jint ppq, jint tempo) {
-    NativeEngine* inst = NativeEngine::getInstance();
-    if (inst == nullptr) return false;
-
-    const char* path = env->GetStringUTFChars(filePath, nullptr);
-    if (!path) return false;
-
-    jbyte* evtData = env->GetByteArrayElements(events, nullptr);
-    if (!evtData && eventCount > 0) {
-        env->ReleaseStringUTFChars(filePath, path);
-        return false;
-    }
-
-    // Convert jbyteArray to std::vector<RecordedMidiEvent>
-    std::vector<RecordedMidiEvent> recordedEvents;
-    if (eventCount > 0 && evtData) {
-        RecordedMidiEvent* eventsPtr = reinterpret_cast<RecordedMidiEvent*>(evtData);
-        recordedEvents.assign(eventsPtr, eventsPtr + eventCount);
-    }
-
-    jboolean result = inst->writeMidiFile(path, recordedEvents, static_cast<int>(ppq), static_cast<uint32_t>(tempo));
-
-    if (evtData) {
-        env->ReleaseByteArrayElements(events, evtData, JNI_ABORT);
-    }
-    env->ReleaseStringUTFChars(filePath, path);
-
-    return result;
-}
-
 // ── MIDI file slot playback ──
 // Worker-thread functions: call from a worker thread, never the main thread.
 // loadMidiFileSlot does blocking file I/O + parse (tens of ms).

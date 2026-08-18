@@ -619,14 +619,6 @@ std::vector<RecordedMidiEvent> NativeEngine::getRecordedEvents() {
     return mRecorder.getEvents(); // thread-safe copy (N2/N7)
 }
 
-// MIDI export
-bool NativeEngine::writeMidiFile(const char* filePath,
-                                   const std::vector<RecordedMidiEvent>& events,
-                                   int ppq, uint32_t tempo) {
-    MidiFileWriter writer;
-    return writer.write(filePath, events, 0, ppq, tempo);
-}
-
 // MIDI file slot playback
 int NativeEngine::loadMidiFileSlot(int slot, const char* filePath, float bpm, bool loop, int channel, bool startAfterLoad) {
     return mMidiFilePlayer.load(slot, filePath, bpm, loop, channel, startAfterLoad);

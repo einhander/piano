@@ -117,7 +117,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         val cell = s.findByNote(note)
         if (cell == null) return false // unmapped → caller forwards
 
-        val result = noteStateMachine.noteOn(note)
+        val result = noteStateMachine.noteOn(note, cell.loop)
         when (result) {
             NoteToggleStateMachine.Result.TOGGLE_ON -> triggerSlot(cell, SystemClock.uptimeMillis())
             NoteToggleStateMachine.Result.TOGGLE_OFF -> stopSlotForNote(note)
@@ -165,57 +165,64 @@ class MidiFileTriggerController private constructor(appContext: Context) {
 
                 if (isPlaying) {
                     svc.stopMidiFileSlot(slot)
-                    noteStateMachine.stopPlaying(cell.note)
+                    if (cell.loop) {
+                        // Loop mode: second press interrupts playback (toggle-off).
+                        noteStateMachine.stopPlaying(cell.note)
+                        return@synchronized
+                    }
+                    // Non-loop mode: retrigger restarts from the beginning. Flush
+                    // notes now; the C++ START handler resets tick/index when
+                    // !playing, and the FIFO command queue guarantees this STOP is
+                    // processed before the START below.
+                }
+                val loaded = loadedFilePerSlot[slot]
+                val alreadyLoaded = loaded != null && loaded.first == cell.filePath && loaded.second == cell.channel
+                if (alreadyLoaded) {
+                    val t4 = SystemClock.uptimeMillis()
+                    svc.startMidiFileSlot(slot)
+                    AppLogger.info("TRIG", "start slot=$slot total=${t4 - t0}ms")
                 } else {
-                    val loaded = loadedFilePerSlot[slot]
-                    val alreadyLoaded = loaded != null && loaded.first == cell.filePath && loaded.second == cell.channel
-                    if (alreadyLoaded) {
-                        val t4 = SystemClock.uptimeMillis()
-                        svc.startMidiFileSlot(slot)
-                        AppLogger.info("TRIG", "start slot=$slot total=${t4 - t0}ms")
-                    } else {
-                        val t2 = SystemClock.uptimeMillis()
-                        var loadResult = svc.loadMidiFileSlot(
+                    val t2 = SystemClock.uptimeMillis()
+                    var loadResult = svc.loadMidiFileSlot(
+                        slot, cell.filePath, cell.tempo, cell.loop,
+                        cell.channel, true
+                    )
+                    var retries = 0
+                    while (loadResult == -4 && retries < 5) {
+                        Thread.sleep(20)
+                        loadResult = svc.loadMidiFileSlot(
                             slot, cell.filePath, cell.tempo, cell.loop,
                             cell.channel, true
                         )
-                        var retries = 0
-                        while (loadResult == -4 && retries < 5) {
-                            Thread.sleep(20)
-                            loadResult = svc.loadMidiFileSlot(
-                                slot, cell.filePath, cell.tempo, cell.loop,
-                                cell.channel, true
-                            )
-                            retries++
-                        }
-                        val t3 = SystemClock.uptimeMillis()
-                        if (loadResult != 0) {
-                            val msg = when (loadResult) {
-                                -1 -> "Invalid file or engine"
-                                -2 -> "File too long (>8192 events)"
-                                -3 -> "Command queue full"
-                                -4 -> "Slot busy (after retries)"
-                                else -> "Error $loadResult"
-                            }
-                            AppLogger.info("TRIG", "load slot=$slot result=$loadResult ${t3 - t2}ms (t0+${t3 - t0}ms)")
-                            showToast(msg)
-                            return@synchronized
-                        }
-                        loadedFilePerSlot[slot] = cell.filePath to cell.channel
-                        AppLogger.info("TRIG", "loadAndStart slot=$slot load=${t3 - t2}ms total=${t3 - t0}ms")
+                        retries++
                     }
-                    // Tail: read the frame markers ~100ms later (start path only — on the stop
-                    // path the markers would be stale from a previous trigger).
-                    // Only the postDelayed CALL is inside the lock; the lambda runs later on
-                    // the main thread (it is a separate closure — it does not hold the lock).
-                    mainHandler.postDelayed({
-                        val s = service ?: return@postDelayed
-                        val lf = s.getMidiFileSlotLoadFrame(slot)
-                        val sf = s.getMidiFileSlotStartFrame(slot)
-                        val nf = s.getFramePosition()
-                        AppLogger.info("TRIG", "tail slot=$slot loadFrame=$lf startFrame=$sf nowFrame=$nf")
-                    }, 100)
+                    val t3 = SystemClock.uptimeMillis()
+                    if (loadResult != 0) {
+                        val msg = when (loadResult) {
+                            -1 -> "Invalid file or engine"
+                            -2 -> "File too long (>8192 events)"
+                            -3 -> "Command queue full"
+                            -4 -> "Slot busy (after retries)"
+                            else -> "Error $loadResult"
+                        }
+                        AppLogger.info("TRIG", "load slot=$slot result=$loadResult ${t3 - t2}ms (t0+${t3 - t0}ms)")
+                        showToast(msg)
+                        return@synchronized
+                    }
+                    loadedFilePerSlot[slot] = cell.filePath to cell.channel
+                    AppLogger.info("TRIG", "loadAndStart slot=$slot load=${t3 - t2}ms total=${t3 - t0}ms")
                 }
+                // Tail: read the frame markers ~100ms later (start path only — on the stop
+                // path the markers would be stale from a previous trigger).
+                // Only the postDelayed CALL is inside the lock; the lambda runs later on
+                // the main thread (it is a separate closure — it does not hold the lock).
+                mainHandler.postDelayed({
+                    val s = service ?: return@postDelayed
+                    val lf = s.getMidiFileSlotLoadFrame(slot)
+                    val sf = s.getMidiFileSlotStartFrame(slot)
+                    val nf = s.getFramePosition()
+                    AppLogger.info("TRIG", "tail slot=$slot loadFrame=$lf startFrame=$sf nowFrame=$nf")
+                }, 100)
             }
         }
     }
@@ -353,6 +360,15 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 // Live loop/tempo
                 svc.setMidiFileSlotLoop(slot, loop)
                 svc.setMidiFileSlotTempo(slot, tempo)
+
+                // Any setting change resets the toggle state. The panel persists the new
+                // cell (store.set) before this callback runs, so comparing against
+                // the store would read the new value. Unconditional reset is safe:
+                // clean state → no-op; stale isPlaying (e.g. after a natural
+                // non-looped end) → first press after the change is TOGGLE_ON;
+                // a playing loop slot + press → triggerSlot's loop branch stops
+                // it (correct toggle-off).
+                noteStateMachine.stopPlaying(note)
 
                 // Channel change → reload slot
                 if (channel != loadedFilePerSlot[slot]?.second) {

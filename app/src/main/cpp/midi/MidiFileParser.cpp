@@ -116,7 +116,7 @@ bool MidiFileParser::parse(const char* filePath,
     }
 
     // Sort events by tick
-    std::sort(outEvents.begin(), outEvents.end(),
+    std::stable_sort(outEvents.begin(), outEvents.end(),
               [](const RecordedMidiEvent& a, const RecordedMidiEvent& b) {
                   return a.tick < b.tick;
               });
@@ -144,7 +144,7 @@ bool MidiFileParser::parse(const char* filePath,
 
         while (p < trackDataEnd) {
             uint32_t delta = 0;
-            if (!readVlqFromBuffer(mFileData.data(), mFileData.size(), p, delta)) break;
+            if (!readVlqFromBuffer(mFileData.data(), trackDataEnd, p, delta)) break;
             absTick += static_cast<int64_t>(delta);
 
             if (p >= trackDataEnd) break;
@@ -161,11 +161,12 @@ bool MidiFileParser::parse(const char* filePath,
 
             if (byte == 0xFF) {
                 if (p + 1 >= trackDataEnd) break;
-                uint8_t metaType = mFileData[p + 1];
-                p += 2;
+                uint8_t metaType = mFileData[p];
+                p += 1;
 
                 uint32_t len = 0;
-                if (!readVlqFromBuffer(mFileData.data(), mFileData.size(), p, len)) break;
+                if (!readVlqFromBuffer(mFileData.data(), trackDataEnd, p, len)) break;
+                if (p + len > trackDataEnd) break;
 
                 if (metaType == 0x51 && len == 3) {
                     uint32_t microseconds = 0;
@@ -180,19 +181,23 @@ bool MidiFileParser::parse(const char* filePath,
                     p += len;
                 }
             } else if (byte >= 0x80 && byte < 0xF0) {
-                p++;
-                if (byte == 0x80 || byte == 0x90 || byte == 0xA0 ||
-                    byte == 0xB0 || byte == 0xE0) {
-                    p += (byte == 0xE0) ? 2 : 1;
-                }
+                p += ((byte & 0xF0) == 0xC0 || (byte & 0xF0) == 0xD0) ? 1 : 2;
             } else if (byte >= 0xF0) {
                 p++;
                 if (byte == 0xF0 || byte == 0xF7) {
                     uint32_t len = 0;
-                    if (!readVlqFromBuffer(mFileData.data(), mFileData.size(), p, len)) break;
+                    if (!readVlqFromBuffer(mFileData.data(), trackDataEnd, p, len)) break;
+                    if (p + len > trackDataEnd) break;
+                    p += len;
+                } else if (byte == 0xF1) {
+                    uint32_t len = 0;
+                    if (!readVlqFromBuffer(mFileData.data(), trackDataEnd, p, len)) break;
+                    if (p + len > trackDataEnd) break;
                     p += len;
                 } else if (byte == 0xF2) {
                     p += 2;
+                } else if (byte == 0xF3) {
+                    p += 1;
                 }
             }
         }
@@ -230,7 +235,7 @@ bool MidiFileParser::parse(const char* filePath,
 
         while (p < trackDataEnd) {
             uint32_t delta = 0;
-            if (!readVlqFromBuffer(mFileData.data(), mFileData.size(), p, delta)) break;
+            if (!readVlqFromBuffer(mFileData.data(), trackDataEnd, p, delta)) break;
             absTick += static_cast<int64_t>(delta);
 
             if (p >= trackDataEnd) break;
@@ -247,11 +252,12 @@ bool MidiFileParser::parse(const char* filePath,
 
             if (byte == 0xFF) {
                 if (p + 1 >= trackDataEnd) break;
-                uint8_t metaType = mFileData[p + 1];
-                p += 2;
+                uint8_t metaType = mFileData[p];
+                p += 1;
 
                 uint32_t len = 0;
-                if (!readVlqFromBuffer(mFileData.data(), mFileData.size(), p, len)) break;
+                if (!readVlqFromBuffer(mFileData.data(), trackDataEnd, p, len)) break;
+                if (p + len > trackDataEnd) break;
 
                 if (metaType == 0x58 && len >= 4) {
                     int numerator = static_cast<int>(mFileData[p]);
@@ -263,19 +269,23 @@ bool MidiFileParser::parse(const char* filePath,
                     p += len;
                 }
             } else if (byte >= 0x80 && byte < 0xF0) {
-                p++;
-                if (byte == 0x80 || byte == 0x90 || byte == 0xA0 ||
-                    byte == 0xB0 || byte == 0xE0) {
-                    p += (byte == 0xE0) ? 2 : 1;
-                }
+                p += ((byte & 0xF0) == 0xC0 || (byte & 0xF0) == 0xD0) ? 1 : 2;
             } else if (byte >= 0xF0) {
                 p++;
                 if (byte == 0xF0 || byte == 0xF7) {
                     uint32_t len = 0;
-                    if (!readVlqFromBuffer(mFileData.data(), mFileData.size(), p, len)) break;
+                    if (!readVlqFromBuffer(mFileData.data(), trackDataEnd, p, len)) break;
+                    if (p + len > trackDataEnd) break;
+                    p += len;
+                } else if (byte == 0xF1) {
+                    uint32_t len = 0;
+                    if (!readVlqFromBuffer(mFileData.data(), trackDataEnd, p, len)) break;
+                    if (p + len > trackDataEnd) break;
                     p += len;
                 } else if (byte == 0xF2) {
                     p += 2;
+                } else if (byte == 0xF3) {
+                    p += 1;
                 }
             }
         }
@@ -359,11 +369,12 @@ bool MidiFileParser::parseTrackEvents(std::vector<uint8_t>& trackData,
 
         if (byte == 0xFF) {
             if (p + 1 >= dataEnd) break;
-            uint8_t metaType = trackData[p + 1];
-            p += 2;
+            uint8_t metaType = trackData[p];
+            p += 1;
 
             uint32_t len = 0;
             if (!readVlqFromBuffer(trackData.data(), dataEnd, p, len)) break;
+            if (p + len > dataEnd) break;
 
             if (metaType == 0x2F) {
                 p += len;
@@ -372,12 +383,21 @@ bool MidiFileParser::parseTrackEvents(std::vector<uint8_t>& trackData,
 
             p += len;
         } else if (byte >= 0x80 && byte < 0xF0) {
+            uint8_t nData = ((byte & 0xF0) == 0xC0 || (byte & 0xF0) == 0xD0) ? 1 : 2;
+            if (p + nData > dataEnd) break;
             processEvent(byte, trackData, p, absTick, 0, outEvents);
+            p += nData;
         } else if (byte >= 0xF0) {
             p++;
             if (byte == 0xF0 || byte == 0xF7) {
                 uint32_t len = 0;
                 if (!readVlqFromBuffer(trackData.data(), dataEnd, p, len)) break;
+                if (p + len > dataEnd) break;
+                p += len;
+            } else if (byte == 0xF1) {
+                uint32_t len = 0;
+                if (!readVlqFromBuffer(trackData.data(), dataEnd, p, len)) break;
+                if (p + len > dataEnd) break;
                 p += len;
             } else if (byte == 0xF2) {
                 p += 2;
