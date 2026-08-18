@@ -145,47 +145,52 @@ class MainActivity : AppCompatActivity() {
             playbackService = binder.getService()
             serviceBound = true
 
-            // Initialize native engine singletons BEFORE any other native calls
-            if (!NativeEngineBridge.nativeInit()) {
-                AppLogger.error("MainActivity", "nativeInit() failed")
-                Toast.makeText(this@MainActivity, "Native init failed", Toast.LENGTH_LONG).show()
-                return
-            }
-            AppLogger.info("MainActivity", "Native engine initialized")
-
-            val openResult = playbackService?.openAudio()
-            if (openResult != 0) {
-                AppLogger.error("MainActivity", "Audio open failed: $openResult")
-                Toast.makeText(this@MainActivity, "Audio open failed: $openResult", Toast.LENGTH_SHORT).show()
-            } else {
-                AppLogger.info("MainActivity", "Audio opened successfully")
-            }
-            val initResult = playbackService?.initEngine(48000, 512)
-            if (initResult != true) {
-                AppLogger.error("MainActivity", "Engine init failed")
-                Toast.makeText(this@MainActivity, "Engine init failed", Toast.LENGTH_SHORT).show()
-            } else {
-                AppLogger.info("MainActivity", "Engine initialized (48000Hz, 512 buffer)")
-                // Restore persisted state (SF2, polyphony, master gain,
-                // channel programs) if the engine was recreated (process
-                // death). If the engine survived (activity recreation) the
-                // state is intact — the sfcount guard inside skips the restore.
-                restorePersistedState()
-                // Audio always-on: start after engine init + state restore
-                Thread({
-                    playbackService?.startAudio()
-                    val playing = playbackService?.isAudioPlaying() == true
-                    val underruns = playbackService?.getUnderrunCount() ?: 0
-                    runOnUiThread {
-                        if (isFinishing || isDestroyed) return@runOnUiThread
-                        statusText.text = if (playing) "Piano Sequencer — running (underruns: $underruns)"
-                                         else "Piano Sequencer — audio start failed"
-                    }
-                }, "AudioAutoStart").apply { isDaemon = true }.start()
-            }
-            refreshLog()
-            // Bind trigger controller (singleton)
+            // Bind trigger controller (singleton) — cheap ref storage, safe on main thread
             MidiFileTriggerController.get(this@MainActivity).bind(this@MainActivity, playbackService!!)
+            refreshLog()
+
+            // Move engine boot OFF the main thread
+            Thread({
+                val svc = playbackService ?: return@Thread
+                if (!NativeEngineBridge.nativeInit()) {
+                    AppLogger.error("MainActivity", "nativeInit() failed")
+                    runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this@MainActivity, "Native init failed", Toast.LENGTH_LONG).show() }
+                    return@Thread
+                }
+                AppLogger.info("MainActivity", "Native engine initialized")
+
+                val openResult = svc.openAudio()
+                if (openResult != 0) {
+                    AppLogger.error("MainActivity", "Audio open failed: $openResult")
+                    runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this@MainActivity, "Audio open failed: $openResult", Toast.LENGTH_SHORT).show() }
+                    return@Thread
+                }
+                AppLogger.info("MainActivity", "Audio opened successfully")
+
+                if (!svc.initEngine(48000, 512)) {
+                    AppLogger.error("MainActivity", "Engine init failed")
+                    runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this@MainActivity, "Engine init failed", Toast.LENGTH_SHORT).show() }
+                    return@Thread
+                }
+                AppLogger.info("MainActivity", "Engine initialized (48000Hz, 512 buffer)")
+
+                // Restore persisted state (SF2, polyphony, master gain, channel programs)
+                restorePersistedState(svc)
+
+                // Start audio
+                svc.startAudio()
+                val playing = svc.isAudioPlaying() == true
+                val underruns = svc.getUnderrunCount()
+
+                // Warm the MIDI file event cache for all assigned cells
+                MidiFileTriggerController.get(this@MainActivity).preloadAll()
+
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    statusText.text = if (playing) "Piano Sequencer — running (underruns: $underruns)"
+                                      else "Piano Sequencer — audio start failed"
+                }
+            }, "EngineBoot").apply { isDaemon = true }.start()
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -479,50 +484,48 @@ class MainActivity : AppCompatActivity() {
         }
 
     // Restore persisted state after engine (re)initialization.
+    // Runs inline on the EngineBoot worker thread (not main thread).
     // Covers process death: the engine is a fresh instance and everything
     // (SF2, polyphony, master gain, channel programs) is reset to defaults.
     // If the engine survived (activity recreation) its state is intact — the
-    // sfcount guard skips the restore. All JNI calls run on a worker thread.
-    private fun restorePersistedState() {
-        val svc = playbackService ?: return
-        Thread({
-            // A fresh engine always starts with no SoundFonts, so sfcount > 0
-            // means the engine survived (activity recreation) — state intact.
-            if (svc.getSoundFontCount() > 0) return@Thread
-            val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+    // sfcount guard skips the restore.
+    private fun restorePersistedState(svc: PlaybackService) {
+        // A fresh engine always starts with no SoundFonts, so sfcount > 0
+        // means the engine survived (activity recreation) — state intact.
+        if (svc.getSoundFontCount() > 0) return
+        val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
 
-            // 1. Reload the last SoundFont (file on disk, path in prefs).
-            var sf2Loaded = false
-            val path = prefs.getString("sf2_path", null)
-            if (path != null && File(path).exists()) {
-                val id = svc.loadSoundFont(path)
-                if (id >= 0) {
-                    sf2Loaded = true
-                    AppLogger.info("MainActivity", "Reloaded SF2: ${File(path).name} (synth ID: $id)")
-                } else {
-                    AppLogger.warn("MainActivity", "Failed to reload SF2: $path (error: $id)")
+        // 1. Reload the last SoundFont (file on disk, path in prefs).
+        var sf2Loaded = false
+        val path = prefs.getString("sf2_path", null)
+        if (path != null && File(path).exists()) {
+            val id = svc.loadSoundFont(path)
+            if (id >= 0) {
+                sf2Loaded = true
+                AppLogger.info("MainActivity", "Reloaded SF2: ${File(path).name} (synth ID: $id)")
+            } else {
+                AppLogger.warn("MainActivity", "Failed to reload SF2: $path (error: $id)")
+            }
+        }
+
+        // 2. Restore polyphony + master gain.
+        svc.setPolyphony(prefs.getInt("polyphony", 64))
+        svc.setMasterGain(prefs.getFloat("master_gain", 1.0f))
+
+        // 3. Restore the 16 channel programs (only meaningful with an SF2).
+        if (sf2Loaded) {
+            var restored = 0
+            for (ch in 0 until 16) {
+                val packed = prefs.getInt("chan_prog_$ch", -1)
+                if (packed >= 0 &&
+                    svc.setChannelProgram(ch, packed shr 8, packed and 0xFF)) {
+                    restored++
                 }
             }
-
-            // 2. Restore polyphony + master gain.
-            svc.setPolyphony(prefs.getInt("polyphony", 64))
-            svc.setMasterGain(prefs.getFloat("master_gain", 1.0f))
-
-            // 3. Restore the 16 channel programs (only meaningful with an SF2).
-            if (sf2Loaded) {
-                var restored = 0
-                for (ch in 0 until 16) {
-                    val packed = prefs.getInt("chan_prog_$ch", -1)
-                    if (packed >= 0 &&
-                        svc.setChannelProgram(ch, packed shr 8, packed and 0xFF)) {
-                        restored++
-                    }
-                }
-                if (restored > 0) {
-                    AppLogger.info("MainActivity", "Restored $restored channel program(s)")
-                }
+            if (restored > 0) {
+                AppLogger.info("MainActivity", "Restored $restored channel program(s)")
             }
-        }, "StateRestore").apply { isDaemon = true }.start()
+        }
     }
 
     private fun saveProject() {

@@ -52,8 +52,11 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         fun getPpq(): Int = this@PlaybackService.getPpq()
 
         // MIDI file slot playback
-        fun loadMidiFileSlot(slot: Int, filePath: String, tempo: Double, loop: Boolean, channel: Int): Int =
-            this@PlaybackService.loadMidiFileSlot(slot, filePath, tempo, loop, channel)
+        fun loadMidiFileSlot(slot: Int, filePath: String, tempo: Double, loop: Boolean, channel: Int, startAfterLoad: Boolean): Int =
+            this@PlaybackService.loadMidiFileSlot(slot, filePath, tempo, loop, channel, startAfterLoad)
+
+        fun preloadMidiFile(filePath: String): Int =
+            this@PlaybackService.preloadMidiFile(filePath)
 
         fun startMidiFileSlot(slot: Int): Int =
             this@PlaybackService.startMidiFileSlot(slot)
@@ -170,8 +173,11 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     // MIDI file slot playback
     // NOTE: call from a worker thread, never the main thread.
     // loadMidiFileSlot does blocking file I/O + parse (tens of ms).
-    fun loadMidiFileSlot(slot: Int, filePath: String, tempo: Double, loop: Boolean, channel: Int): Int =
-        NativeEngineBridge.nativeLoadMidiFileSlot(slot, filePath, tempo, loop, channel)
+    fun loadMidiFileSlot(slot: Int, filePath: String, tempo: Double, loop: Boolean, channel: Int, startAfterLoad: Boolean): Int =
+        NativeEngineBridge.nativeLoadMidiFileSlot(slot, filePath, tempo, loop, channel, startAfterLoad)
+
+    fun preloadMidiFile(filePath: String): Int =
+        NativeEngineBridge.nativePreloadMidiFile(filePath)
 
     fun startMidiFileSlot(slot: Int): Int =
         NativeEngineBridge.nativeStartMidiFileSlot(slot)

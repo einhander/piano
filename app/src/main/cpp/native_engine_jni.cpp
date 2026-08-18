@@ -698,7 +698,7 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeWriteMidiFile(
 
 JNIEXPORT jint JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeLoadMidiFileSlot(
-    JNIEnv* env, jclass, jint slot, jstring filePath, jdouble tempo, jboolean loop, jint channel) {
+    JNIEnv* env, jclass, jint slot, jstring filePath, jdouble tempo, jboolean loop, jint channel, jboolean startAfterLoad) {
     NativeEngine* inst = NativeEngine::getInstance();
     if (inst == nullptr) return -1;
 
@@ -710,8 +710,24 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeLoadMidiFileSlot(
         path,
         static_cast<float>(tempo),
         loop != 0,
-        static_cast<int>(channel)
+        static_cast<int>(channel),
+        startAfterLoad != 0
     );
+
+    env->ReleaseStringUTFChars(filePath, path);
+    return result;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativePreloadMidiFile(
+    JNIEnv* env, jclass, jstring filePath) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return -1;
+
+    const char* path = env->GetStringUTFChars(filePath, nullptr);
+    if (!path) return -1;
+
+    jint result = inst->preloadMidiFile(path);
 
     env->ReleaseStringUTFChars(filePath, path);
     return result;

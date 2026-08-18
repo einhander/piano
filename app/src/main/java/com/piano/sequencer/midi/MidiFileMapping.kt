@@ -57,6 +57,9 @@ class MidiFileMappingStore(private val prefs: SharedPreferences) {
         }
     }
 
+    /** Called outside the lock after a cell is saved. Set once by MidiFileTriggerController.bind. */
+    var onCellSaved: ((SequencerCell) -> Unit)? = null
+
     private val lock = Any()
     private var legacyLoad = false
 
@@ -153,6 +156,7 @@ class MidiFileMappingStore(private val prefs: SharedPreferences) {
             }
             save()
         }
+        if (cell.filePath.isNotEmpty()) onCellSaved?.invoke(cell)
     }
 
     /** Remove cell by id. */

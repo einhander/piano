@@ -110,7 +110,8 @@ object NativeEngineBridge {
     // MIDI file slot playback
     // NOTE: call from a worker thread, never the main thread.
     // nativeLoadMidiFileSlot does blocking file I/O + parse (tens of ms).
-    external fun nativeLoadMidiFileSlot(slot: Int, filePath: String, tempo: Double, loop: Boolean, channel: Int): Int
+    external fun nativeLoadMidiFileSlot(slot: Int, filePath: String, tempo: Double, loop: Boolean, channel: Int, startAfterLoad: Boolean): Int
+    external fun nativePreloadMidiFile(filePath: String): Int
     external fun nativeStartMidiFileSlot(slot: Int): Int
     external fun nativeStopMidiFileSlot(slot: Int): Int
     external fun nativeIsMidiFileSlotPlaying(slot: Int): Boolean

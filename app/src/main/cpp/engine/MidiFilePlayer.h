@@ -3,6 +3,9 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
+#include <vector>
+#include <string>
 
 // Pre-allocated event for a single slot
 struct MidiFileEvent {
@@ -32,6 +35,7 @@ struct MidiFileCmd {
     int32_t ppq;              // for LOAD: pulses per quarter
     float bpm;                // for LOAD/SET_TEMPO: playback BPM
     bool loop;                // for LOAD/SET_LOOP: loop flag
+    bool startAfterLoad;      // for LOAD: merge START into same callback
 };
 
 // Per-slot state — all pre-allocated in a static array
@@ -91,7 +95,11 @@ public:
     // Worker-thread: parse file and enqueue LOAD command.
     // Returns 0 on success, -1 (path invalid/no free slot), -2 (file too long),
     // -3 (command queue full), -4 (slot is active/playing — busy).
-    int load(int slot, const char* filePath, float bpm, bool loop, int channel = -1);
+    int load(int slot, const char* filePath, float bpm, bool loop, int channel = -1, bool startAfterLoad = false);
+
+    // Worker-thread: parse file into the cache without touching any slot.
+    // Returns 0 on success, -1 on any failure (missing file, parse error, >8192 events).
+    int preload(const char* filePath);
 
     // Audio-thread: process all active slots for this audio frame.
     // frameCount: number of audio frames in this callback.
@@ -138,6 +146,17 @@ public:
     int64_t getLoadConsumeFrame(int slot) const;
     int64_t getStartConsumeFrame(int slot) const;
 
+    // Cache entry: normalized events from a MIDI file (worker-thread only).
+    struct CacheEntry {
+        std::string path;
+        int64_t size = 0;
+        int64_t mtime = 0;
+        std::vector<MidiFileEvent> events;  // normalized (vel-0 note-on → 0x80), NO channel remap
+        int64_t lengthTicks = 0;
+        int32_t ppq = 960;
+        float initialTempo = 120.0f;
+    };
+
 private:
     // Flush all active notes for a slot (send Note Offs).
     // MUST be called with a valid liveMidiQueue pointer (audio-thread only).
@@ -160,4 +179,14 @@ private:
     std::atomic<uint32_t> mCmdWritePos{0};
     std::atomic<uint32_t> mCmdReadPos{0};
     std::atomic<int32_t> mCmdDroppedCount{0};
+
+    // Parsed-file cache (worker-thread-only, std::mutex protected).
+    // FIFO eviction, max 16 entries.
+    static constexpr int32_t kMaxCacheEntries = 16;
+    std::mutex mCacheMutex;
+    std::vector<CacheEntry> mCache;
+
+    // Helpers — caller must hold mCacheMutex.
+    bool findCacheEntry(const char* path, int64_t size, int64_t mtime) const;
+    void insertCacheEntry(CacheEntry&& entry);
 };
