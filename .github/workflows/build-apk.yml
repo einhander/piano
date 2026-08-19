@@ -1,0 +1,106 @@
+name: Build APK
+
+# Builds the debug + release APKs for the Piano Sequencer and runs the JVM
+# unit tests (MIDI parser regression suite).
+#
+# Toolchain (mirrors AGENTS.md): JDK 17, Android SDK (API 34),
+# NDK 26.1.10909125, CMake 3.22.1, Gradle 8.5 (via wrapper), C++17.
+#
+# Note: app/build.gradle.kts defines no release signingConfig, so the release
+# APK is UNSIGNED. It is uploaded as an artifact for inspection only — it
+# cannot be installed on a device until signing is configured. Add a
+# signingConfigs block to build.gradle.kts + repository secrets to enable
+# signed release builds / GitHub Releases.
+
+on:
+  push:
+    branches: [master, gh-wf]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          # FluidSynth + Oboe are git submodules required for the native build.
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          # Components installed on top of the default cmdline-tools.
+          # Versions mirror app/build.gradle.kts (compileSdk 34, NDK 26.1, CMake 3.22.1).
+          packages: |
+            platforms;android-34
+            build-tools;34.0.0
+            ndk;26.1.10909125
+            cmake;3.22.1
+
+      - name: Generate local.properties
+        # local.properties is gitignored — point Gradle at the SDK the action installed.
+        run: |
+          echo "sdk.dir=${ANDROID_HOME}" > local.properties
+          cat local.properties
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon --warning-mode none
+
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease --no-daemon --warning-mode none
+
+      - name: Run JVM unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --warning-mode none
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload release APK (unsigned)
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk-unsigned
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload unit test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: app/build/test-results/testDebugUnitTest/*.xml
+          if-no-files-found: warn
+          retention-days: 14
