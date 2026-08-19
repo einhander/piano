@@ -511,11 +511,17 @@ void MidiFilePlayer::firePendingEvents(int slot, MidiQueue* liveMidiQueue) {
 
         // Push event into live MIDI queue with tick timestamp
         // Convention: player events carry tick > 0; live keyboard events carry timestamp == 0
+        // B3: a tick-0 event can fire in a small first callback where
+        // (int64_t)currentTick == 0 (e.g. 16 frames @48kHz/120bpm/960ppq → 0.64
+        // ticks). Clamp the truncated value to 1 so file events are never seen
+        // as live events by the held-note bitmap update in
+        // FluidSynthEngine::processLiveMidi.
         MidiMessage msg;
         msg.status = evt.status;
         msg.data1 = evt.data1;
         msg.data2 = evt.data2;
-        msg.timestamp = static_cast<int64_t>(s->currentTick);
+        int64_t ts = static_cast<int64_t>(s->currentTick);
+        msg.timestamp = ts > 0 ? ts : 1;
         liveMidiQueue->push(msg);
 
         s->eventIndex++;
@@ -536,7 +542,15 @@ void MidiFilePlayer::flushActiveNotes(int slot, MidiQueue* liveMidiQueue) {
                 msg.status = 0x80 | static_cast<uint8_t>(ch);
                 msg.data1 = static_cast<uint8_t>(note);
                 msg.data2 = 0;
-                msg.timestamp = static_cast<int64_t>(s->currentTick);
+                // B3: file-origin events must carry timestamp > 0 (the live
+                // keyboard convention is == 0, which drives the held-note bitmap
+                // update in FluidSynthEngine::processLiveMidi). currentTick can be
+                // 0.0 here — e.g. STOP/FREE consumed in the same callback as the
+                // slot's LOAD/START, or an auto-stopped empty slot — and even a
+                // small positive tick truncates to 0 as int64 (e.g. 0.64), so
+                // clamp the truncated value to 1.
+                int64_t ts = static_cast<int64_t>(s->currentTick);
+                msg.timestamp = ts > 0 ? ts : 1;
                 liveMidiQueue->push(msg);
 
                 // Clear the bit

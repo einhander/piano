@@ -149,6 +149,14 @@ void FluidSynthEngine::panic() {
         fluid_synth_cc(mSynth, ch, 120, 0);  // All notes off
         fluid_synth_cc(mSynth, ch, 64, 0);   // Sustain off
     }
+
+    // B3: panic killed all voices — including the user's held keyboard notes.
+    // Clear the held-note state so a later file/flush note-off on the same
+    // (ch, note) cannot re-arm a note after an explicit panic (the user must
+    // re-press the key to re-trigger it). Both panic() and processLiveMidi
+    // touch the bitmap under mSynthMutex — serialized, no race.
+    std::memset(mHeldNotes, 0, sizeof(mHeldNotes));
+    std::memset(mHeldVel, 0, sizeof(mHeldVel));
 }
 
 void FluidSynthEngine::setPolyphony(int polyphony) {
@@ -271,6 +279,11 @@ void FluidSynthEngine::processLiveMidi(MidiQueue* queue) {
 }
 
 // Batch overload — processes a pre-drained vector (m7: no re-push needed)
+// B3: held-note tracking + re-arm.
+// Convention (see NativeEngine::midiThreadFunc): timestamp == 0 → live keyboard
+// event; timestamp > 0 → file/player event (MidiFilePlayer). The held-note bitmap
+// is updated for live events only; the re-arm check after any note-off is
+// source-agnostic. All state here is MIDI-thread-only (pre-allocated, no locks).
 void FluidSynthEngine::processLiveMidi(const std::vector<MidiMessage>& batch) {
     if (!mInitialized.load() || batch.empty()) return;
 
@@ -281,17 +294,33 @@ void FluidSynthEngine::processLiveMidi(const std::vector<MidiMessage>& batch) {
         uint8_t status = m.status;
         uint8_t type = status & 0xF0;
         uint8_t channel = status & 0x0F;
+        const bool isLive = (m.timestamp == 0);
+        bool noteOff = false;
 
         switch (type) {
             case 0x90: // Note On / Note Off
                 if (m.data2 > 0) {
                     fluid_synth_noteon(mSynth, channel, m.data1, m.data2);
+                    if (isLive) {
+                        mHeldNotes[channel][m.data1] = 1;
+                        mHeldVel[channel][m.data1] = m.data2;
+                    }
                 } else {
+                    // Clear the bitmap BEFORE the re-arm check: a keyboard's own
+                    // note-off must not re-arm itself.
+                    if (isLive) {
+                        mHeldNotes[channel][m.data1] = 0;
+                    }
                     fluid_synth_noteoff(mSynth, channel, m.data1);
+                    noteOff = true;
                 }
                 break;
             case 0x80: // Note Off
+                if (isLive) {
+                    mHeldNotes[channel][m.data1] = 0;
+                }
                 fluid_synth_noteoff(mSynth, channel, m.data1);
+                noteOff = true;
                 break;
             case 0xA0: // Polyphonic Aftertouch
                 fluid_synth_key_pressure(mSynth, channel, m.data1, m.data2);
@@ -313,6 +342,18 @@ void FluidSynthEngine::processLiveMidi(const std::vector<MidiMessage>& batch) {
                     fluid_synth_pitch_bend(mSynth, channel, value);
                 }
                 break;
+        }
+
+        // B3: re-arm (source-agnostic). Any note-off — keyboard, file normal
+        // note-off, or file flush — releases ALL voices for (ch, note), including
+        // the user's currently-held keyboard note on the shared channel. If the
+        // bitmap says the user is still holding it, re-issue the note-on at the
+        // last keyboard velocity. Direct synth call (not queued) → the MIDI
+        // recorder, which consumes the queue, never sees the re-arm artifact.
+        if (noteOff && mHeldNotes[channel][m.data1]) {
+            fluid_synth_noteon(mSynth, channel, m.data1, mHeldVel[channel][m.data1]);
+            mRearmCount++;
+            mLastRearmVel = mHeldVel[channel][m.data1];
         }
     }
 }

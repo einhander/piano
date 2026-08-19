@@ -90,6 +90,14 @@ public:
     // Returns false if unavailable; bank/program are 0 when the channel has no explicit program.
     bool getChannelProgram(int channel, int& bank, int& program) const;
 
+    // B3 test seam: number of re-arm note-ons issued by processLiveMidi.
+    // Written on the MIDI thread only; read by the host test (single-threaded).
+    int getRearmCount() const { return mRearmCount; }
+
+    // B3 test seam: velocity of the last re-arm note-on (-1 = never re-armed).
+    // Written on the MIDI thread only; read by the host test (single-threaded).
+    int getLastRearmVelocity() const { return mLastRearmVel; }
+
 private:
     fluid_synth_t* mSynth = nullptr;
     fluid_settings_t* mSettings = nullptr;
@@ -106,4 +114,18 @@ private:
     // settings thread during polyphony/gain/SF2 changes. Settings changes are infrequent,
     // so lock contention is minimal. Audio callback hold time is bounded by buffer size.
     mutable std::mutex mSynthMutex;
+
+    // B3: live-keyboard held-note tracking.
+    // MIDI-thread-only (processLiveMidi), pre-allocated, zeroed at construction, no locks.
+    // mHeldNotes[ch][note] == 1 → the user is currently holding that key;
+    // mHeldVel[ch][note] → last keyboard velocity for that (ch, note).
+    // A file/flush note-off for a held (ch, note) re-arms it with a direct
+    // fluid_synth_noteon (not queued → invisible to the MIDI recorder).
+    uint8_t mHeldNotes[16][128]{};
+    uint8_t mHeldVel[16][128]{};
+
+    // B3 test seam: re-arm note-on counter (MIDI-thread-only, plain int).
+    int mRearmCount = 0;
+    // B3 test seam: last re-armed velocity (MIDI-thread-only, plain int).
+    int mLastRearmVel = -1;
 };

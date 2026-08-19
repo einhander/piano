@@ -10,7 +10,11 @@ struct MidiMessage {
     uint8_t status;
     uint8_t data1;
     uint8_t data2;
-    int64_t timestamp;  // Frame position when message was received
+    // Convention (load-bearing): timestamp == 0 → live keyboard event;
+    // timestamp > 0 → file/player tick (MidiFilePlayer). Consumed by the
+    // held-note bitmap in FluidSynthEngine::processLiveMidi and the recorder
+    // in NativeEngine::midiThreadFunc (records only timestamp == 0).
+    int64_t timestamp;
 };
 
 class MidiQueue {
