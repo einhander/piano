@@ -317,11 +317,15 @@ class MidiFilesPanel @JvmOverloads constructor(
         val recordBtn = Button(context).apply {
             text = "Record"
             textSize = 10f
-            setPadding(4, 4, 4, 4)
+            // 8dp left: keep the record dot off the button's left edge
+            // (4px ≈ 1dp left it flush against the edge on device).
+            setPadding(dpToPx(8, context), 4, 4, 4)
             minWidth = 0
             layoutParams = btnParams().apply { setMargins(0, 0, marginEnd, 0) }
-            setCompoundDrawablesWithIntrinsicBounds(null, null, dot, null)
-            setCompoundDrawablePadding(dpToPx(4, context))
+            setCompoundDrawablesWithIntrinsicBounds(dot, null, null, null)
+            // 15dp dot↔"Record" gap (user spec: 30-50px on device ≈ 10-16dp;
+            // dp for density consistency, matches the 8dp left padding).
+            setCompoundDrawablePadding(dpToPx(15, context))
         }
 
         val exportBtn = Button(context).apply {
@@ -496,7 +500,7 @@ class MidiFilesPanel @JvmOverloads constructor(
                 recordingCellId != null -> {
                     btn.text = "Record"
                     val dot = context.getDrawable(R.drawable.ic_record_dot)
-                    btn.setCompoundDrawablesWithIntrinsicBounds(null, null, dot, null)
+                    btn.setCompoundDrawablesWithIntrinsicBounds(dot, null, null, null)
                     btn.background = cellRecordButtonDefaults[id]
                     btn.setTextColor(0xFF000000.toInt())
                     btn.isEnabled = false
@@ -504,7 +508,7 @@ class MidiFilesPanel @JvmOverloads constructor(
                 else -> {
                     btn.text = "Record"
                     val dot = context.getDrawable(R.drawable.ic_record_dot)
-                    btn.setCompoundDrawablesWithIntrinsicBounds(null, null, dot, null)
+                    btn.setCompoundDrawablesWithIntrinsicBounds(dot, null, null, null)
                     btn.background = cellRecordButtonDefaults[id]
                     btn.setTextColor(0xFF000000.toInt())
                     btn.isEnabled = true
