@@ -89,6 +89,11 @@ jobs:
             echo "  The PIANO_KEYSTORE_BASE64 secret may be truncated or corrupted."
           fi
           {
+            # Ensure gradle.properties ends with a newline before appending,
+            # otherwise the first property glues onto the last line.
+            if [ -f gradle.properties ] && [ "$(tail -c1 gradle.properties | od -An -c | tr -d ' ')" != "\\n" ]; then
+              printf '\n' >> gradle.properties
+            fi
             echo "piano.storePassword=${{ secrets.PIANO_KEYSTORE_PASSWORD }}"
             echo "piano.keyAlias=${{ secrets.PIANO_KEY_ALIAS }}"
             echo "piano.keyPassword=${{ secrets.PIANO_KEY_PASSWORD }}"
