@@ -45,8 +45,9 @@ public:
     // is fixed to the value passed to setBufferSize().
     void setAutoTune(bool autoTune);
     bool isAutoTune() const { return mAutoTune.load(); }
-    // Set a fixed buffer size in frames (worker thread). No-op when autoTune
-    // is on (the LatencyTuner owns the buffer size). Returns the effective size.
+    // Set a fixed buffer size in frames (worker thread). Sets the size on the
+    // stream; when autoTune is on the LatencyTuner may then GROW it (up to
+    // 8×burst) in response to underruns. Returns the effective size.
     int32_t setBufferSizeInFrames(int32_t frames);
 
 private:

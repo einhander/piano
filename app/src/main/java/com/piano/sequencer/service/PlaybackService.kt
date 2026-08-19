@@ -97,6 +97,11 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     }
 
     override fun onDestroy() {
+        // m6: stop the 1Hz [perf] logger daemon. It loops forever (Thread.sleep
+        // 1000ms); interrupt() makes the sleep throw InterruptedException, which
+        // the loop already handles by breaking out (see perfLoggerThread).
+        // Non-blocking — the daemon exits on its own; no join needed.
+        perfLoggerThread.interrupt()
         stopForeground(true)
         releaseAudioFocus()
         NativeEngineBridge.nativeStopAudio()

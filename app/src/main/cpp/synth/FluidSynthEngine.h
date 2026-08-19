@@ -245,6 +245,16 @@ private:
     std::string mLoadedSfPath;
     mutable std::mutex mSfPathMutex;
 
+    // M1: worker-side mutex serializing the SF2 slot-prep operations
+    // (loadSoundFont / unloadSoundFonts / reprepareAtNewRate). mPreparing +
+    // mActiveIndex serialize worker↔AUDIO, but two WORKER threads (e.g. EngineBoot
+    // restore + SettingsMain SF2 load, or PseqLoad project load + EngineBoot
+    // onOpen→reprepare) can both compute the same target slot and both
+    // fluid_synth_sfload the same fluid_synth_t concurrently. Worker-thread
+    // blocking is ALLOWED (it is not the audio thread). The audio thread NEVER
+    // takes this mutex (it only touches the synths via the lock-free path).
+    std::mutex mWorkerMutex;
+
     // [perf]: duration (ms) of the most recent fluid_synth_sfload (worker
     // thread writes, diagnostics read). 0 = no SF2 loaded yet.
     std::atomic<int64_t> mLastSf2LoadMs{0};

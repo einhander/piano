@@ -30,7 +30,9 @@ void MasterBus::setVolume(float volume) {
 // approximation: tanh(x) ≈ x*(1 + b*x^2)/(1 + c*x^2), fit so that the value
 // and slope match at x=0 and the value matches at x=1 and x=2. Measured max
 // error ~0.006 at x=2.5 (≤0.001 for |x|≤1.5, the actual input range after the
-// ×1.5 clip factor). The result is clamped to [-1, 1] so it can never clip.
+// ×1.5 clip factor). The result is clamped to [-1, 1] BEFORE the ×normalize
+// gain (1.10479 = 1/tanh(1.5)), so the final output can reach ~1.1048 (0.87
+// dB); the HAL hard-clips at ±1.0.
 static inline float fastTanh(float x) {
     float x2 = x * x;
     float r = x * (1.0f + 0.0582f * x2) / (1.0f + 0.3895f * x2);

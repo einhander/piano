@@ -6,7 +6,6 @@
 #include <thread>
 #include <vector>
 #include <mutex>
-#include <condition_variable>
 #include <chrono>
 
 #include <oboe/Oboe.h>
@@ -280,6 +279,16 @@ private:
     // Pre-allocated synth render buffer (avoids stack allocation in audio callback)
     static constexpr int32_t kMaxSynthFrames = 2048;
     float mSynthBuffer[kMaxSynthFrames * 2];  // stereo float
+
+    // M2: max frames the mixer/master buffers + the safeFrames clamp support.
+    // Set in init() to max(kMaxSynthFrames, Oboe buffer capacity) so a large
+    // Oboe buffer (the LatencyTuner grows toward the AAudio capacity, ≈4×burst;
+    // a 20ms burst → 3840) is fully rendered instead of clamped to 2048 (which
+    // caused the choppiness: 2048 frames of audio + a silence tail per callback).
+    // The tail-zero in onAudioFrame is kept only as a safety net for the edge
+    // case of a mid-session reopen at a LARGER capacity (silence tail is then
+    // acceptable; the buffers are not grown at runtime).
+    int mMaxSynthFrames = kMaxSynthFrames;
 
     // Count-in metronome state
     std::atomic<bool> mCountingIn{false};

@@ -150,9 +150,12 @@ Low-latency audio output. Exclusive mode with shared fallback.
   re-prepared at the new rate** (the SF2 is reloaded into it), then swapped at
   the callback boundary.
 - **`oboe::LatencyTuner`** auto-tunes the buffer between **2×burst and 8×burst**
-  based on underruns; `tune()` is called in the data callback (verified
-  mutex-free). The user can override with a **fixed buffer size** (128–2048
-  frames), which disables auto-tune.
+  based on underruns; `tune()` is called in the data callback. It is **lock-free
+  in the LatencyTuner class**; the underlying AAudio calls it makes
+  (`getXRunCount`, `setBufferSizeInFrames`) take an **uncontended `shared_lock`
+  in steady state** (a concurrent `stop()`/`close()` can briefly block). The
+  user can override with a **fixed buffer size** (128–2048 frames), which
+  disables auto-tune.
 
 ### Performance settings
 User-tunable synth/output settings (Settings screen), all applied by the audio

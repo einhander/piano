@@ -100,17 +100,24 @@ Additionally, disable all tracked active notes in the engine.
 
 Android's Adaptive Performance (`APerformanceHintManager` / Oboe's
 `setPerformanceHintEnabled` + `reportWorkload`) is **deliberately not used**.
-Oboe 1.10.2 wraps *every* user data callback with
+`setPerformanceHintEnabled(true)` is **never called in this project**, so the
+audio callback is clean (the `begin/endPerformanceHintInCallback` wrappers are
+no-ops when ADPF is disabled).
+
+If it WERE enabled, Oboe 1.10.2 wraps *every* user data callback with
 `begin/endPerformanceHintInCallback`, which:
 
 - takes a **mutex**,
 - on first use does **`dlopen("libandroid.so")` + a binder call + `LOGW/LOGD`**,
 - on *every* call issues a **HAL call** (`reportActualDuration`).
 
-That puts a mutex + dlopen + binder + log + HAL call **into the audio callback**
-— a hard violation of the FORBIDDEN list above. The RT-safe alternative is
-**`oboe::LatencyTuner`**: it auto-tunes the buffer size (2×–8× burst) and its
-`tune()` is mutex-free, so it is safe to call in the data callback.
+That would put a mutex + dlopen + binder + log + HAL call **into the audio
+callback** — a hard violation of the FORBIDDEN list above. The RT-safe
+alternative is **`oboe::LatencyTuner`**: it auto-tunes the buffer size
+(2×–8× burst). It is **lock-free in the LatencyTuner class**; the underlying
+AAudio calls it makes (`getXRunCount`, `setBufferSizeInFrames`) take an
+**uncontended `shared_lock` in steady state** (a concurrent `stop()`/`close()`
+can briefly block), so it is safe to call in the data callback.
 
 ## JNI Safety
 

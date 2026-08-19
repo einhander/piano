@@ -57,12 +57,26 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     mLaunchQuantizer.init(&mTransport);
 
     // Initialize Mixer and MasterBus
-    // Size to kMaxSynthFrames (the safeFrames clamp in onAudioFrame), not the
-    // hardcoded init bufferSize — the Oboe burst can exceed it (e.g. 960 in
-    // shared mode), which would overflow the track/master buffers in the RT
-    // callback.
-    mMixer.init(16, kMaxSynthFrames);
-    mMasterBus.init(kMaxSynthFrames);
+    // M2: size to the larger of kMaxSynthFrames and the ACTUAL Oboe buffer
+    // capacity. The LatencyTuner grows the buffer toward the AAudio capacity
+    // (≈4×burst); on weak phones with 10–20ms bursts that capacity exceeds
+    // kMaxSynthFrames (2048) — e.g. a 20ms burst → 3840. Sizing to 2048 would
+    // clamp the render to 2048 frames + a silence tail per callback (the
+    // choppiness we are fixing). The capacity is valid here: openAudio()
+    // (OboeOutput::open) runs before initEngine() (see MainActivity), so the
+    // stream is already open. If it is not yet available (returns 0), fall back
+    // to kMaxSynthFrames. mMaxSynthFrames also drives the safeFrames clamp in
+    // onAudioFrame, so the full buffer is rendered (not just 2048).
+    mMaxSynthFrames = kMaxSynthFrames;
+    OboeOutput* oboe = OboeOutput::getInstance();
+    if (oboe) {
+        int cap = oboe->getBufferCapacityInFrames();
+        if (cap > mMaxSynthFrames) {
+            mMaxSynthFrames = cap;
+        }
+    }
+    mMixer.init(16, mMaxSynthFrames);
+    mMasterBus.init(mMaxSynthFrames);
 
     // Route FluidSynth output through Mixer track 0
     mMixer.setVolume(0, 1.0f);
@@ -405,7 +419,12 @@ void NativeEngine::enqueueMidiMessage(uint8_t status, uint8_t data1, uint8_t dat
 // thread polls mLiveMidiQueue for recording only.
 
 void NativeEngine::onAudioFrame(float* output, int numFrames) {
-    int safeFrames = (numFrames > kMaxSynthFrames) ? kMaxSynthFrames : numFrames;
+    // M2: clamp to mMaxSynthFrames (max(kMaxSynthFrames, Oboe capacity), set in
+    // init()), NOT the fixed kMaxSynthFrames — this renders the full Oboe buffer
+    // (e.g. 3840) instead of clamping to 2048 + a silence tail (the choppiness).
+    // The tail-zero below is a safety net for a mid-session reopen at a LARGER
+    // capacity (numFrames > mMaxSynthFrames → silence tail, acceptable).
+    int safeFrames = (numFrames > mMaxSynthFrames) ? mMaxSynthFrames : numFrames;
     int64_t framePos = mTransport.framePosition.load(std::memory_order_acquire);
 
     // Process MIDI file player (real-time safe: pre-allocated slots, lock-free
@@ -478,12 +497,13 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     // Process through MasterBus (volume + soft clipper)
     mMasterBus.process(output, safeFrames);
 
-    // M4: when the Oboe buffer is larger than the synth/mixer buffers
-    // (kMaxSynthFrames=2048), the tail of the output buffer is NOT written by
-    // render/mix/process — it keeps the PREVIOUS callback's data (stale/ghost
-    // audio). This is now reachable: the LatencyTuner grows the buffer up to
-    // 8×burst (e.g. 20ms burst @48k = 960 → 8× = 7680 > 2048) precisely when
-    // the device is struggling. Zero the tail so it plays silence.
+    // M4/M2: safety net. Normally safeFrames == numFrames (mMaxSynthFrames is sized
+    // to the Oboe capacity in init()), so this branch is not taken. It only
+    // fires if the stream is REOPENED mid-session at a LARGER capacity than the
+    // buffers were sized for (numFrames > mMaxSynthFrames) — then the tail is
+    // not written by render/mix/process and would keep the PREVIOUS callback's
+    // data (stale/ghost audio). Zero it so it plays silence. (The buffers are
+    // not grown at runtime — a silence tail in this edge case is acceptable.)
     // (Output is interleaved stereo = 2 channels.)
     if (numFrames > safeFrames) {
         std::memset(output + safeFrames * 2, 0,

@@ -29,12 +29,28 @@ FluidSynthEngine::~FluidSynthEngine() {
 }
 
 bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
+    // m8: free whatever was created if a later slot fails to allocate
+    // (previously slot 0's settings/synth leaked when slot 1's failed).
+    auto cleanup = [this]() {
+        for (int j = 0; j < kSynthSlots; j++) {
+            if (mSynth[j]) {
+                delete_fluid_synth(mSynth[j]);
+                mSynth[j] = nullptr;
+            }
+            if (mSettings[j]) {
+                delete_fluid_settings(mSettings[j]);
+                mSettings[j] = nullptr;
+            }
+        }
+    };
+
     // Create BOTH synth slots with the given sample rate. The audio thread
     // renders from mSynth[mActiveIndex]; the worker prepares the other slot for
     // SF2 changes (double-buffered swap).
     for (int i = 0; i < kSynthSlots; i++) {
         mSettings[i] = new_fluid_settings();
         if (!mSettings[i]) {
+            cleanup();
             return false;
         }
         fluid_settings_setnum(mSettings[i], "synth.sample-rate", sampleRate);
@@ -43,11 +59,20 @@ bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
 
         mSynth[i] = new_fluid_synth(mSettings[i]);
         if (!mSynth[i]) {
+            cleanup();
             return false;
         }
 
         // Disable FluidSynth audio driver — we render PCM ourselves via write_float
         fluid_settings_setstr(mSettings[i], "audio.driver", "none");
+
+        // m4: pre-size the voice pool to the UI maximum (256) on the worker
+        // thread so a runtime polyphony change (≤ 256) in the audio callback
+        // never allocates (fluid_synth_set_polyphony only grows the pool when the
+        // new value exceeds the current one). The user's setting (mPolyphony) is
+        // the ACTIVE cap, applied by applyDesiredState below (a decrease → no
+        // allocation).
+        fluid_synth_set_polyphony(mSynth[i], 256);
 
         // Apply the default (desired) settings to both slots so they start in
         // sync. The audio thread keeps them in sync on later changes (and the
@@ -178,6 +203,9 @@ int FluidSynthEngine::prepareInactiveSlot(const char* newSfPath) {
 // pitch off by the rate ratio.
 void FluidSynthEngine::reprepareAtNewRate(int newRate, const char* sfPath) {
     if (!mInitialized.load()) return;
+    // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
+    // Worker-thread blocking is allowed; the audio thread never takes this lock.
+    std::lock_guard<std::mutex> workerLock(mWorkerMutex);
     int target = 1 - mActiveIndex.load(std::memory_order_acquire);
 
     // M2: mark the target slot as "preparing" so the audio thread's
@@ -205,6 +233,10 @@ void FluidSynthEngine::reprepareAtNewRate(int newRate, const char* sfPath) {
         if (mSynth[target]) {
             // Disable FluidSynth audio driver — we render PCM ourselves.
             fluid_settings_setstr(mSettings[target], "audio.driver", "none");
+            // m4: pre-size the voice pool to the UI max (256) so runtime
+            // polyphony changes (≤ 256) never allocate in the audio callback.
+            // The user's setting (mPolyphony) is the active cap (applyDesiredState).
+            fluid_synth_set_polyphony(mSynth[target], 256);
             // Load the current SF2 (if any) into the new synth.
             // [perf]: measure the reload duration for the one-time [perf] dump.
             if (sfPath) {
@@ -239,6 +271,9 @@ int FluidSynthEngine::loadSoundFont(const char* filePath) {
     if (!mInitialized.load()) {
         return -1;
     }
+    // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
+    // Worker-thread blocking is allowed; the audio thread never takes this lock.
+    std::lock_guard<std::mutex> workerLock(mWorkerMutex);
     int sfId = prepareInactiveSlot(filePath);
     if (sfId >= 0) {
         { std::lock_guard<std::mutex> lock(mSfPathMutex); mLoadedSfPath = filePath; }
@@ -248,6 +283,8 @@ int FluidSynthEngine::loadSoundFont(const char* filePath) {
 
 void FluidSynthEngine::unloadSoundFonts() {
     if (!mInitialized.load()) return;
+    // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
+    std::lock_guard<std::mutex> workerLock(mWorkerMutex);
     { std::lock_guard<std::mutex> lock(mSfPathMutex); mLoadedSfPath.clear(); }
     // Unload all SF2s from the inactive slot and flip to it (active = no SF2).
     prepareInactiveSlot(nullptr);

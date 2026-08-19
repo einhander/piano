@@ -27,12 +27,18 @@ static bool cmdQueuePush(MidiFileCmd* buffer, std::atomic<uint32_t>* writePos,
             dropped->fetch_add(1, std::memory_order_relaxed);
             return false; // drop on overflow
         }
+        // M3: write the data BEFORE the release store (the CAS) so the data
+        // write is happens-before the publish. On weakly-ordered CPUs (ARM),
+        // the audio consumer (acquire-load of writePos) might otherwise see the
+        // new position but read stale command data. Same fix as MidiQueue.cpp /
+        // SynthCmdQueue.cpp. If the CAS fails (another producer claimed the slot
+        // first), that producer overwrites our write — our push failed, so fine.
+        buffer[w & (MidiFilePlayer::kCmdQueueCapacity - 1)] = cmd;
         uint32_t expected = w;
         if (!writePos->compare_exchange_weak(expected, w + 1,
                 std::memory_order_release, std::memory_order_relaxed)) {
             continue;
         }
-        buffer[w & (MidiFilePlayer::kCmdQueueCapacity - 1)] = cmd;
         return true;
     }
 }
