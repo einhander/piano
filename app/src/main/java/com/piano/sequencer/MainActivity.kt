@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
 import android.provider.OpenableColumns
+import android.text.util.Linkify
 import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
@@ -835,7 +836,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * "About" entry point: app info (name + version) and the app log
+     * "About" entry point: app info (name + version + author + repo link)
+     * and the app log
      * (viewer, copy, clear, log-folder picker). The log views are rebuilt
      * on each open; tvLog/tvLogFolder are nulled on dismiss.
      */
@@ -862,6 +864,19 @@ class MainActivity : AppCompatActivity() {
                 textSize = 14f
             })
         }
+
+        card.addView(TextView(this).apply {
+            text = "Andrey Spitsyn"
+            textSize = 14f
+            setPadding(0, 8, 0, 0)
+        })
+
+        card.addView(TextView(this).apply {
+            text = "https://github.com/einhander/piano"
+            textSize = 14f
+            setPadding(0, 8, 0, 0)
+            Linkify.addLinks(this, Linkify.WEB_URLS)
+        })
 
         card.addView(TextView(this).apply {
             text = "App Log"
