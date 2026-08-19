@@ -67,13 +67,24 @@ jobs:
           PIANO_KEYSTORE_BASE64: ${{ secrets.PIANO_KEYSTORE_BASE64 }}
         run: |
           set -e
-          # Strip any accidental whitespace/newlines the secret editor may have
-          # introduced, then decode. --ignore-garbage tolerates stray chars.
-          printf '%s' "$PIANO_KEYSTORE_BASE64" | tr -d ' \r\n\t' | base64 -d > app/piano-release.jks
+          # Strip accidental whitespace/newlines from the secret.
+          clean="$(printf '%s' "$PIANO_KEYSTORE_BASE64" | tr -d ' \r\n\t')"
+          echo "Secret length (cleaned): ${#clean} chars"
+          # Report any non-base64 characters (A-Za-z0-9+/=).
+          bad="$(printf '%s' "$clean" | tr -d 'A-Za-z0-9+/=')"
+          if [ -n "$bad" ]; then
+            echo "::warning::Non-base64 characters found in secret (showing as hex):"
+            printf '%s' "$bad" | od -An -tx1 | sed 's/^/  /'
+          fi
+          # Decode. -i ignores non-alphabet chars as a safety net.
+          printf '%s' "$clean" | base64 -di > app/piano-release.jks || {
+            echo "::error::base64 decode failed. The secret is not valid base64."
+            exit 1
+          }
+          echo "Decoded size: $(wc -c < app/piano-release.jks) bytes"
           # Sanity-check the decoded file looks like a keystore (PKCS12/JKS magic).
           if ! head -c4 app/piano-release.jks | od -An -tx1 | grep -qiE 'fe ed|30 82'; then
             echo "::warning::Decoded keystore does not start with a JKS/PKCS12 magic (fe ed.. / 30 82..)."
-            echo "  decoded size: $(wc -c < app/piano-release.jks) bytes"
             echo "  First bytes: $(head -c8 app/piano-release.jks | od -An -tx1)"
             echo "  The PIANO_KEYSTORE_BASE64 secret may be truncated or corrupted."
           fi
