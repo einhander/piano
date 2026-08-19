@@ -6,11 +6,10 @@ name: Build APK
 # Toolchain (mirrors AGENTS.md): JDK 17, Android SDK (API 34),
 # NDK 26.1.10909125, CMake 3.22.1, Gradle 8.5 (via wrapper), C++17.
 #
-# Note: app/build.gradle.kts defines no release signingConfig, so the release
-# APK is UNSIGNED. It is uploaded as an artifact for inspection only — it
-# cannot be installed on a device until signing is configured. Add a
-# signingConfigs block to build.gradle.kts + repository secrets to enable
-# signed release builds / GitHub Releases.
+# Release signing: when the PIANO_KEYSTORE_BASE64 secret is present, the
+# keystore is materialized from base64 and credentials are injected into
+# gradle.properties, so app/build.gradle.kts produces a signed app-release.apk.
+# Without the secret the release APK stays unsigned (for inspection only).
 
 on:
   push:
@@ -59,6 +58,23 @@ jobs:
             "ndk;26.1.10909125" \
             "cmake;3.22.1" | sed -n '1p;/installed/p'
 
+      - name: Materialize release keystore (if secret present)
+        # Decode the base64 keystore into app/piano-release.jks and write the
+        # signing credentials to gradle.properties (read by build.gradle.kts).
+        # No-op without the secret → release build stays unsigned.
+        if: env.PIANO_KEYSTORE_BASE64 != ''
+        env:
+          PIANO_KEYSTORE_BASE64: ${{ secrets.PIANO_KEYSTORE_BASE64 }}
+        run: |
+          set -e
+          echo "$PIANO_KEYSTORE_BASE64" | base64 -d > app/piano-release.jks
+          {
+            echo "piano.storePassword=${{ secrets.PIANO_KEYSTORE_PASSWORD }}"
+            echo "piano.keyAlias=${{ secrets.PIANO_KEY_ALIAS }}"
+            echo "piano.keyPassword=${{ secrets.PIANO_KEY_PASSWORD }}"
+          } >> gradle.properties
+          echo "Keystore materialized:"; ls -la app/piano-release.jks
+
       - name: Cache Gradle dependencies
         uses: actions/cache@v4
         with:
@@ -79,9 +95,16 @@ jobs:
         # lintVitalRelease fails the build because targetSdk=29 triggers the
         # ExpiredTargetSdkVersion lint check (Google Play wants >= 33). Bumping
         # targetSdk is a product decision, not a CI concern; disable the vital
-        # lint gate here so the unsigned release APK is still produced as an
-        # artifact for inspection.
+        # lint gate here so the release APK is still produced (signed when the
+        # keystore secret is present, unsigned otherwise).
         run: ./gradlew :app:assembleRelease -x lintVitalRelease --no-daemon --warning-mode none
+
+      - name: Verify release signature
+        # Report whether the release APK ended up signed.
+        run: |
+          apk=$(ls app/build/outputs/apk/release/app-release*.apk 2>/dev/null | head -1)
+          echo "APK: $apk"
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$apk" 2>&1 | sed 's/^/  /' || echo "  (unsigned / apksigner not available)"
 
       - name: Run JVM unit tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon --warning-mode none
@@ -94,12 +117,12 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload release APK (unsigned)
+      - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-apk-unsigned
-          path: app/build/outputs/apk/release/*.apk
-          if-no-files-found: warn
+          name: app-release-apk
+          path: app/build/outputs/apk/release/app-release*.apk
+          if-no-files-found: error
           retention-days: 30
 
       - name: Upload unit test results
