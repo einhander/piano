@@ -43,11 +43,13 @@ jobs:
 
       - name: Set up Android SDK components
         # ubuntu-latest ships with the Android SDK + sdkmanager preinstalled at
-        # ANDROID_HOME. Install the exact components app/build.gradle.kts requires
-        # (compileSdk 34, NDK 26.1, CMake 3.22.1). Done via direct sdkmanager calls
-        # because setup-android@v3 mangles multi-line `packages:` input.
+        # ANDROID_HOME, but sdkmanager is not on PATH. Install the exact
+        # components app/build.gradle.kts requires (compileSdk 34, NDK 26.1,
+        # CMake 3.22.1). Direct sdkmanager calls are used because
+        # setup-android@v3 mangles multi-line `packages:` input.
         run: |
           set -e
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/cmdline-tools/current/bin:$PATH"
           echo "sdk.dir=${ANDROID_HOME}" > local.properties
           cat local.properties
           yes | sdkmanager --licenses > /dev/null
