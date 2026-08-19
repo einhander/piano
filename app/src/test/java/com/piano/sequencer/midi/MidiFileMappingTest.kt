@@ -85,6 +85,47 @@ class MidiFileMappingTest {
         }
     }
 
+    /**
+     * Shared in-memory prefs stub (B4 tests). Unlike the inline anonymous stubs
+     * above, the backing map is exposed so two store instances can share it
+     * (round-trip tests) or be pre-seeded (backward-compat tests).
+     */
+    private class SharedPrefsStub(private val data: MutableMap<String?, Any?>) : android.content.SharedPreferences {
+        private val listeners = mutableListOf<android.content.SharedPreferences.OnSharedPreferenceChangeListener>()
+
+        override fun getAll(): Map<String, Any?> = data.filterKeys { it != null }.mapKeys { it.key!! }.toMap()
+        override fun getString(key: String, default: String?): String? = data[key] as? String ?: default
+        override fun getStringSet(key: String, default: Set<String>?): Set<String>? = data[key] as? Set<String> ?: default
+        override fun getInt(key: String, default: Int): Int = (data[key] as? Number)?.toInt() ?: default
+        override fun getLong(key: String, default: Long): Long = (data[key] as? Number)?.toLong() ?: default
+        override fun getFloat(key: String, default: Float): Float = (data[key] as? Number)?.toFloat() ?: default
+        override fun getBoolean(key: String, default: Boolean): Boolean = data[key] as? Boolean ?: default
+        override fun contains(key: String): Boolean = data.containsKey(key)
+        override fun edit(): android.content.SharedPreferences.Editor = Editor(this)
+        override fun registerOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.add(l) }
+        override fun unregisterOnSharedPreferenceChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) { listeners.remove(l) }
+
+        private inner class Editor(private val parent: SharedPrefsStub) : android.content.SharedPreferences.Editor {
+            private val edits = mutableMapOf<String?, Any?>()
+            private val removedKeys = mutableSetOf<String?>()
+            override fun putString(key: String?, value: String?): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+            override fun putStringSet(key: String?, values: Set<String>?): android.content.SharedPreferences.Editor { edits[key] = values; return this }
+            override fun putInt(key: String?, value: Int): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+            override fun putLong(key: String?, value: Long): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+            override fun putFloat(key: String?, value: Float): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+            override fun putBoolean(key: String?, value: Boolean): android.content.SharedPreferences.Editor { edits[key] = value; return this }
+            override fun remove(key: String?): android.content.SharedPreferences.Editor { removedKeys.add(key); return this }
+            override fun clear(): android.content.SharedPreferences.Editor { edits["__CLEAR__"] = true; return this }
+            override fun commit(): Boolean {
+                if (edits.containsKey("__CLEAR__")) { parent.data.clear(); removedKeys.clear() }
+                else { for ((k, v) in edits) parent.data[k] = v; for (k in removedKeys) parent.data.remove(k) }
+                for (l in listeners) l.onSharedPreferenceChanged(parent, null)
+                edits.clear(); removedKeys.clear(); return true
+            }
+            override fun apply() { commit() }
+        }
+    }
+
     // ── Helper ──
 
     private fun createStore(): MidiFileMappingStore {
@@ -592,37 +633,36 @@ class MidiFileMappingTest {
         assertTrue(sm.isPlaying(60))
     }
 
-    // ── MidiFileLearnState tests (M1: real state machine) ──
+    // ── MidiFileLearnState tests (M1: real state machine; B4: LearnedEvent) ──
 
     @Test
     fun learnStateStartSetsLearning() {
         MidiFileLearnState.cancel() // ensure clean state
         assertEquals(MidiFileLearnState.State.IDLE, MidiFileLearnState.getState())
-        var capturedNote = -1
-        MidiFileLearnState.startLearning { capturedNote = it }
+        MidiFileLearnState.startLearning { }
         assertEquals(MidiFileLearnState.State.LEARNING, MidiFileLearnState.getState())
     }
 
     @Test
     fun captureNoteResetsToIdle() {
         MidiFileLearnState.cancel()
-        var capturedNote = -1
-        MidiFileLearnState.startLearning { capturedNote = it }
+        var captured: LearnedEvent? = null
+        MidiFileLearnState.startLearning { captured = it }
         MidiFileLearnState.captureNote(60)
-        assertEquals(60, capturedNote)
+        assertEquals(LearnedEvent.Note(60), captured)
         assertEquals(MidiFileLearnState.State.IDLE, MidiFileLearnState.getState())
     }
 
     @Test
     fun captureNoteWhileIdleDoesNothing() {
         MidiFileLearnState.cancel()
-        var capturedNote = -1
-        MidiFileLearnState.startLearning { capturedNote = it }
+        var captured: LearnedEvent? = null
+        MidiFileLearnState.startLearning { captured = it }
         // Capture while learning
         MidiFileLearnState.captureNote(60)
         // Now in IDLE — capture again should do nothing
         MidiFileLearnState.captureNote(61)
-        assertEquals(60, capturedNote) // should still be 60, not 61
+        assertEquals(LearnedEvent.Note(60), captured) // should still be 60, not 61
     }
 
     @Test
@@ -637,15 +677,322 @@ class MidiFileMappingTest {
     @Test
     fun reLearnCancelsPrevious() {
         MidiFileLearnState.cancel()
-        var captured1 = -1
-        var captured2 = -1
+        var captured1: LearnedEvent? = null
+        var captured2: LearnedEvent? = null
         MidiFileLearnState.startLearning { captured1 = it }
         // Start a new learn — should cancel the previous callback
         MidiFileLearnState.startLearning { captured2 = it }
         // Capture with the new callback
         MidiFileLearnState.captureNote(60)
-        assertEquals(-1, captured1) // first callback should not have been invoked
-        assertEquals(60, captured2) // second callback should have been invoked
+        assertNull(captured1) // first callback should not have been invoked
+        assertEquals(LearnedEvent.Note(60), captured2) // second callback should have been invoked
+    }
+
+    // ── B4: first event of ANY type wins (note / CC / pitch bend) ──
+
+    @Test
+    fun firstCCWinsOverLaterNote() {
+        MidiFileLearnState.cancel()
+        var captured: LearnedEvent? = null
+        MidiFileLearnState.startLearning { captured = it }
+        MidiFileLearnState.captureCC(7)
+        assertEquals(LearnedEvent.CC(7), captured)
+        assertEquals(MidiFileLearnState.State.IDLE, MidiFileLearnState.getState())
+        // Learn already exited — a later note must be ignored
+        MidiFileLearnState.captureNote(60)
+        assertEquals(LearnedEvent.CC(7), captured)
+    }
+
+    @Test
+    fun firstPitchBendWinsOverLaterCC() {
+        MidiFileLearnState.cancel()
+        var captured: LearnedEvent? = null
+        MidiFileLearnState.startLearning { captured = it }
+        MidiFileLearnState.capturePitchBend()
+        assertEquals(LearnedEvent.PitchBend, captured)
+        // Learn already exited — a later CC must be ignored
+        MidiFileLearnState.captureCC(7)
+        assertEquals(LearnedEvent.PitchBend, captured)
+    }
+
+    @Test
+    fun captureCCWhileIdleDoesNothing() {
+        MidiFileLearnState.cancel()
+        var captured: LearnedEvent? = null
+        MidiFileLearnState.startLearning { captured = it }
+        MidiFileLearnState.captureNote(60)
+        // Now in IDLE — a CC capture should do nothing
+        MidiFileLearnState.captureCC(7)
+        assertEquals(LearnedEvent.Note(60), captured)
+    }
+
+    @Test
+    fun triggerKeyOfEncodesAllTypes() {
+        assertEquals(60, triggerKeyOf(LearnedEvent.Note(60)))
+        assertEquals(135, triggerKeyOf(LearnedEvent.CC(7)))
+        assertEquals(256, triggerKeyOf(LearnedEvent.PitchBend))
+    }
+
+    // ── B4: JSON backward compatibility (old entries lack triggerType/ccNumber) ──
+
+    @Test
+    fun oldJsonWithoutTriggerFieldsDeserializesAsNote() {
+        val data = mutableMapOf<String?, Any?>()
+        // Entry saved by an older app version: no triggerType / ccNumber
+        data["midi_file_map"] = """[{"id":1,"note":48,"filePath":"/t.mid","loop":true,"tempo":90.0,"channel":5}]"""
+        val store = MidiFileMappingStore(SharedPrefsStub(data))
+        val c = store.get(1)!!
+        assertEquals(48, c.note)
+        assertEquals("NOTE", c.triggerType)
+        assertNull(c.ccNumber)
+        assertTrue(c.hasTrigger())
+        assertEquals(48, c.triggerKey())
+    }
+
+    @Test
+    fun ccCellRoundTripPreservesFields() {
+        val data = mutableMapOf<String?, Any?>()
+        val writer = MidiFileMappingStore(SharedPrefsStub(data))
+        val c = SequencerCell(
+            id = 1, note = -1, filePath = "/cc.mid", loop = true, tempo = 100.0,
+            channel = 3, triggerType = "CC", ccNumber = 7
+        )
+        writer.set(c)
+        val reader = MidiFileMappingStore(SharedPrefsStub(data))
+        val loaded = reader.get(1)!!
+        assertEquals(c, loaded)
+        assertEquals("CC", loaded.triggerType)
+        assertEquals(7, loaded.ccNumber)
+        assertEquals(-1, loaded.note)
+        assertEquals(135, loaded.triggerKey())
+    }
+
+    @Test
+    fun pitchBendCellRoundTripPreservesFields() {
+        val data = mutableMapOf<String?, Any?>()
+        val writer = MidiFileMappingStore(SharedPrefsStub(data))
+        val c = SequencerCell(
+            id = 2, note = -1, filePath = "/pb.mid", loop = false, tempo = 140.0,
+            channel = -1, triggerType = "PITCH_BEND", ccNumber = null
+        )
+        writer.set(c)
+        val reader = MidiFileMappingStore(SharedPrefsStub(data))
+        val loaded = reader.get(2)!!
+        assertEquals(c, loaded)
+        assertEquals("PITCH_BEND", loaded.triggerType)
+        assertNull(loaded.ccNumber)
+        assertEquals(-1, loaded.note)
+        assertEquals(256, loaded.triggerKey())
+    }
+
+    // ── B4: trigger lookups ──
+
+    @Test
+    fun findByCCReturnsCell() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = -1, filePath = "/a.mid", triggerType = "CC", ccNumber = 7))
+        store.set(SequencerCell(id = 2, note = 60, filePath = "/b.mid"))
+        val found = store.findByCC(7)
+        assertNotNull(found)
+        assertEquals(1, found!!.id)
+    }
+
+    @Test
+    fun findByCCNullWhenAbsent() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = -1, filePath = "/a.mid", triggerType = "CC", ccNumber = 7))
+        assertNull(store.findByCC(10))
+    }
+
+    @Test
+    fun findByCCRejectsOutOfRange() {
+        val store = createStore()
+        assertNull(store.findByCC(-1))
+        assertNull(store.findByCC(128))
+    }
+
+    @Test
+    fun findByPitchBendReturnsCell() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = -1, filePath = "/a.mid", triggerType = "PITCH_BEND"))
+        store.set(SequencerCell(id = 2, note = 60, filePath = "/b.mid"))
+        val found = store.findByPitchBend()
+        assertNotNull(found)
+        assertEquals(1, found!!.id)
+    }
+
+    @Test
+    fun findByPitchBendNullWhenAbsent() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = 60, filePath = "/b.mid"))
+        assertNull(store.findByPitchBend())
+    }
+
+    @Test
+    fun findByNoteIgnoresCcAndPitchBendCells() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = -1, filePath = "/a.mid", triggerType = "CC", ccNumber = 7))
+        store.set(SequencerCell(id = 2, note = -1, filePath = "/b.mid", triggerType = "PITCH_BEND"))
+        assertNull(store.findByNote(7))  // CC 7 is not note 7 (disjoint key spaces)
+        assertNull(store.findByNote(-1))
+    }
+
+    @Test
+    fun findByTriggerDispatchesByType() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = 60, filePath = "/n.mid"))
+        store.set(SequencerCell(id = 2, note = -1, filePath = "/c.mid", triggerType = "CC", ccNumber = 7))
+        store.set(SequencerCell(id = 3, note = -1, filePath = "/p.mid", triggerType = "PITCH_BEND"))
+        assertEquals(1, store.findByTrigger("NOTE", 60)!!.id)
+        assertEquals(2, store.findByTrigger("CC", 7)!!.id)
+        assertEquals(3, store.findByTrigger("PITCH_BEND", 0)!!.id)
+    }
+
+    // ── B4: trigger uniqueness (one trigger → one cell) ──
+
+    @Test
+    fun learningCCRemovesSameCCFromOtherCells() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = -1, filePath = "/a.mid", triggerType = "CC", ccNumber = 1))
+        store.set(SequencerCell(id = 2, note = -1, filePath = "/b.mid", triggerType = "CC", ccNumber = 2))
+        store.set(SequencerCell(id = 3, filePath = "/c.mid"))
+        store.applyLearnedTrigger(3, LearnedEvent.CC(1))
+        // Cell 1 loses CC 1 (uniqueness); cell 2 keeps CC 2; cell 3 gains CC 1
+        val c1 = store.get(1)!!
+        assertEquals("NOTE", c1.triggerType)
+        assertEquals(-1, c1.note)
+        assertNull(c1.ccNumber)
+        assertEquals("CC", store.get(2)!!.triggerType)
+        assertEquals(2, store.get(2)!!.ccNumber)
+        val c3 = store.get(3)!!
+        assertEquals("CC", c3.triggerType)
+        assertEquals(1, c3.ccNumber)
+        assertEquals(-1, c3.note)
+    }
+
+    @Test
+    fun learningNoteRemovesSameNoteFromOtherCells() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = 60, filePath = "/a.mid"))
+        store.set(SequencerCell(id = 2, filePath = "/b.mid"))
+        store.applyLearnedTrigger(2, LearnedEvent.Note(60))
+        assertEquals(-1, store.get(1)!!.note)
+        val c2 = store.get(2)!!
+        assertEquals(60, c2.note)
+        assertEquals("NOTE", c2.triggerType)
+        assertNull(c2.ccNumber)
+    }
+
+    @Test
+    fun learningPitchBendRemovesOtherPitchBendCells() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = -1, filePath = "/a.mid", triggerType = "PITCH_BEND"))
+        store.set(SequencerCell(id = 2, filePath = "/b.mid"))
+        store.applyLearnedTrigger(2, LearnedEvent.PitchBend)
+        val c1 = store.get(1)!!
+        assertEquals("NOTE", c1.triggerType)
+        assertEquals(-1, c1.note)
+        val c2 = store.get(2)!!
+        assertEquals("PITCH_BEND", c2.triggerType)
+        assertNull(c2.ccNumber)
+        assertEquals(-1, c2.note)
+    }
+
+    @Test
+    fun learningCCDoesNotTouchNoteCellWithSameNumber() {
+        // Key spaces are disjoint: note 7 (0-127) vs CC 7 (128+7)
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = 7, filePath = "/a.mid"))
+        store.set(SequencerCell(id = 2, filePath = "/b.mid"))
+        store.applyLearnedTrigger(2, LearnedEvent.CC(7))
+        assertEquals(7, store.get(1)!!.note) // untouched
+        assertEquals("CC", store.get(2)!!.triggerType)
+    }
+
+    @Test
+    fun applyLearnedTriggerReturnsNullForMissingCell() {
+        val store = createStore()
+        assertNull(store.applyLearnedTrigger(99, LearnedEvent.Note(60)))
+    }
+
+    // ── B4: ContinuousPressDetector (time-based idle detection, threshold = 50ms) ──
+    // Press = value change AFTER A STABLE VALUE (≥ threshold since last event);
+    // while the value keeps changing (still moving) = key repeat; same-value
+    // retransmit = repeat. `now` is passed in (ms) — no clock inside the detector.
+
+    @Test
+    fun pressDetectorFirstChangeIsPress() {
+        val d = ContinuousPressDetector(128)
+        assertTrue(d.isPress(7, 50, 1000))   // first change (from sentinel) = press
+        assertFalse(d.isPress(7, 50, 1010))  // same-value retransmit = repeat
+        assertTrue(d.isPress(7, 51, 1200))   // change after idle (200ms > 50ms) = press
+    }
+
+    @Test
+    fun pressDetectorMovingWheelIsRepeat() {
+        val d = ContinuousPressDetector(128)
+        assertTrue(d.isPress(7, 50, 1000))   // first = press
+        assertFalse(d.isPress(7, 51, 1020))  // 20ms later — wheel still moving = repeat
+        assertFalse(d.isPress(7, 52, 1040))  // still moving = repeat
+        assertFalse(d.isPress(7, 53, 1060))  // still moving = repeat
+        assertTrue(d.isPress(7, 54, 1300))   // idle 240ms, then change = press
+    }
+
+    @Test
+    fun pressDetectorSameValueAfterIdleIsRepeat() {
+        val d = ContinuousPressDetector(128)
+        assertTrue(d.isPress(7, 50, 1000))
+        // Idle 500ms, but the value never changed → repeat
+        assertFalse(d.isPress(7, 50, 1500))
+    }
+
+    @Test
+    fun pressDetectorSwitchCcsPressOnEachChange() {
+        val d = ContinuousPressDetector(128)
+        assertTrue(d.isPress(7, 0, 1000))     // switch-like CC
+        assertTrue(d.isPress(7, 127, 1300))   // 300ms apart = press
+        assertTrue(d.isPress(7, 0, 1600))     // back to 0 after idle = press
+    }
+
+    @Test
+    fun pressDetectorReturningToOldValueIsPressAfterIdle() {
+        val d = ContinuousPressDetector(128)
+        assertTrue(d.isPress(7, 50, 1000))
+        assertTrue(d.isPress(7, 51, 1300))    // idle, change = press
+        assertTrue(d.isPress(7, 50, 1600))    // back to a previously seen value after idle = press
+    }
+
+    @Test
+    fun pressDetectorIndependentPerIndex() {
+        val d = ContinuousPressDetector(128)
+        assertTrue(d.isPress(0, 10, 1000))
+        assertTrue(d.isPress(1, 10, 1010))    // different index, same value, 10ms later = press
+        assertFalse(d.isPress(0, 10, 1020))   // same value = repeat
+    }
+
+    @Test
+    fun pressDetectorResetClearsValueAndTime() {
+        val d = ContinuousPressDetector(128)
+        assertTrue(d.isPress(3, 42, 1000))
+        d.reset(3)
+        // After reset, lastValue is the sentinel — the same value is a press again,
+        // even immediately (the time is cleared too).
+        assertTrue(d.isPress(3, 42, 1010))
+    }
+
+    @Test
+    fun pressDetectorCustomThreshold() {
+        val d = ContinuousPressDetector(128, threshold = 100)
+        assertTrue(d.isPress(7, 50, 1000))
+        assertFalse(d.isPress(7, 51, 1090))   // 90ms < 100ms = still moving = repeat
+        assertTrue(d.isPress(7, 52, 1200))    // 210ms > 100ms = press
+    }
+
+    @Test
+    fun pressDetectorRejectsOutOfRangeIndex() {
+        val d = ContinuousPressDetector(4)
+        assertFalse(d.isPress(-1, 5, 1000))
+        assertFalse(d.isPress(4, 5, 1000))
     }
 
     // ── noteToName tests ──

@@ -438,6 +438,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             override fun onControlChange(channel: Int, controller: Int, value: Int) {
+                // Delegate to trigger controller — consumed while learning (first CC
+                // of the session is captured) or when a cell is mapped to this CC
+                // (press toggles the cell's file; repeats are consumed too).
+                if (MidiFileTriggerController.get(this@MainActivity).onControlChange(channel, controller, value)) return
                 if (controller in 0..1) {
                     // Modulation / breath follow the keyboard's current channel
                     val targets = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
@@ -454,6 +458,10 @@ class MainActivity : AppCompatActivity() {
                 withService { it.sendMidiMessage(0xC0 or channel, program, 0) }
             }
             override fun onPitchBend(channel: Int, value: Int) {
+                // Delegate to trigger controller — consumed while learning (first
+                // pitch bend of the session is captured) or when a cell is mapped
+                // to pitch bend (press toggles the cell's file; repeats consumed).
+                if (MidiFileTriggerController.get(this@MainActivity).onPitchBend(channel, value)) return
                 // Pitch bend follows the keyboard's current channel
                 val targets = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
                 withService { svc ->
@@ -643,7 +651,9 @@ class MainActivity : AppCompatActivity() {
                     polyphony = polyphony,
                     soundFont = soundFont,
                     channels = channels,
-                    cells = cells.map { PseqCell(it.id, it.note, it.filePath, it.loop, it.tempo, it.channel) }
+                    cells = cells.map {
+                         PseqCell(it.id, it.note, it.filePath, it.loop, it.tempo, it.channel, it.triggerType, it.ccNumber)
+                     }
                 )
 
                 val out = contentResolver.openOutputStream(uri)
@@ -723,7 +733,9 @@ class MainActivity : AppCompatActivity() {
                             filePath = destName?.let { File(midiDir, it).absolutePath } ?: "",
                             loop = cell.loop,
                             tempo = cell.tempo,
-                            channel = cell.channel
+                            channel = cell.channel,
+                            triggerType = cell.triggerType,
+                            ccNumber = cell.ccNumber
                         )
                     )
                 }

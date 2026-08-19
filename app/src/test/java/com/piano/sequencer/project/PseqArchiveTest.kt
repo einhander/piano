@@ -124,6 +124,67 @@ class PseqArchiveTest {
         assertEquals("midi/gone.mid", back.cells[0].filePath)
     }
 
+    // ── B4: trigger types (CC / pitch bend) in .pseq ──
+
+    @Test
+    fun roundTripPreservesCcTrigger() {
+        val doc = baseDoc().copy(
+            cells = listOf(
+                PseqCell(id = 1, note = -1, filePath = "midi/cc.mid", loop = true, tempo = 100.0, channel = 3, triggerType = "CC", ccNumber = 7),
+                PseqCell(id = 2, note = 60, filePath = "midi/note.mid")
+            )
+        )
+        val cc = tempFile("pseq_cc_", ".mid")
+        cc.writeBytes(byteArrayOf(1, 2, 3))
+        val note = tempFile("pseq_note_", ".mid")
+        note.writeBytes(byteArrayOf(4, 5, 6))
+
+        val pseq = tempFile("pseq_ccrt_", ".pseq")
+        PseqArchive.write(pseq.outputStream(), doc, mapOf("midi/cc.mid" to cc, "midi/note.mid" to note))
+
+        val back = PseqArchive.readDocument(pseq.inputStream())
+        assertEquals(doc, back)
+        assertEquals("CC", back.cells[0].triggerType)
+        assertEquals(7, back.cells[0].ccNumber)
+        assertEquals(-1, back.cells[0].note)
+        // NOTE cell: defaults preserved
+        assertEquals("NOTE", back.cells[1].triggerType)
+        assertNull(back.cells[1].ccNumber)
+    }
+
+    @Test
+    fun roundTripPreservesPitchBendTrigger() {
+        val doc = baseDoc().copy(
+            cells = listOf(
+                PseqCell(id = 1, note = -1, filePath = "midi/pb.mid", loop = false, tempo = 140.0, channel = -1, triggerType = "PITCH_BEND")
+            )
+        )
+        val pb = tempFile("pseq_pb_", ".mid")
+        pb.writeBytes(byteArrayOf(7, 8, 9))
+
+        val pseq = tempFile("pseq_pb_", ".pseq")
+        PseqArchive.write(pseq.outputStream(), doc, mapOf("midi/pb.mid" to pb))
+
+        val back = PseqArchive.readDocument(pseq.inputStream())
+        assertEquals(doc, back)
+        assertEquals("PITCH_BEND", back.cells[0].triggerType)
+        assertNull(back.cells[0].ccNumber)
+        assertEquals(-1, back.cells[0].note)
+    }
+
+    @Test
+    fun oldPseqCellWithoutTriggerFieldsDeserializesAsNote() {
+        // project.json written by an older app version: cells lack triggerType/ccNumber
+        val pseq = tempFile("pseq_oldcell_", ".pseq")
+        val jsonText = """{"formatVersion":1,"name":"Old","createdAt":"2026-08-19T12:00:00Z","cells":[{"id":1,"note":48,"filePath":"midi/t.mid","loop":true,"tempo":90.0,"channel":5}]}"""
+        writeJsonZip(pseq, jsonText)
+
+        val doc = PseqArchive.readDocument(pseq.inputStream())
+        assertEquals(48, doc.cells[0].note)
+        assertEquals("NOTE", doc.cells[0].triggerType)
+        assertNull(doc.cells[0].ccNumber)
+    }
+
     // ── malformed archives ──
 
     @Test

@@ -19,6 +19,9 @@ import com.piano.sequencer.midi.MidiFileLearnState
 import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.MidiFileTriggerController
 import com.piano.sequencer.midi.SequencerCell
+import com.piano.sequencer.midi.TRIGGER_CC
+import com.piano.sequencer.midi.TRIGGER_NOTE
+import com.piano.sequencer.midi.TRIGGER_PITCH_BEND
 import com.piano.sequencer.midi.noteToName
 import java.io.File
 
@@ -57,11 +60,12 @@ class MidiFilesPanel @JvmOverloads constructor(
     /** Called when loop/tempo/channel settings change for a mapped cell. */
     var onSettingChange: (cell: SequencerCell) -> Unit = {}
 
-    /** Called when a note is learned (saved to store). */
-    var onNoteLearned: (cell: SequencerCell, note: Int) -> Unit = { _, _ -> }
+    /** Called when a trigger is learned (saved to store). Second arg = encoded trigger key
+     * (raw note for NOTE cells, 128+cc for CC, 256 for PITCH_BEND — see SequencerCell.triggerKey). */
+    var onNoteLearned: (cell: SequencerCell, key: Int) -> Unit = { _, _ -> }
 
-    /** Called when a mapping is removed (also frees slot). */
-    var onNoteUnlearned: (note: Int) -> Unit = {}
+    /** Called when a trigger is unlearned (also frees slot). Arg = encoded trigger key. */
+    var onNoteUnlearned: (key: Int) -> Unit = {}
 
     /** Called when a cell is removed (file stays on disk). */
     var onCellRemove: (cell: SequencerCell) -> Unit = {}
@@ -192,9 +196,14 @@ class MidiFilesPanel @JvmOverloads constructor(
             layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         }
 
-        // Key label
+        // Key label: NOTE → note name; CC → "CC <n>"; PITCH_BEND → "PB" (short — the row
+        // already holds name + spinner + checkbox + tempo edit, no room for "Pitch bend").
         val keyLabel = TextView(context).apply {
-            text = if (cell.note >= 0) noteToName(cell.note) else "—"
+            text = when (cell.triggerType) {
+                TRIGGER_CC -> "CC ${cell.ccNumber}"
+                TRIGGER_PITCH_BEND -> "PB"
+                else -> if (cell.note >= 0) noteToName(cell.note) else "—"
+            }
             textSize = 12f
             setTextColor(0xFF444444.toInt())
             layoutParams = LayoutParams(
@@ -356,27 +365,23 @@ class MidiFilesPanel @JvmOverloads constructor(
         // ── Button handlers ──
 
         learnBtn.setOnClickListener {
-            if (cell.note >= 0) {
-                // UNLEARN
+            if (cell.hasTrigger()) {
+                // UNLEARN (note, CC, or pitch bend): clear the trigger, free the slot
+                // via the encoded trigger key (works for all three trigger types).
                 val cur = store.get(cell.id) ?: return@setOnClickListener
-                store.set(cur.copy(note = -1))
-                onNoteUnlearned(cell.note)
+                val key = cur.triggerKey()
+                store.set(cur.copy(triggerType = TRIGGER_NOTE, ccNumber = null, note = -1))
+                onNoteUnlearned(key)
             } else {
-                // LEARN
+                // LEARN: first event of ANY type wins (note, CC, or pitch bend).
                 cancelLearnTimeout()
-                MidiFileLearnState.startLearning { learnedNote ->
+                MidiFileLearnState.startLearning { event ->
                     mainHandler.post {
-                        // CRITICAL: re-read from store to avoid stale capture
-                        val cur = store.get(cell.id) ?: return@post
-                        // NOTE UNIQUENESS: ensure no other cell claims this note
-                        for (c2 in store.all()) {
-                            if (c2.note == learnedNote && c2.id != cur.id) {
-                                store.set(c2.copy(note = -1))
-                            }
-                        }
-                        val updated = cur.copy(note = learnedNote)
-                        store.set(updated)
-                        onNoteLearned(updated, learnedNote)
+                        // CRITICAL: re-read from store to avoid stale capture;
+                        // applyLearnedTrigger also enforces trigger uniqueness
+                        // (one trigger → one cell) across all other cells.
+                        val updated = store.applyLearnedTrigger(cell.id, event) ?: return@post
+                        onNoteLearned(updated, updated.triggerKey())
                     }
                 }
                 // m7: 10s timeout
@@ -387,7 +392,7 @@ class MidiFilesPanel @JvmOverloads constructor(
                     }
                 }
                 mainHandler.postDelayed(learnTimeoutRunnable!!, 10_000)
-                Toast.makeText(context, "Press a key to learn...", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Press a key or move a controller to learn...", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -400,7 +405,7 @@ class MidiFilesPanel @JvmOverloads constructor(
             }
             val updated = cur.copy(loop = getLoop(), tempo = getTempo(), channel = getChannel())
             store.set(updated)
-            if (updated.note >= 0) {
+            if (updated.hasTrigger()) {
                 onSettingChange(updated)
             }
             onTestPlay(updated)
@@ -413,6 +418,8 @@ class MidiFilesPanel @JvmOverloads constructor(
         removeBtn.setOnClickListener {
             // CRITICAL: re-read from store
             val cur = store.get(cell.id) ?: return@setOnClickListener
+            // The activity frees the trigger slot (encoded key) AFTER its
+            // recording guard passes — a blocked removal keeps the cell AND its slot.
             onCellRemove(cur)
         }
 
@@ -421,7 +428,7 @@ class MidiFilesPanel @JvmOverloads constructor(
             val cur = store.get(cell.id) ?: return@setOnCheckedChangeListener
             val updated = cur.copy(loop = isChecked)
             store.set(updated)
-            if (updated.note >= 0) {
+            if (updated.hasTrigger()) {
                 onSettingChange(updated)
             }
         }
@@ -431,7 +438,7 @@ class MidiFilesPanel @JvmOverloads constructor(
                 val cur = store.get(cell.id) ?: return@setOnFocusChangeListener
                 val updated = cur.copy(tempo = getTempo())
                 store.set(updated)
-                if (updated.note >= 0) {
+                if (updated.hasTrigger()) {
                     onSettingChange(updated)
                 }
             }
@@ -442,7 +449,7 @@ class MidiFilesPanel @JvmOverloads constructor(
                 val cur = store.get(cell.id) ?: return@onItemSelected
                 val updated = cur.copy(channel = getChannel())
                 store.set(updated)
-                if (updated.note >= 0) {
+                if (updated.hasTrigger()) {
                     onSettingChange(updated)
                 }
             }

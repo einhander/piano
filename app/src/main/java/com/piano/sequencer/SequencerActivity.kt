@@ -268,20 +268,22 @@ class SequencerActivity : AppCompatActivity() {
         }
 
         panel.onSettingChange = { cell ->
-            if (cell.note >= 0) {
-                MidiFileTriggerController.get(this).onSettingChanged(cell.note, cell.loop, cell.tempo, cell.channel)
+            // B4: any trigger type (NOTE/CC/PITCH_BEND) live-updates its slot —
+            // pass the encoded trigger key, not the raw note.
+            if (cell.hasTrigger()) {
+                MidiFileTriggerController.get(this).onSettingChanged(cell.triggerKey(), cell.loop, cell.tempo, cell.channel)
             }
         }
 
-        panel.onNoteLearned = { cell, note ->
+        panel.onNoteLearned = { cell, key ->
             val c = MidiFileTriggerController.get(this)
-            c.allocateSlotForNote(note)
-            c.getSlotForNote(note)?.let { c.clearLoadedFile(it) }
+            c.allocateSlotForKey(key)
+            c.getSlotForKey(key)?.let { c.clearLoadedFile(it) }
             refreshPanel()
         }
 
-        panel.onNoteUnlearned = { note ->
-            MidiFileTriggerController.get(this).freeSlotForNote(note)
+        panel.onNoteUnlearned = { key ->
+            MidiFileTriggerController.get(this).freeSlotForKey(key)
             refreshPanel()
         }
 
@@ -290,8 +292,12 @@ class SequencerActivity : AppCompatActivity() {
             if (cell.id == MidiRecordSession.cellId) {
                 Toast.makeText(this, "Stop recording first", Toast.LENGTH_SHORT).show()
             } else {
-                if (cell.note >= 0) {
-                    MidiFileTriggerController.get(this).freeSlotForNote(cell.note)
+                // Free the trigger slot (encoded key: NOTE 0-127, CC 128-255, PB 256)
+                // ONLY after the recording guard passed — a blocked removal keeps
+                // the cell and its slot. Idempotent for NOTE cells (second free is
+                // a no-op; C++ FREE is idempotent).
+                if (cell.hasTrigger()) {
+                    MidiFileTriggerController.get(this).freeSlotForTrigger(cell.triggerKey())
                 }
                 MidiFileMappingStore.get(this).remove(cell.id)
                 refreshPanel()
@@ -435,9 +441,9 @@ class SequencerActivity : AppCompatActivity() {
                             if (cell != null) {
                                 store.set(cell.copy(filePath = destFile.absolutePath))
                                 // Force slot reload of the new file (same pattern as onNoteLearned)
-                                if (cell.note >= 0) {
+                                if (cell.hasTrigger()) {
                                     val c = MidiFileTriggerController.get(this)
-                                    c.getSlotForNote(cell.note)?.let { c.clearLoadedFile(it) }
+                                    c.getSlotForKey(cell.triggerKey())?.let { c.clearLoadedFile(it) }
                                 }
                                 refreshPanel()
                                 Toast.makeText(this, "Recorded: ${destFile.name} ($eventCount events)", Toast.LENGTH_SHORT).show()

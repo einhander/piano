@@ -19,8 +19,9 @@ import org.json.JSONObject
  * D5: must survive activity recreation and work regardless of which
  * activity is in front (performance buttons live on the main screen).
  *
- * Holds: noteSlotMap, loadedFilePerSlot (filePath+channel), nextSlotIndex,
- * NoteToggleStateMachine, test-play state (slot 15, generation counter, 3s auto-stop).
+ * Holds: triggerSlotMap (encoded trigger key → slot), loadedFilePerSlot (filePath+channel),
+ * nextSlotIndex, NoteToggleStateMachine (reused for CC/pitch-bend presses via press()),
+ * test-play state (slot 15, generation counter, 3s auto-stop).
  * Never holds a strong Activity reference — uses applicationContext for Toasts.
  */
 class MidiFileTriggerController private constructor(appContext: Context) {
@@ -62,13 +63,20 @@ class MidiFileTriggerController private constructor(appContext: Context) {
 
     // ── Mutable state ──
 
-    private val noteSlotMap = ConcurrentHashMap<Int, Int>()
+    /** trigger key (encoded: NOTE 0-127, CC 128-255, PITCH_BEND 256) → slot. */
+    private val triggerSlotMap = ConcurrentHashMap<Int, Int>()
     private val nextSlotIndex = AtomicInteger(0)
 
     /** slot → (filePath, channel). Used by m8 skip-load: reload when EITHER changes. */
     private val loadedFilePerSlot = ConcurrentHashMap<Int, Pair<String, Int>>()
 
     private val noteStateMachine = NoteToggleStateMachine()
+
+    /** B4: last-seen value per CC number (press = value change; same value = repeat). */
+    private val ccPressDetector = ContinuousPressDetector(128)
+
+    /** B4: last-seen 14-bit pitch bend value (0..16383, center 8192). */
+    private val pbPressDetector = ContinuousPressDetector(1)
 
     private var service: PlaybackService? = null
     private var store: MidiFileMappingStore? = null
@@ -151,6 +159,70 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         return s.findByNote(note) != null // consumed if mapped
     }
 
+    /**
+     * Handle a control change from the MIDI callback (B4).
+     * Returns false while recording (file triggering is paused; CCs must reach engine).
+     * Returns true if the event was consumed — caller must NOT forward to engine:
+     *  - learn state active → the first CC of any learn session is captured;
+     *  - a cell is mapped to this CC → a press (value change after the controller
+     *    was stable, ≥ threshold since the last event) toggles the cell's file;
+     *    a same-value retransmit or a change while still moving is a key repeat —
+     *    IGNORED but still consumed (a mapped CC is never forwarded to the live
+     *    synth, even on repeat).
+     */
+    fun onControlChange(channel: Int, ccNumber: Int, value: Int): Boolean {
+        if (service?.isRecording() == true) return false
+        // Learn state active → capture (first event of any type wins)
+        if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+            MidiFileLearnState.captureCC(ccNumber)
+            return true
+        }
+        if (ccNumber !in 0..127) return false
+        val s = store ?: return false
+        val cell = s.findByCC(ccNumber)
+        if (cell == null) return false // unmapped → caller forwards
+
+        // Press = value change after a stable value (≥ threshold since last event);
+        // same-value retransmit or a change while still moving = key repeat (consumed, ignored).
+        if (!ccPressDetector.isPress(ccNumber, value, SystemClock.uptimeMillis())) return true
+        val key = 128 + ccNumber
+        val result = noteStateMachine.press(key, cell.loop)
+        when (result) {
+            NoteToggleStateMachine.Result.TOGGLE_ON -> triggerSlot(cell, SystemClock.uptimeMillis())
+            NoteToggleStateMachine.Result.TOGGLE_OFF -> stopSlotForTrigger(key)
+            NoteToggleStateMachine.Result.IGNORED -> {} // unreachable via press(); keep exhaustive
+        }
+        return true
+    }
+
+    /**
+     * Handle a pitch bend from the MIDI callback (B4). [value] is the 14-bit
+     * value 0..16383 (center 8192), as parsed by MidiMessageParser.
+     * Same contract as [onControlChange]: false while recording; true when
+     * consumed (learn capture or a mapped pitch-bend cell — including repeats).
+     */
+    fun onPitchBend(channel: Int, value: Int): Boolean {
+        if (service?.isRecording() == true) return false
+        // Learn state active → capture (first event of any type wins)
+        if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+            MidiFileLearnState.capturePitchBend()
+            return true
+        }
+        val s = store ?: return false
+        val cell = s.findByPitchBend()
+        if (cell == null) return false // unmapped → caller forwards
+
+        if (!pbPressDetector.isPress(0, value, SystemClock.uptimeMillis())) return true
+        val key = 256
+        val result = noteStateMachine.press(key, cell.loop)
+        when (result) {
+            NoteToggleStateMachine.Result.TOGGLE_ON -> triggerSlot(cell, SystemClock.uptimeMillis())
+            NoteToggleStateMachine.Result.TOGGLE_OFF -> stopSlotForTrigger(key)
+            NoteToggleStateMachine.Result.IGNORED -> {} // unreachable via press(); keep exhaustive
+        }
+        return true
+    }
+
     // ── Trigger logic ──
 
     /**
@@ -162,23 +234,24 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         // MINOR-2: stale in-flight guard — re-check the store before allocating a slot.
         // The cell came from a store lookup at press time (MIDI thread or main thread);
         // by the time this runs the mapping may have been deleted or the file changed.
-        val current = store?.findByNote(cell.note)
+        val current = store?.findByTrigger(cell.triggerType, cell.triggerData())
         if (current == null || current.filePath != cell.filePath) return
 
         slotExecutor.execute {
             val svc = service ?: return@execute
-            val slot = allocateSlot(cell.note)
+            val key = cell.triggerKey()
+            val slot = allocateSlot(key)
             synchronized(slotLocks[slot]) {
                 val t1 = SystemClock.uptimeMillis()
                 val isPlaying = svc.isMidiFileSlotPlaying(slot)
 
-                AppLogger.info("TRIG", "press note=${cell.note} slot=$slot qwait=${t1 - t0}ms")
+                AppLogger.info("TRIG", "press key=$key slot=$slot qwait=${t1 - t0}ms")
 
                 if (isPlaying) {
                     svc.stopMidiFileSlot(slot)
                     if (cell.loop) {
                         // Loop mode: second press interrupts playback (toggle-off).
-                        noteStateMachine.stopPlaying(cell.note)
+                        noteStateMachine.stopPlaying(key)
                         return@synchronized
                     }
                     // Non-loop mode: retrigger restarts from the beginning. Flush
@@ -238,11 +311,19 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         }
     }
 
-    /** Free a slot when a mapping is removed or file is deleted. */
-    fun freeSlotForNote(note: Int) {
-        val slot = noteSlotMap.remove(note)
+    /** Free a slot for an encoded trigger key (alias of [freeSlotForTrigger]; NOTE callers pass the raw note). */
+    fun freeSlotForKey(key: Int) = freeSlotForTrigger(key)
+
+    /**
+     * Free a slot for an encoded trigger key (NOTE 0-127, CC 128-255, PITCH_BEND 256)
+     * when a mapping is removed or a file is deleted. Also resets the press detector
+     * so a re-learned trigger starts with a fresh "no stable value yet" state.
+     */
+    fun freeSlotForTrigger(key: Int) {
+        val slot = triggerSlotMap.remove(key)
         if (slot != null) {
-            noteStateMachine.stopPlaying(note)
+            noteStateMachine.stopPlaying(key)
+            resetPressDetector(key)
             slotExecutor.execute {
                 synchronized(slotLocks[slot]) {
                     val svc = service
@@ -254,14 +335,25 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     }
 
     /** Stop a slot without freeing it (keeps mapping + loaded file). */
-    fun stopSlotForNote(note: Int) {
-        val slot = noteSlotMap[note] ?: return
+    fun stopSlotForNote(note: Int) = stopSlotForTrigger(note)
+
+    /** Stop a slot for an encoded trigger key without freeing it. */
+    fun stopSlotForTrigger(key: Int) {
+        val slot = triggerSlotMap[key] ?: return
         slotExecutor.execute {
             synchronized(slotLocks[slot]) {
                 val svc = service
                 if (svc != null) svc.stopMidiFileSlot(slot)
-                noteStateMachine.stopPlaying(note)
+                noteStateMachine.stopPlaying(key)
             }
+        }
+    }
+
+    /** Reset the press detector entry for a trigger key (CC 128+cc / pitch bend 256). */
+    private fun resetPressDetector(key: Int) {
+        when {
+            key in 128..255 -> ccPressDetector.reset(key - 128)
+            key == 256 -> pbPressDetector.reset(0)
         }
     }
 
@@ -354,13 +446,13 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     fun stopAllForRecording() {
         slotExecutor.execute {
             val svc = service ?: return@execute
-            for (note in noteSlotMap.keys) {
-                val slot = noteSlotMap[note] ?: continue
+            for (key in triggerSlotMap.keys) {
+                val slot = triggerSlotMap[key] ?: continue
                 synchronized(slotLocks[slot]) {
                     if (svc.isMidiFileSlotPlaying(slot)) {
                         svc.stopMidiFileSlot(slot)
                     }
-                    noteStateMachine.stopPlaying(note)
+                    noteStateMachine.stopPlaying(key)
                 }
             }
             synchronized(slotLocks[testPlaySlot]) {
@@ -376,13 +468,17 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     }
 
     /**
-     * Handle setting changes (loop/tempo/channel).
+     * Handle setting changes (loop/tempo/channel) for a mapped trigger.
      * loop/tempo: live update slot. channel: reload the slot (worker thread).
+     * [key] is the encoded trigger key (SequencerActivity passes the raw note;
+     * only NOTE cells reach this path — CC/PITCH_BEND cells are note-gated out
+     * in the panel/activity, so their setting changes persist but do not
+     * live-update a running slot).
      */
-    fun onSettingChanged(note: Int, loop: Boolean, tempo: Double, channel: Int) {
+    fun onSettingChanged(key: Int, loop: Boolean, tempo: Double, channel: Int) {
         slotExecutor.execute {
             val svc = service ?: return@execute
-            val slot = noteSlotMap[note] ?: return@execute
+            val slot = triggerSlotMap[key] ?: return@execute
             synchronized(slotLocks[slot]) {
                 // Live loop/tempo
                 svc.setMidiFileSlotLoop(slot, loop)
@@ -395,7 +491,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 // non-looped end) → first press after the change is TOGGLE_ON;
                 // a playing loop slot + press → triggerSlot's loop branch stops
                 // it (correct toggle-off).
-                noteStateMachine.stopPlaying(note)
+                noteStateMachine.stopPlaying(key)
 
                 // Channel change → reload slot
                 if (channel != loadedFilePerSlot[slot]?.second) {
@@ -435,23 +531,27 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     // ── Helpers ──
 
     /** D6: 16 slots; round-robin for 17th+ mapping. Reserve slot 15 for test-play. */
-    private fun allocateSlot(note: Int): Int {
-        return noteSlotMap.getOrPut(note) {
+    private fun allocateSlot(key: Int): Int {
+        return triggerSlotMap.getOrPut(key) {
             val slot = nextSlotIndex.getAndIncrement() % 15
             slot
         }
     }
 
-    /** Allocate a slot for a learned note (public for SequencerActivity). */
-    fun allocateSlotForNote(note: Int): Int {
-        return noteSlotMap.getOrPut(note) {
+    /**
+     * Allocate a slot for a learned trigger (public for SequencerActivity).
+     * [key] is the encoded trigger key — the panel passes the raw note for NOTE
+     * cells and 128+cc / 256 for CC / PITCH_BEND cells (see SequencerCell.triggerKey).
+     */
+    fun allocateSlotForKey(key: Int): Int {
+        return triggerSlotMap.getOrPut(key) {
             val slot = nextSlotIndex.getAndIncrement() % 15
             slot
         }
     }
 
-    /** Get the slot assigned to a note, or null. */
-    fun getSlotForNote(note: Int): Int? = noteSlotMap[note]
+    /** Get the slot assigned to an encoded trigger key, or null. */
+    fun getSlotForKey(key: Int): Int? = triggerSlotMap[key]
 
     /** Clear loaded-file tracking for a slot. */
     fun clearLoadedFile(slot: Int) {

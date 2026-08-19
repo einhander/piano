@@ -125,4 +125,62 @@ class NoteToggleStateMachineTest {
         sm.stopPlaying(60)
         assertFalse(sm.isPlaying(60))
     }
+
+    // ── B4: press() for continuous triggers (CC / pitch bend) ──
+    // Key space: NOTE 0-127, CC 128+cc, PITCH_BEND 256. Continuous triggers
+    // have no release event, so press() treats every call as a fresh press —
+    // key-repeat filtering (same-value events) happens in the controller.
+
+    @Test
+    fun pressTogglesForLoop() {
+        val sm = fresh()
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.press(135, loop = true))
+        assertTrue(sm.isPlaying(135))
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_OFF, sm.press(135, loop = true))
+        assertFalse(sm.isPlaying(135))
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.press(135, loop = true))
+        assertTrue(sm.isPlaying(135))
+    }
+
+    @Test
+    fun pressRestartsForOneShot() {
+        val sm = fresh()
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.press(135, loop = false))
+        // Every press (re)starts — there is no release event for continuous triggers.
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.press(135, loop = false))
+        assertTrue(sm.isPlaying(135))
+    }
+
+    @Test
+    fun pressIndependentFromNoteState() {
+        val sm = fresh()
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(60, loop = true))
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.press(128 + 7, loop = true))
+        assertTrue(sm.isPlaying(60))
+        assertTrue(sm.isPlaying(135))
+        // Note key-repeat detection is untouched by press()
+        assertEquals(NoteToggleStateMachine.Result.IGNORED, sm.noteOn(60, loop = true))
+    }
+
+    @Test
+    fun stopPlayingResetsPressState() {
+        val sm = fresh()
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.press(256, loop = true))
+        sm.stopPlaying(256)
+        assertFalse(sm.isPlaying(256))
+        // Next press after free/reset is TOGGLE_ON again
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.press(256, loop = true))
+        assertTrue(sm.isPlaying(256))
+    }
+
+    @Test
+    fun pitchBendKeyIndependentFromCCAndNote() {
+        val sm = fresh()
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.press(256, loop = true))
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.press(128, loop = true))
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(0, loop = true))
+        assertTrue(sm.isPlaying(256))
+        assertTrue(sm.isPlaying(128))
+        assertTrue(sm.isPlaying(0))
+    }
 }
