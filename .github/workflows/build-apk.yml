@@ -41,22 +41,21 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          # Components installed on top of the default cmdline-tools.
-          # Versions mirror app/build.gradle.kts (compileSdk 34, NDK 26.1, CMake 3.22.1).
-          packages: |
-            platforms;android-34
-            build-tools;34.0.0
-            ndk;26.1.10909125
-            cmake;3.22.1
-
-      - name: Generate local.properties
-        # local.properties is gitignored — point Gradle at the SDK the action installed.
+      - name: Set up Android SDK components
+        # ubuntu-latest ships with the Android SDK + sdkmanager preinstalled at
+        # ANDROID_HOME. Install the exact components app/build.gradle.kts requires
+        # (compileSdk 34, NDK 26.1, CMake 3.22.1). Done via direct sdkmanager calls
+        # because setup-android@v3 mangles multi-line `packages:` input.
         run: |
+          set -e
           echo "sdk.dir=${ANDROID_HOME}" > local.properties
           cat local.properties
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager --install \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;26.1.10909125" \
+            "cmake;3.22.1" | sed -n '1p;/installed/p'
 
       - name: Cache Gradle dependencies
         uses: actions/cache@v4
