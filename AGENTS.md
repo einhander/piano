@@ -100,7 +100,7 @@ app/src/main/cpp/
     third_party/ oboe/ (submodule), fluidsynth/ (submodule)
 ```
 
-`PIANO_PLAN.md` is the target architecture; the tree above is what exists today.
+`docs/architecture.md` describes the target architecture; the tree above is what exists today.
 
 ## Real-Time Audio Callback (Oboe) — FORBIDDEN
 
@@ -147,14 +147,14 @@ Kotlin plugins: `org.jetbrains.kotlin.android`, `org.jetbrains.kotlin.plugin.ser
 
 ## Agent Constraints
 
-- Stay in `/home/einhander/piano/` — do not create, read, or modify files outside it.
+- Stay in the repository root — do not create, read, or modify files outside it.
 - No external tool/package/SDK installation without explicit user permission.
-- Read `PIANO_PLAN.md` before architectural decisions; implementation follows the plan.
+- Read `docs/architecture.md` (and `docs/realtime-rules.md` for real-time
+  constraints) before architectural decisions.
 - Respect `.gitignore`/`.ignore`; don't create files that should be ignored or delete
   ignored files.
 
 ## Docs
 
-- `PIANO_PLAN.md` — full plan (Russian, 30 sections / 13 phases)
 - `docs/architecture.md` — architecture, data flow, threading model
 - `docs/realtime-rules.md` — real-time constraints, sample-accurate scheduling, JNI safety
