@@ -141,8 +141,8 @@ class SequencerActivity : AppCompatActivity() {
         ))
 
         // Wire test-play state callback → panel label update
-        MidiFileTriggerController.get(this).onTestPlayStateChanged = { playing ->
-            panel.updateTestPlayUI(playing)
+        MidiFileTriggerController.get(this).onTestPlayStateChanged = { cellId, playing ->
+            panel.updateTestPlayUI(cellId, playing)
         }
 
         setupPanelCallbacks()
@@ -264,7 +264,7 @@ class SequencerActivity : AppCompatActivity() {
         }
 
         panel.onTestPlay = { cell ->
-            MidiFileTriggerController.get(this).testPlay(cell.filePath, cell.loop, cell.tempo, cell.channel)
+            MidiFileTriggerController.get(this).testPlay(cell.id, cell.filePath, cell.loop, cell.tempo, cell.channel)
         }
 
         panel.onSettingChange = { cell ->

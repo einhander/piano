@@ -81,9 +81,19 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     private val testPlaySlot = 15
     @Volatile
     private var testPlayRunnable: Runnable? = null
+    /** Cell id of the active test-play (null when stopped). */
+    @Volatile
+    private var testPlayCellId: Int? = null
 
-    /** Main-thread callback for test-play UI updates (set by SequencerActivity, cleared in onDestroy). */
-    var onTestPlayStateChanged: ((Boolean) -> Unit)? = null
+    /** Main-thread callback for test-play UI updates (set by SequencerActivity, cleared in onDestroy).
+     *  Emits (cellId, playing): cellId is the pressed cell while playing, null when stopped. */
+    var onTestPlayStateChanged: ((Int?, Boolean) -> Unit)? = null
+
+    /** Read the current test-play state (cell id while playing, null when stopped). */
+    fun testPlayState(): Pair<Int?, Boolean> {
+        val playing = testPlayPlaying
+        return (if (playing) testPlayCellId else null) to playing
+    }
 
     // ── Binding ──
 
@@ -256,7 +266,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     }
 
     /** Test-play: slot 15, generation counter, 3s auto-stop. */
-    fun testPlay(filePath: String, loop: Boolean, tempo: Double, channel: Int) {
+    fun testPlay(cellId: Int, filePath: String, loop: Boolean, tempo: Double, channel: Int) {
         slotExecutor.execute {
             synchronized(slotLocks[testPlaySlot]) {
                 val svc = service ?: return@synchronized
@@ -265,7 +275,8 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 if (testPlayPlaying) {
                     svc.stopMidiFileSlot(testPlaySlot)
                     testPlayPlaying = false
-                    mainHandler.post { onTestPlayStateChanged?.invoke(false) }
+                    testPlayCellId = null
+                    mainHandler.post { onTestPlayStateChanged?.invoke(null, false) }
                     cancelTestPlayAutoStop()
                     return@synchronized
                 }
@@ -293,7 +304,8 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 }
                 svc.startMidiFileSlot(testPlaySlot)
                 testPlayPlaying = true
-                mainHandler.post { onTestPlayStateChanged?.invoke(true) }
+                testPlayCellId = cellId
+                mainHandler.post { onTestPlayStateChanged?.invoke(cellId, true) }
                 cancelTestPlayAutoStop()
                 val durationMs = try {
                     val info = JSONObject(svc.getMidiFileSlotInfo(testPlaySlot))
@@ -316,7 +328,8 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                                 if (testPlayGeneration == gen) {
                                     svc.stopMidiFileSlot(testPlaySlot)
                                     testPlayPlaying = false
-                                    mainHandler.post { onTestPlayStateChanged?.invoke(false) }
+                                    testPlayCellId = null
+                                    mainHandler.post { onTestPlayStateChanged?.invoke(null, false) }
                                 }
                             }
                         }
@@ -354,7 +367,8 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 if (testPlayPlaying) {
                     svc.stopMidiFileSlot(testPlaySlot)
                     testPlayPlaying = false
-                    mainHandler.post { onTestPlayStateChanged?.invoke(false) }
+                    testPlayCellId = null
+                    mainHandler.post { onTestPlayStateChanged?.invoke(null, false) }
                 }
             }
             cancelTestPlayAutoStop()

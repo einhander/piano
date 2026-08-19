@@ -17,6 +17,7 @@ import android.widget.Toast
 import com.piano.sequencer.R
 import com.piano.sequencer.midi.MidiFileLearnState
 import com.piano.sequencer.midi.MidiFileMappingStore
+import com.piano.sequencer.midi.MidiFileTriggerController
 import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.midi.noteToName
 import java.io.File
@@ -80,8 +81,8 @@ class MidiFilesPanel @JvmOverloads constructor(
     /** m7: handler for learn timeout. */
     private var learnTimeoutRunnable: Runnable? = null
 
-    /** item 8c: direct reference to per-row test button for label update. */
-    private var currentTestBtn: Button? = null
+    /** Per-row test-play buttons keyed by cell id (label: ▶ Test / ■ Stop). */
+    private val cellTestButtons = mutableMapOf<Int, Button>()
 
     /** Per-row record buttons keyed by cell id. */
     private val cellRecordButtons = mutableMapOf<Int, Button>()
@@ -108,6 +109,7 @@ class MidiFilesPanel @JvmOverloads constructor(
     /** Load and display the cell list. */
     fun refresh() {
         removeAllViews()
+        cellTestButtons.clear()
         cellRecordButtons.clear()
         cellRecordButtonDefaults.clear()
 
@@ -148,6 +150,13 @@ class MidiFilesPanel @JvmOverloads constructor(
 
         // "＋ Add cell" button
         addAddCellButton()
+
+        // Re-apply live test-play state: rows were rebuilt with "▶ Test" labels,
+        // so if a test-play is active the pressed cell's button must show "■ Stop".
+        val (tpCellId, tpPlaying) = MidiFileTriggerController.get(context).testPlayState()
+        if (tpPlaying) {
+            updateTestPlayUI(tpCellId, true)
+        }
     }
 
     private fun addCellRow(cell: SequencerCell) {
@@ -302,7 +311,7 @@ class MidiFilesPanel @JvmOverloads constructor(
             setPadding(4, 4, 4, 4)
             minWidth = 0
             layoutParams = btnParams().apply { setMargins(0, 0, marginEnd, 0) }
-            setCompoundDrawablesWithIntrinsicBounds(dot, null, null, null)
+            setCompoundDrawablesWithIntrinsicBounds(null, null, dot, null)
             setCompoundDrawablePadding(dpToPx(4, context))
         }
 
@@ -440,12 +449,8 @@ class MidiFilesPanel @JvmOverloads constructor(
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
         }
 
-        // item 8c: track test button for label updates (last row with file wins)
-        if (cell.filePath.isNotEmpty()) {
-            setTestPlayTarget(testBtn)
-        }
-
-        // Track record button (+ its theme-default background for state restore)
+        // Track test-play + record buttons (keyed by cell id)
+        cellTestButtons[cell.id] = testBtn
         cellRecordButtons[cell.id] = recordBtn
         cellRecordButtonDefaults[cell.id] = recordBtn.background
 
@@ -484,7 +489,7 @@ class MidiFilesPanel @JvmOverloads constructor(
                 recordingCellId != null -> {
                     btn.text = "Record"
                     val dot = context.getDrawable(R.drawable.ic_record_dot)
-                    btn.setCompoundDrawablesWithIntrinsicBounds(dot, null, null, null)
+                    btn.setCompoundDrawablesWithIntrinsicBounds(null, null, dot, null)
                     btn.background = cellRecordButtonDefaults[id]
                     btn.setTextColor(0xFF000000.toInt())
                     btn.isEnabled = false
@@ -492,7 +497,7 @@ class MidiFilesPanel @JvmOverloads constructor(
                 else -> {
                     btn.text = "Record"
                     val dot = context.getDrawable(R.drawable.ic_record_dot)
-                    btn.setCompoundDrawablesWithIntrinsicBounds(dot, null, null, null)
+                    btn.setCompoundDrawablesWithIntrinsicBounds(null, null, dot, null)
                     btn.background = cellRecordButtonDefaults[id]
                     btn.setTextColor(0xFF000000.toInt())
                     btn.isEnabled = true
@@ -508,17 +513,21 @@ class MidiFilesPanel @JvmOverloads constructor(
         MidiFileLearnState.cancel()
     }
 
-    /** item 8c: update test-play button label (▶ Test / ■ Stop). */
-    fun updateTestPlayUI(isPlaying: Boolean) {
-        val btn = currentTestBtn
-        if (btn != null) {
-            btn.text = if (isPlaying) "■ Stop" else "▶ Test"
+    /**
+     * Update test-play button labels (▶ Test / ■ Stop).
+     * Playing: label the pressed cell's button (no-op if the cell row is gone).
+     * Stopped: reset ALL test buttons to "▶ Test" (covers the null-cellId stop case).
+     */
+    fun updateTestPlayUI(cellId: Int?, isPlaying: Boolean) {
+        if (isPlaying) {
+            if (cellId != null) {
+                cellTestButtons[cellId]?.text = "■ Stop"
+            }
+        } else {
+            for (btn in cellTestButtons.values) {
+                btn.text = "▶ Test"
+            }
         }
-    }
-
-    /** Called when a test-play button is pressed for a specific cell. */
-    fun setTestPlayTarget(btn: Button) {
-        currentTestBtn = btn
     }
 
     private fun dpToPx(dp: Int, context: Context): Int {
