@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -6,10 +8,46 @@ plugins {
 
 val ndkVersion = "26.1.10909125"
 
+// Release signing. Reads credentials from Gradle properties so secrets never
+// land in version control. Sources (in lookup order):
+//   - local.properties (local dev — gitignored)
+//   - gradle.properties / project properties (CI injects them here)
+// The keystore file (app/piano-release.jks) is safe to commit; only the
+// passwords are secret. When the properties are absent the release build
+// stays unsigned, so debug builds and CI without secrets keep working.
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun signingProp(name: String): String? =
+    (localProps.getProperty(name) ?: project.findProperty(name) as String?)
+
 android {
     namespace = "com.piano.sequencer"
     compileSdk = 34
     ndkVersion = "26.1.10909125"
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("piano-release.jks")
+            storePassword = signingProp("piano.storePassword")
+            keyAlias = signingProp("piano.keyAlias") ?: "piano"
+            keyPassword = signingProp("piano.keyPassword")
+        }
+    }
+
+    buildTypes {
+        release {
+            // Only apply the signing config when credentials are available;
+            // otherwise fall back to the default (unsigned) release so builds
+            // without secrets don't fail.
+            val hasCreds = signingProp("piano.storePassword") != null &&
+                signingProp("piano.keyPassword") != null
+            if (hasCreds) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
 
     defaultConfig {
         applicationId = "com.piano.sequencer"
