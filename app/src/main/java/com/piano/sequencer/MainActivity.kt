@@ -86,6 +86,13 @@ class MainActivity : AppCompatActivity() {
     @Volatile
     private var lastNoteChannel: Int = -1
 
+    // Fallback channels for pitch bend / mod / breath before the first note
+    // is played — user-configurable in Settings (bit i set = channel i
+    // active, default 1 = channel 1). Written on the main thread (onResume),
+    // read on binder threads (MIDI callback).
+    @Volatile
+    private var pitchBendChannelsMask: Int = 1
+
     // Live re-enumeration: notified when any MIDI device is added/removed
     // (e.g. a virtual MIDI device connected after the app started).
     private val midiDeviceCallback = object : MidiManager.DeviceCallback() {
@@ -433,7 +440,7 @@ class MainActivity : AppCompatActivity() {
             override fun onControlChange(channel: Int, controller: Int, value: Int) {
                 if (controller in 0..1) {
                     // Modulation / breath follow the keyboard's current channel
-                    val targets = PitchBendChannelResolver.resolve(lastNoteChannel, 1)
+                    val targets = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
                     withService { svc ->
                         for (t in targets) {
                             svc.sendMidiMessage(0xB0 or t, controller, value)
@@ -448,7 +455,7 @@ class MainActivity : AppCompatActivity() {
             }
             override fun onPitchBend(channel: Int, value: Int) {
                 // Pitch bend follows the keyboard's current channel
-                val targets = PitchBendChannelResolver.resolve(lastNoteChannel, 1)
+                val targets = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
                 withService { svc ->
                     for (t in targets) {
                         svc.sendMidiMessage(0xE0 or t, value and 0x7F, (value shr 7) and 0x7F)
@@ -921,6 +928,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Re-read the pitch bend / mod / breath fallback mask — covers first
+        // launch and returning from SettingsActivity.
+        pitchBendChannelsMask = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+            .getInt("pitch_bend_channels", 1)
         if (!midiManager.isConnected() && !userDisconnected) {
             val devices = midiManager.listDevices()
             if (devices.isNotEmpty()) {

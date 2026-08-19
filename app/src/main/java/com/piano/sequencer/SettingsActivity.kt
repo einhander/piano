@@ -30,6 +30,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var seekBarPolyphony: SeekBar
     private lateinit var tvMasterGain: TextView
     private lateinit var seekBarMasterGain: SeekBar
+    private lateinit var btnPitchBendChannels: Button
 
     private var service: PlaybackService? = null
     private val serviceConnection = object : ServiceConnection {
@@ -73,10 +74,18 @@ class SettingsActivity : AppCompatActivity() {
         seekBarPolyphony = findViewById(R.id.seekBarPolyphony)
         tvMasterGain = findViewById(R.id.tvMasterGain)
         seekBarMasterGain = findViewById(R.id.seekBarMasterGain)
+        btnPitchBendChannels = findViewById(R.id.btnPitchBendChannels)
 
         btnBrowse.setOnClickListener { sf2Picker.launch("*/*") }
 
         btnUnload.setOnClickListener { unloadSoundFont() }
+
+        btnPitchBendChannels.setOnClickListener { showPitchBendChannelsDialog() }
+
+        // Plain pref read (no service call) — the mask is a UI-side setting.
+        btnPitchBendChannels.text = formatPitchBendChannels(
+            getSharedPreferences("piano_prefs", MODE_PRIVATE).getInt("pitch_bend_channels", 1)
+        )
 
         seekBarPolyphony.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -282,6 +291,47 @@ class SettingsActivity : AppCompatActivity() {
                     Toast.makeText(this@SettingsActivity, "Failed to unload SoundFont", Toast.LENGTH_SHORT).show()
                 }
             }
+        }
+    }
+
+    // 16-channel multi-choice dialog for the pitch bend / mod / breath
+    // fallback mask (bit i set = channel i active). Plain pref write — this
+    // is a UI-side setting, not an engine setting.
+    private fun showPitchBendChannelsDialog() {
+        val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+        val currentMask = prefs.getInt("pitch_bend_channels", 1)
+        val checked = BooleanArray(16) { (currentMask shr it) and 1 == 1 }
+        val items = Array(16) { getString(R.string.settings_channel_n, it + 1) }
+
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(R.string.settings_pitch_bend_channels_label)
+            .setMultiChoiceItems(items, checked) { _, which, isChecked ->
+                checked[which] = isChecked
+            }
+            .setPositiveButton("OK") { _, _ ->
+                val mask = (0 until 16).fold(0) { acc, ch ->
+                    if (checked[ch]) acc or (1 shl ch) else acc
+                }
+                if (mask == 0) {
+                    Toast.makeText(this, R.string.settings_pitch_bend_channels_none_selected, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                prefs.edit().putInt("pitch_bend_channels", mask).apply()
+                btnPitchBendChannels.text = formatPitchBendChannels(mask)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // "Channel 1" / "Channels 1, 5" / "All channels"
+    private fun formatPitchBendChannels(mask: Int): String {
+        val channels = (0 until 16).filter { (mask shr it) and 1 == 1 }
+        return when {
+            channels.isEmpty() -> getString(R.string.settings_channel_n, 1)
+            channels.size == 16 -> getString(R.string.settings_all_channels)
+            channels.size == 1 -> getString(R.string.settings_channel_n, channels[0] + 1)
+            else -> getString(R.string.settings_channels_list,
+                channels.joinToString(", ") { (it + 1).toString() })
         }
     }
 
