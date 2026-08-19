@@ -10,10 +10,14 @@ name: Build APK
 # keystore is materialized from base64 and credentials are injected into
 # gradle.properties, so app/build.gradle.kts produces a signed app-release.apk.
 # Without the secret the release APK stays unsigned (for inspection only).
+#
+# GitHub Releases: pushing a tag v* (e.g. v0.1.0) runs the build, then a
+# second `release` job creates a GitHub Release with the signed APK attached.
 
 on:
   push:
     branches: [master, gh-wf]
+    tags: ['v*']
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -158,3 +162,41 @@ jobs:
           path: app/build/test-results/testDebugUnitTest/*.xml
           if-no-files-found: warn
           retention-days: 14
+
+  # Creates a GitHub Release (Releases tab) with the signed APK attached.
+  # Only runs on tag pushes (v*); reuses the artifacts produced by `build`.
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required by gh release create
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-release-apk
+          path: artifacts
+
+      - name: Inspect downloaded APK
+        run: |
+          ls -la artifacts
+          apk=$(ls artifacts/app-release*.apk | head -1)
+          echo "Release APK: $apk"
+          echo "APK_PATH=$apk" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF##*/}"
+          echo "Creating release for tag $tag"
+          # Rename to a friendly filename inside the release.
+          cp "$APK_PATH" "piano-sequencer-${tag}.apk"
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$tag" \
+            --generate-notes \
+            "piano-sequencer-${tag}.apk"
