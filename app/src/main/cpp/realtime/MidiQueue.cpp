@@ -29,13 +29,19 @@ bool MidiQueue::push(const MidiMessage& msg) {
             mDroppedCount.fetch_add(1);
             return false;  // Queue full
         }
+        // m2: write the data BEFORE the release store (the CAS) so the data write is
+        // happens-before the release store. On weakly-ordered CPUs (ARM), the
+        // consumer (acquire load of mWritePos) might otherwise see the updated
+        // writePos but read stale data (the data write not yet visible). If the
+        // CAS fails (another producer claimed the slot first), that producer
+        // overwrites our write — our push failed, so that's fine.
+        mData[writePos & (mCapacity - 1)] = msg;
         // Use CAS to atomically claim this slot
         uint32_t expected = writePos;
         if (!mWritePos.compare_exchange_weak(expected, writePos + 1, std::memory_order_release, std::memory_order_relaxed)) {
             // Another producer claimed this slot — retry
             continue;
         }
-        mData[writePos & (mCapacity - 1)] = msg;
         return true;
     }
 }

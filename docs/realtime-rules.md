@@ -55,7 +55,11 @@ Events sorted by `targetFrame` within each callback.
 
 ## MIDI Handling
 
-Live MIDI: message → lock-free queue → audio callback → MidiRouter → FluidSynth.
+Live MIDI: message → lock-free queue → audio callback → FluidSynth
+(`processOneMidi`). **There is no condition variable anywhere in the MIDI path**
+— the audio thread drains the lock-free queue directly. The separate MIDI thread
+polls with a 2 ms sleep and is **recording-only** (it never feeds the synth, so
+the audio callback never touches a mutex/condvar to wake it).
 
 No quantization unless user explicitly enables it.
 
@@ -76,9 +80,37 @@ Additionally, disable all tracked active notes in the engine.
 - Library mode only, NOT audio driver
 - Render PCM float buffer → Mixer → Oboe
 - No internal sequencer
-- Load SF2 only on worker thread
-- Swap SynthEngine at callback boundary (atomic pointer swap)
+- **All `fluid_synth_*` calls run on the audio thread** (the FluidSynth C API is
+  not thread-safe). Live MIDI is drained from the lock-free queue in the
+  callback; control commands (polyphony / gain / reverb / chorus / interps /
+  channel program / panic / direct notes) arrive via the lock-free
+  **SynthCmdQueue** (worker → audio; overflow → dropped + counter).
+- **Double-buffered synth slots** (`mSynth[2]`): SF2 load/unload happens on the
+  worker thread (file I/O) into the *inactive* slot, then swaps at the callback
+  boundary (no wait, no lock).
+- **`mPreparing[2]`** atomic flag: the audio thread skips the slot being
+  prepared; the worker applies the desired state (from atomics) to the prepared
+  slot *before* the flip. After the flip the worker frees the old slot's SF2
+  (bounded wait for the sequence lock to go even) → **1× SF2 resident** (not 2×).
+- A **sequence lock** (`mSynthSeq`) guards the worker-thread
+  `getInstruments` / `getSoundFontCount` reads of the active synth.
 - Each track → one MIDI channel (Drums → channel 10)
+
+## Performance hints (ADPF) — NOT USED
+
+Android's Adaptive Performance (`APerformanceHintManager` / Oboe's
+`setPerformanceHintEnabled` + `reportWorkload`) is **deliberately not used**.
+Oboe 1.10.2 wraps *every* user data callback with
+`begin/endPerformanceHintInCallback`, which:
+
+- takes a **mutex**,
+- on first use does **`dlopen("libandroid.so")` + a binder call + `LOGW/LOGD`**,
+- on *every* call issues a **HAL call** (`reportActualDuration`).
+
+That puts a mutex + dlopen + binder + log + HAL call **into the audio callback**
+— a hard violation of the FORBIDDEN list above. The RT-safe alternative is
+**`oboe::LatencyTuner`**: it auto-tunes the buffer size (2×–8× burst) and its
+`tune()` is mutex-free, so it is safe to call in the data callback.
 
 ## JNI Safety
 

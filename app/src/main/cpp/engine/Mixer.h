@@ -49,6 +49,16 @@ private:
         std::atomic<bool> solo{false};
         std::atomic<float> peakMeter{0.0f};
         float* buffer = nullptr;  // Pre-allocated stereo buffer (interleaved L/R)
+        // Fix #8: cached equal-power pan gains. Recomputed in mix() only when
+        // the (atomic) pan value changes — the cos/sin are otherwise wasted
+        // every callback. AUDIO-THREAD-ONLY (written/read in mix()).
+        // B1: lastPan is a -2.0f SENTINEL (not 0.0f) so the first mix() —
+        // where the default pan (0.0f) equals the initial lastPan — still
+        // recomputes the gains. Without the sentinel the cache stays at
+        // (1.0, 0.0) and the whole mix is mono-left (no UI calls setTrackPan).
+        float leftGain = 1.0f;
+        float rightGain = 0.0f;
+        float lastPan = -2.0f;
     };
 
     static constexpr int kMaxTracks = 16;

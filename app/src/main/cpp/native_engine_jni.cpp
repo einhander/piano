@@ -179,6 +179,200 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterGain(JNIEnv* env, jcl
     return 0.0f;
 }
 
+// ── Reverb / Chorus / Interpolation (Fix #10-12) ──
+// All enqueue to the lock-free command queue; applied by the audio thread.
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetReverb(JNIEnv* env, jclass, jboolean on) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) inst->setReverb(on);
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetChorus(JNIEnv* env, jclass, jboolean on) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) inst->setChorus(on);
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetInterps(JNIEnv* env, jclass, jint method) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) inst->setInterps(static_cast<int>(method));
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetReverb(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getReverb());
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetChorus(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getChorus());
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetInterps(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getInterps());
+    return 4;
+}
+
+// ── Sample-rate coordination (Fix #3) ──
+// nativeGetSampleRate returns the ACTUAL Oboe stream rate (the device rate),
+// so Kotlin can pass it to nativeInitEngine / nativeUpdateSampleRate instead
+// of the hardcoded 48000.
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetSampleRate(JNIEnv* env, jclass) {
+    OboeOutput* inst = OboeOutput::getInstance();
+    if (inst) return static_cast<jint>(inst->getSampleRate());
+    return 48000;
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeUpdateSampleRate(JNIEnv* env, jclass, jint sampleRate) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) inst->updateSampleRate(static_cast<int>(sampleRate));
+}
+
+// ── Oboe buffer size control (Fix #4) ──
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetAutoTune(JNIEnv* env, jclass, jboolean autoTune) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) inst->setAutoTune(autoTune);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeIsAutoTune(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return inst->isAutoTune();
+    return true;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetBufferSizeInFrames(JNIEnv* env, jclass, jint frames) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->setBufferSizeInFrames(static_cast<int>(frames)));
+    return -1;
+}
+
+// ── Diagnostics (Part A) ──
+// All worker-thread reads of atomics / benign ints. Never called from the
+// audio callback.
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetActiveVoices(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getActiveVoices());
+    return 0;
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetProcessedFrames(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return inst->getProcessedFrames();
+    return 0;
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetCallbackCount(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return inst->getCallbackCount();
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMidiQueueDrops(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getMidiQueueDrops());
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetSynthCmdQueueDrops(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getSynthCmdQueueDrops());
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMidiQueueDepth(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getMidiQueueDepth());
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetLiveMidiQueueDepth(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getLiveMidiQueueDepth());
+    return 0;
+}
+
+// [perf]: number of clips currently in the clip scheduler (1 Hz line).
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetActiveClipCount(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getActiveClipCount());
+    return 0;
+}
+
+// [perf]: duration (ms) of the most recent SF2 load (one-time dump).
+JNIEXPORT jlong JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetSf2LoadMs(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return inst->getSf2LoadMs();
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetBufferSizeInFrames(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getBufferSizeInFrames());
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetBufferCapacityInFrames(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getBufferCapacityInFrames());
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetLatencyMillis(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getLatencyMillis());
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetSharingMode(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getSharingMode());
+    return 1;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetPerformanceMode(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getPerformanceMode());
+    return 0;
+}
+
+// [perf]: frames per Oboe burst (one-time dump; buffer = N×burst).
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetFramesPerBurst(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getFramesPerBurst());
+    return 0;
+}
+
 JNIEXPORT void JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeUnloadSoundFonts(JNIEnv* env, jclass) {
     NativeEngine* inst = NativeEngine::getInstance();

@@ -49,6 +49,10 @@ public:
     void stop();
     bool isRunning() const { return mRunning.load(); }
 
+    // [perf]: number of clips currently in the scheduler (benign atomic read,
+    // safe from a worker thread). Surfaced in the 1 Hz [perf] line.
+    int32_t getActiveClipCount() const { return mClipCount.load(); }
+
 private:
     TransportState* mTransport = nullptr;
     MidiQueue* mMidiQueue = nullptr;

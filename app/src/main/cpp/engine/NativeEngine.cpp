@@ -76,6 +76,13 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     // Register audio frame callback with OboeOutput
     OboeOutput::setAudioFrameCallback(&NativeEngine::onAudioFrameStatic);
 
+    // M5: register the "on open" callback so a mid-session reopen at a
+    // different rate updates the transport + re-prepares the synth. (Set in
+    // init() so it is live before any subsequent reopen; the initial open
+    // happens before init(), when the engine is not yet initialized, so the
+    // callback no-ops there.)
+    OboeOutput::setOnOpenCallback(&NativeEngine::onOpenStatic);
+
     mInitialized.store(true, std::memory_order_release);
     return true;
 }
@@ -183,12 +190,46 @@ void NativeEngine::setPolyphony(int polyphony) {
     }
 }
 
+void NativeEngine::setReverb(bool on) {
+    if (mSynth) {
+        mSynth->setReverb(on);
+    }
+}
+
+void NativeEngine::setChorus(bool on) {
+    if (mSynth) {
+        mSynth->setChorus(on);
+    }
+}
+
+void NativeEngine::setInterps(int method) {
+    if (mSynth) {
+        mSynth->setInterps(method);
+    }
+}
+
 int NativeEngine::getPolyphony() const {
     return mSynth ? mSynth->getPolyphony() : 0;
 }
 
 float NativeEngine::getMasterGain() const {
     return mSynth ? mSynth->getMasterGain() : 0.0f;
+}
+
+int NativeEngine::getReverb() const {
+    return mSynth ? mSynth->getReverb() : 0;
+}
+
+int NativeEngine::getChorus() const {
+    return mSynth ? mSynth->getChorus() : 0;
+}
+
+int NativeEngine::getInterps() const {
+    return mSynth ? mSynth->getInterps() : 4;
+}
+
+int NativeEngine::getActiveVoices() const {
+    return mSynth ? mSynth->getActiveVoices() : 0;
 }
 
 int NativeEngine::getSoundFontCount() const {
@@ -221,6 +262,133 @@ int NativeEngine::getUnderrunCount() const {
     return static_cast<int>(inst->getUnderrunCount());
 }
 
+// ── Diagnostics (worker-thread reads of atomics / benign ints) ──
+
+int64_t NativeEngine::getProcessedFrames() const {
+    OboeOutput* inst = OboeOutput::getInstance();
+    return inst ? inst->getProcessedFrames() : 0;
+}
+
+int64_t NativeEngine::getCallbackCount() const {
+    OboeOutput* inst = OboeOutput::getInstance();
+    return inst ? inst->getCallbackCount() : 0;
+}
+
+int NativeEngine::getMidiQueueDrops() const {
+    return static_cast<int>(mMidiQueue.droppedCount());
+}
+
+int NativeEngine::getSynthCmdQueueDrops() const {
+    return mSynth ? static_cast<int>(mSynth->getCmdQueueDrops()) : 0;
+}
+
+int NativeEngine::getMidiQueueDepth() const {
+    return static_cast<int>(mMidiQueue.size());
+}
+
+int NativeEngine::getLiveMidiQueueDepth() const {
+    return static_cast<int>(mLiveMidiQueue.size());
+}
+
+// [perf]: number of clips currently in the clip scheduler (1 Hz line).
+int NativeEngine::getActiveClipCount() const {
+    return static_cast<int>(mClipScheduler.getActiveClipCount());
+}
+
+// [perf]: duration (ms) of the most recent SF2 load (one-time dump).
+int64_t NativeEngine::getSf2LoadMs() const {
+    return mSynth ? mSynth->getSf2LoadMs() : 0;
+}
+
+// ── Oboe stream diagnostics (worker-thread reads) ──
+
+int NativeEngine::getBufferSizeInFrames() {
+    OboeOutput* inst = OboeOutput::getInstance();
+    return inst ? inst->getBufferSizeInFrames() : 0;
+}
+
+int NativeEngine::getBufferCapacityInFrames() const {
+    OboeOutput* inst = OboeOutput::getInstance();
+    return inst ? inst->getBufferCapacityInFrames() : 0;
+}
+
+int NativeEngine::getLatencyMillis() const {
+    OboeOutput* inst = OboeOutput::getInstance();
+    return inst ? inst->getLatencyMillis() : 0;
+}
+
+int NativeEngine::getSharingMode() const {
+    OboeOutput* inst = OboeOutput::getInstance();
+    return inst ? static_cast<int>(inst->getSharingMode()) : 1;
+}
+
+int NativeEngine::getPerformanceMode() const {
+    OboeOutput* inst = OboeOutput::getInstance();
+    return inst ? static_cast<int>(inst->getPerformanceMode()) : 0;
+}
+
+// [perf]: frames per Oboe burst (one-time dump; buffer = N×burst).
+int NativeEngine::getFramesPerBurst() const {
+    OboeOutput* inst = OboeOutput::getInstance();
+    return inst ? inst->getFramesPerBurst() : 0;
+}
+
+// ── Oboe buffer size control (worker thread — NOT the audio callback) ──
+
+void NativeEngine::setAutoTune(bool autoTune) {
+    OboeOutput* inst = OboeOutput::getInstance();
+    if (inst) {
+        inst->setAutoTune(autoTune);
+    }
+}
+
+bool NativeEngine::isAutoTune() const {
+    OboeOutput* inst = OboeOutput::getInstance();
+    return inst ? inst->isAutoTune() : true;
+}
+
+int NativeEngine::setBufferSizeInFrames(int frames) {
+    OboeOutput* inst = OboeOutput::getInstance();
+    return inst ? inst->setBufferSizeInFrames(frames) : -1;
+}
+
+// ── Sample-rate coordination (Fix #3) ──
+// Called (worker thread) after the Oboe stream is opened, with the ACTUAL
+// device rate. Updates the transport so ticksPerFrame is correct. The
+// FluidSynth sample rate is fixed at init (it cannot be changed after
+// creation in this FluidSynth version), so this must be called before the
+// first render; the engine is a process-level singleton initialized once with
+// the actual rate (see MainActivity).
+void NativeEngine::updateSampleRate(int sampleRate) {
+    if (sampleRate <= 0) return;
+    mSampleRate = sampleRate;
+    mTransport.sampleRate = sampleRate;
+    mTransport.updateTicksPerFrame();
+}
+
+// M5: handle a mid-session sample-rate change (worker thread). Called after
+// the Oboe stream is (re)opened at a different rate than the engine was
+// initialized with (e.g. BT device switch 44.1k→48k). The init() path is
+// idempotent (mInitialized guard), so a reopen at a new rate would otherwise
+// leave the transport tempo + FluidSynth pitch off by the rate ratio.
+//
+// Steps: (1) update the transport (ticksPerFrame) to the new rate; (2)
+// re-prepare the INACTIVE synth slot at the new rate (create a new synth at
+// the new rate, reload the current SF2, apply the desired state, flip). The
+// audio thread picks up the new synth on the next callback. No-op if the
+// engine is not initialized (the init path handles the first rate) or the
+// rate is unchanged.
+void NativeEngine::handleSampleRateChange(int newRate) {
+    if (newRate <= 0) return;
+    if (!mInitialized.load()) return;   // init path handles the first rate
+    if (newRate == mSampleRate) return;  // no change
+    updateSampleRate(newRate);
+    if (mSynth) {
+        std::string sfPath = mSynth->getSoundFontPath();
+        mSynth->reprepareAtNewRate(newRate, sfPath.empty() ? nullptr : sfPath.c_str());
+    }
+}
+
 void NativeEngine::enqueueMidiMessage(uint8_t status, uint8_t data1, uint8_t data2, int64_t timestamp) {
     MidiMessage msg;
     msg.status = status;
@@ -230,33 +398,26 @@ void NativeEngine::enqueueMidiMessage(uint8_t status, uint8_t data1, uint8_t dat
     mMidiQueue.push(msg);
 }
 
-void NativeEngine::processMidiQueue() {
-    // Drain live MIDI from mMidiQueue into mLiveMidiQueue for async processing.
-    // This keeps the audio callback free of FluidSynth C API calls which are
-    // NOT real-time safe (voice allocation may lock internal mutexes).
-    MidiMessage msg;
-    while (mMidiQueue.pop(msg)) {
-        if (!mLiveMidiQueue.push(msg)) {
-            mDroppedCount.fetch_add(1, std::memory_order_relaxed);
-        }
-    }
-    // Wake MIDI thread if it is idle
-    mMidiCV.notify_one();
-}
+// NOTE: the old processMidiQueue() (which drained mMidiQueue → mLiveMidiQueue
+// and called mMidiCV.notify_one()) is removed. The audio callback now drains
+// mMidiQueue directly and feeds the synth (see onAudioFrame). The notify_one
+// is gone (Fix #2: the audio callback never touches a mutex/condvar). The MIDI
+// thread polls mLiveMidiQueue for recording only.
 
 void NativeEngine::onAudioFrame(float* output, int numFrames) {
-    // Process pending MIDI messages from external input
-    processMidiQueue();
+    int safeFrames = (numFrames > kMaxSynthFrames) ? kMaxSynthFrames : numFrames;
+    int64_t framePos = mTransport.framePosition.load(std::memory_order_acquire);
 
-    // Process MIDI file player (real-time safe: pre-allocated slots, lock-free queues)
-    mMidiFilePlayer.process(numFrames, mSampleRate, mTransport.framePosition.load(std::memory_order_acquire), &mLiveMidiQueue);
+    // Process MIDI file player (real-time safe: pre-allocated slots, lock-free
+    // queues). File events go to mMidiQueue (drained below, fed to the synth).
+    mMidiFilePlayer.process(numFrames, mSampleRate, framePos, &mMidiQueue);
 
-    // Process sequencer/clip scheduler events
+    // Process sequencer/clip scheduler events (→ mMidiQueue)
     mSequencer.processFrame();
     mClipScheduler.process();
 
     // Process queued scene launches
-    mSceneManager.processLaunchQueue(mTransport.framePosition.load(std::memory_order_acquire));
+    mSceneManager.processLaunchQueue(framePos);
 
     // Advance frame position
     mTransport.framePosition.fetch_add(numFrames, std::memory_order_release);
@@ -270,21 +431,42 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
                           std::memory_order_relaxed);
     }
 
-    // Render via FluidSynth into pre-allocated buffer (avoids stack allocation)
-    // FluidSynth renders stereo PCM float
-    int safeFrames = (numFrames > kMaxSynthFrames) ? kMaxSynthFrames : numFrames;
+    // ── Synth access region (sequence lock) — ALL fluid_synth_* calls here ──
+    // The audio thread is the ONLY thread that touches the synths, so no lock
+    // is needed (Fix #1: the old mSynthMutex is removed). The sequence lock
+    // (mSynthSeq, in beginSynthAccess/endSynthAccess) only synchronizes the
+    // worker-thread getInstruments/getSoundFontCount reads of the active synth.
     if (mSynth) {
-        mSynth->render(mSynthBuffer, safeFrames);
+        mSynth->beginSynthAccess();
+
+        // Drain the control command queue (settings/panic/direct notes) and
+        // apply to both synth slots (kept in sync).
+        mSynth->processCommands();
+
+        // Drain the live MIDI queue → feed the active synth (with held-note
+        // tracking + re-arm). Live keyboard events (timestamp == 0) are also
+        // pushed to mLiveMidiQueue for the MIDI thread's recording.
+        MidiMessage msg;
+        while (mMidiQueue.pop(msg)) {
+            mSynth->processOneMidi(msg);
+            if (msg.timestamp == 0) {
+                mLiveMidiQueue.push(msg);  // for recording (MIDI thread)
+            }
+        }
+
+        // Render the synth DIRECTLY into the mixer's track-0 buffer (no extra
+        // full-buffer memcpy — Fix #9). The mixer reads track-0 in mix().
+        float* track0 = mMixer.getTrackBuffer(0);
+        mSynth->render(track0, safeFrames);
+
+        mSynth->endSynthAccess();
     } else {
-        // Zero output if synth not initialized
+        // Zero the track-0 buffer if the synth is not initialized.
+        float* track0 = mMixer.getTrackBuffer(0);
         for (int i = 0; i < safeFrames * 2; i++) {
-            mSynthBuffer[i] = 0.0f;
+            track0[i] = 0.0f;
         }
     }
-
-    // Route synth output through Mixer track 0 (stereo copy)
-    float* track0 = mMixer.getTrackBuffer(0);
-    std::memcpy(track0, mSynthBuffer, safeFrames * 2 * sizeof(float));
 
     // Reset meters at start of playback
     mMixer.resetMeters();
@@ -295,6 +477,18 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
 
     // Process through MasterBus (volume + soft clipper)
     mMasterBus.process(output, safeFrames);
+
+    // M4: when the Oboe buffer is larger than the synth/mixer buffers
+    // (kMaxSynthFrames=2048), the tail of the output buffer is NOT written by
+    // render/mix/process — it keeps the PREVIOUS callback's data (stale/ghost
+    // audio). This is now reachable: the LatencyTuner grows the buffer up to
+    // 8×burst (e.g. 20ms burst @48k = 960 → 8× = 7680 > 2048) precisely when
+    // the device is struggling. Zero the tail so it plays silence.
+    // (Output is interleaved stereo = 2 channels.)
+    if (numFrames > safeFrames) {
+        std::memset(output + safeFrames * 2, 0,
+                    (numFrames - safeFrames) * 2 * sizeof(float));
+    }
 }
 
 void NativeEngine::setBPM(double bpm) {
@@ -681,24 +875,27 @@ NativeEngine* NativeEngine::getInstance() {
     return sInstance.load(std::memory_order_acquire);
 }
 
-// MIDI thread — runs outside audio callback, processes live MIDI into FluidSynth
+// MIDI thread — runs outside the audio callback. It now ONLY records live
+// MIDI (the audio thread feeds the synth directly — Fix #1/#2). It polls the
+// lock-free mLiveMidiQueue (no condition variable — the audio callback never
+// touches a mutex/condvar). mLiveMidiQueue contains only live keyboard events
+// (timestamp == 0), which the audio thread pushes here for recording.
 void NativeEngine::midiThreadFunc() {
     while (mMidiThreadRunning.load(std::memory_order_acquire)) {
-        // Drain all pending live MIDI messages from the queue into a temp buffer
-        // (so we can feed both FluidSynth and the recorder without double-popping)
+        // Drain all pending live MIDI messages from the queue into a temp
+        // buffer (vector push_back is OK here — this is NOT the audio callback).
         std::vector<MidiMessage> tempMsgs;
         MidiMessage msg;
         while (mLiveMidiQueue.pop(msg)) {
             tempMsgs.push_back(msg);
         }
 
-        // m5/m10: Record live MIDI events with tick timestamps (MIDI thread, vector push_back OK)
-        // Convention: live keyboard events carry msg.timestamp == 0;
-        // player events carry the tick (> 0). Record only timestamp == 0.
+        // m5/m10: Record live MIDI events with tick timestamps (MIDI thread).
+        // All events in mLiveMidiQueue are live keyboard events (timestamp == 0)
+        // — the audio thread pushes only those here.
         if (mRecorder.isRecording() && !tempMsgs.empty()) {
             int64_t recTick = mRecordTick.load(std::memory_order_relaxed);
             for (const auto& tm : tempMsgs) {
-                if (tm.timestamp != 0) continue; // skip player-originated events
                 RecordedMidiEvent recEvt;
                 recEvt.tick = recTick;
                 recEvt.status = tm.status;
@@ -709,19 +906,9 @@ void NativeEngine::midiThreadFunc() {
             }
         }
 
-        // m7: Feed FluidSynth with the drained batch directly (no re-push, no reorder)
-        if (!tempMsgs.empty()) {
-            if (mSynth) {
-                mSynth->processLiveMidi(tempMsgs);
-            }
-        }
-
-        // Wait for new messages or shutdown signal
-        std::unique_lock<std::mutex> lock(mMidiMutex);
-        mMidiCV.wait_for(lock, std::chrono::milliseconds(2), [this] {
-            return !mMidiThreadRunning.load(std::memory_order_acquire)
-                || mLiveMidiQueue.size() > 0;
-        });
+        // Poll (no condition variable — Fix #2). A short sleep bounds the CPU
+        // cost; recording is not real-time critical.
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 }
 
@@ -734,7 +921,8 @@ void NativeEngine::startMidiThread() {
 void NativeEngine::stopMidiThread() {
     if (!mMidiThreadRunning.load(std::memory_order_acquire)) return;
     mMidiThreadRunning.store(false, std::memory_order_release);
-    mMidiCV.notify_one();
+    // No notify_one (Fix #2) — the MIDI thread polls with a 2ms sleep, so it
+    // exits within ~2ms of the flag being cleared.
     if (mMidiThread.joinable()) {
         mMidiThread.join();
     }
@@ -745,5 +933,16 @@ void NativeEngine::onAudioFrameStatic(float* output, int32_t numFrames) {
     NativeEngine* inst = getInstance();
     if (inst) {
         inst->onAudioFrame(output, numFrames);
+    }
+}
+
+// M5: static wrapper for the OboeOutput "on open" callback (worker thread).
+// Handles a mid-session sample-rate change (update the transport + re-prepare
+// the inactive synth slot at the new rate). No-op if the engine is not
+// initialized or the rate is unchanged.
+void NativeEngine::onOpenStatic(int32_t newRate) {
+    NativeEngine* inst = getInstance();
+    if (inst) {
+        inst->handleSampleRateChange(static_cast<int>(newRate));
     }
 }

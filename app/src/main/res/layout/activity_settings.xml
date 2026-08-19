@@ -153,6 +153,110 @@
                     android:max="2000"
                     android:progress="1000" />
 
+                <!-- Reverb (Fix #10) -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="24dp"
+                    android:text="@string/settings_reverb_label"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/tvReverb"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textSize="12sp"
+                    android:textColor="?attr/colorControlNormal" />
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switchReverb"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="8dp"
+                    android:checked="true" />
+
+                <!-- Chorus (Fix #11) -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_chorus_label"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/tvChorus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textSize="12sp"
+                    android:textColor="?attr/colorControlNormal" />
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switchChorus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="8dp"
+                    android:checked="true" />
+
+                <!-- Interpolation (Fix #12) -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_interps_label"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/tvInterps"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textSize="12sp"
+                    android:textColor="?attr/colorControlNormal" />
+
+                <Spinner
+                    android:id="@+id/spinnerInterps"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="8dp" />
+
+                <!-- Auto buffer size (m3): when ON, the Oboe LatencyTuner manages the buffer
+                     size (2×burst..8×burst) and the seekbar below is disabled. -->
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switchAutoTune"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="24dp"
+                    android:layout_marginBottom="8dp"
+                    android:text="@string/settings_auto_tune_label"
+                    android:checked="true" />
+
+                <!-- Buffer size (Fix #4) -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_buffer_size_label"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/tvBufferSize"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textSize="12sp"
+                    android:textColor="?attr/colorControlNormal" />
+
+                <SeekBar
+                    android:id="@+id/seekBarBufferSize"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:min="0"
+                    android:max="15"
+                    android:progress="2" />
+
             </LinearLayout>
 
             <!-- MIDI Section -->

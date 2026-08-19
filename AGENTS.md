@@ -153,6 +153,8 @@ Kotlin plugins: `org.jetbrains.kotlin.android`, `org.jetbrains.kotlin.plugin.ser
   constraints) before architectural decisions.
 - Respect `.gitignore`/`.ignore`; don't create files that should be ignored or delete
   ignored files.
+- Orchestration: never run multiple specialist agents in parallel. At most one
+  sub-agent at a time, plus @oracle for architecture/review. Sequential lanes only.
 
 ## Docs
 

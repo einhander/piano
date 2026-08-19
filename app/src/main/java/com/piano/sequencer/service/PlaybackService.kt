@@ -92,6 +92,8 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         requestAudioFocus()
         startForeground(NOTIFICATION_ID, buildNotification())
+        // Part A: start the 1Hz [perf] logger (daemon; logs while audio plays).
+        perfLoggerThread
     }
 
     override fun onDestroy() {
@@ -110,7 +112,94 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
             }
         } else {
             AppLogger.info("PlaybackService", "Audio started")
+            // One-time [perf] init dump now that the stream is live (buffer
+            // size, latency, sharing/performance mode, burst, device, SF2 load
+            // time are all meaningful). initDump=true adds the init fields.
+            logPerfSnapshot(initDump = true)
         }
+    }
+
+    // ── [perf] diagnostics (Part A) ──
+    // Reads the native diagnostics (atomics / benign ints) and logs ONE line.
+    // Called from a worker thread (never the audio callback). The periodic
+    // 1Hz logger below calls this while audio is playing, and also emits an
+    // event line when the underrun count increases.
+    // [perf] diagnostics. Every line carries the base fields + the 1 Hz dynamic
+    // fields (clips, midi queue depth). initDump=true (the one-time dump on
+    // startAudio) additionally appends the init fields: burst, device info, and
+    // the SF2 load time. All reads are atomics/benign ints on a worker thread —
+    // never the audio callback.
+    fun logPerfSnapshot(initDump: Boolean = false) {
+        val rate = NativeEngineBridge.nativeGetSampleRate()
+        val bufSize = NativeEngineBridge.nativeGetBufferSizeInFrames()
+        val bufCap = NativeEngineBridge.nativeGetBufferCapacityInFrames()
+        val latency = NativeEngineBridge.nativeGetLatencyMillis()
+        val sharing = NativeEngineBridge.nativeGetSharingMode()
+        val perf = NativeEngineBridge.nativeGetPerformanceMode()
+        val autoTune = NativeEngineBridge.nativeIsAutoTune()
+        val underruns = NativeEngineBridge.nativeGetUnderrunCount()
+        val callbacks = NativeEngineBridge.nativeGetCallbackCount()
+        val processed = NativeEngineBridge.nativeGetProcessedFrames()
+        val midiDrops = NativeEngineBridge.nativeGetMidiQueueDrops()
+        val cmdDrops = NativeEngineBridge.nativeGetSynthCmdQueueDrops()
+        val voices = NativeEngineBridge.nativeGetActiveVoices()
+        val poly = NativeEngineBridge.nativeGetPolyphony()
+        val gain = NativeEngineBridge.nativeGetMasterGain()
+        val reverb = NativeEngineBridge.nativeGetReverb()
+        val chorus = NativeEngineBridge.nativeGetChorus()
+        val interps = NativeEngineBridge.nativeGetInterps()
+        // 1 Hz dynamic fields (appended to every line).
+        val clips = NativeEngineBridge.nativeGetActiveClipCount()
+        val midiQ = NativeEngineBridge.nativeGetMidiQueueDepth()
+
+        var line = "[perf] rate=${rate}Hz buf=${bufSize}/${bufCap}F lat=${latency}ms " +
+            "share=${if (sharing == 0) "Excl" else "Shared"} perf=$perf " +
+            "autoTune=$autoTune underruns=$underruns cb=$callbacks processed=$processed " +
+            "midiDrops=$midiDrops cmdDrops=$cmdDrops voices=$voices poly=$poly " +
+            "gain=${gain} reverb=$reverb chorus=$chorus interps=$interps " +
+            "clips=$clips midi_q=$midiQ"
+
+        // One-time init dump: append burst + device info + SF2 load time.
+        if (initDump) {
+            val burst = NativeEngineBridge.nativeGetFramesPerBurst()
+            // Build.SOC_MODEL requires API 31; minSdk is 26.
+            val soc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Build.SOC_MODEL else "unknown"
+            line += " burst=$burst model=${Build.MODEL} sdk=${Build.VERSION.SDK_INT} " +
+                "soc=$soc cores=${Runtime.getRuntime().availableProcessors()}"
+            val sf2Path = NativeEngineBridge.nativeGetSoundFontPath()
+            if (sf2Path.isNotEmpty()) {
+                val sf2Ms = NativeEngineBridge.nativeGetSf2LoadMs()
+                line += " sf2=${sf2Path.substringAfterLast('/')} ${sf2Ms}ms"
+            }
+        }
+
+        AppLogger.info("PlaybackService", line)
+    }
+
+    // Periodic 1Hz [perf] logger (daemon thread, worker — NOT the audio
+    // callback). Logs a snapshot each second while audio is playing, plus an
+    // event line when the underrun count increases.
+    private val perfLoggerThread: Thread by lazy {
+        Thread {
+            var lastUnderruns = 0
+            while (true) {
+                try {
+                    Thread.sleep(1000)
+                } catch (e: InterruptedException) {
+                    break
+                }
+                if (!NativeEngineBridge.nativeIsAudioPlaying()) {
+                    lastUnderruns = 0
+                    continue
+                }
+                logPerfSnapshot()
+                val underruns = NativeEngineBridge.nativeGetUnderrunCount()
+                if (underruns > lastUnderruns) {
+                    AppLogger.warn("PlaybackService", "[perf] UNDERRUN: total=$underruns")
+                }
+                lastUnderruns = underruns
+            }
+        }.apply { isDaemon = true; name = "perf-logger" }
     }
 
     fun isAudioPlaying(): Boolean = NativeEngineBridge.nativeIsAudioPlaying()
@@ -141,6 +230,39 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun setPolyphony(value: Int) = NativeEngineBridge.nativeSetPolyphony(value)
     fun getPolyphony(): Int = NativeEngineBridge.nativeGetPolyphony()
     fun getMasterGain(): Float = NativeEngineBridge.nativeGetMasterGain()
+
+    // Reverb / Chorus / Interpolation (Fix #10-12). Worker thread only.
+    fun setReverb(on: Boolean) = NativeEngineBridge.nativeSetReverb(on)
+    fun setChorus(on: Boolean) = NativeEngineBridge.nativeSetChorus(on)
+    fun setInterps(method: Int) = NativeEngineBridge.nativeSetInterps(method)
+    fun getReverb(): Int = NativeEngineBridge.nativeGetReverb()
+    fun getChorus(): Int = NativeEngineBridge.nativeGetChorus()
+    fun getInterps(): Int = NativeEngineBridge.nativeGetInterps()
+
+    // Sample-rate coordination (Fix #3). getSampleRate returns the ACTUAL Oboe
+    // stream rate (device rate) so it can be passed to initEngine/updateSampleRate.
+    fun getSampleRate(): Int = NativeEngineBridge.nativeGetSampleRate()
+    fun updateSampleRate(sampleRate: Int) = NativeEngineBridge.nativeUpdateSampleRate(sampleRate)
+
+    // Oboe buffer size control (Fix #4). Worker thread only.
+    fun setAutoTune(autoTune: Boolean) = NativeEngineBridge.nativeSetAutoTune(autoTune)
+    fun isAutoTune(): Boolean = NativeEngineBridge.nativeIsAutoTune()
+    fun setBufferSizeInFrames(frames: Int): Int = NativeEngineBridge.nativeSetBufferSizeInFrames(frames)
+
+    // Diagnostics (Part A). Worker thread only — never the audio callback.
+    fun getActiveVoices(): Int = NativeEngineBridge.nativeGetActiveVoices()
+    fun getProcessedFrames(): Long = NativeEngineBridge.nativeGetProcessedFrames()
+    fun getCallbackCount(): Long = NativeEngineBridge.nativeGetCallbackCount()
+    fun getMidiQueueDrops(): Int = NativeEngineBridge.nativeGetMidiQueueDrops()
+    fun getSynthCmdQueueDrops(): Int = NativeEngineBridge.nativeGetSynthCmdQueueDrops()
+    fun getMidiQueueDepth(): Int = NativeEngineBridge.nativeGetMidiQueueDepth()
+    fun getLiveMidiQueueDepth(): Int = NativeEngineBridge.nativeGetLiveMidiQueueDepth()
+    fun getBufferSizeInFrames(): Int = NativeEngineBridge.nativeGetBufferSizeInFrames()
+    fun getBufferCapacityInFrames(): Int = NativeEngineBridge.nativeGetBufferCapacityInFrames()
+    fun getLatencyMillis(): Int = NativeEngineBridge.nativeGetLatencyMillis()
+    fun getSharingMode(): Int = NativeEngineBridge.nativeGetSharingMode()
+    fun getPerformanceMode(): Int = NativeEngineBridge.nativeGetPerformanceMode()
+
     fun unloadSoundFonts() = NativeEngineBridge.nativeUnloadSoundFonts()
     fun getSoundFontCount(): Int = NativeEngineBridge.nativeGetSoundFontCount()
     fun getSoundFontPath(): String = NativeEngineBridge.nativeGetSoundFontPath()

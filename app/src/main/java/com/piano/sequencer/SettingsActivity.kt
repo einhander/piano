@@ -7,12 +7,15 @@ import android.content.ServiceConnection
 import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.SeekBar
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import com.piano.sequencer.service.PlaybackService
 import java.io.File
 import java.io.FileOutputStream
@@ -30,9 +33,25 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var seekBarPolyphony: SeekBar
     private lateinit var tvMasterGain: TextView
     private lateinit var seekBarMasterGain: SeekBar
+    private lateinit var tvReverb: TextView
+    private lateinit var switchReverb: SwitchCompat
+    private lateinit var tvChorus: TextView
+    private lateinit var switchChorus: SwitchCompat
+    private lateinit var tvInterps: TextView
+    private lateinit var spinnerInterps: Spinner
+    private lateinit var tvBufferSize: TextView
+    private lateinit var seekBarBufferSize: SeekBar
+    private lateinit var switchAutoTune: SwitchCompat
     private lateinit var btnPitchBendChannels: Button
 
+    // Interpolation options (Spinner position → FluidSynth interp method).
+    private val interpsValues = intArrayOf(0, 1, 4)
+
     private var service: PlaybackService? = null
+    // m3: true while loadCurrentValues() restores the switch state — suppresses
+    // the switch listener so a programmatic state change doesn't re-apply the
+    // (already-current) auto-tune setting.
+    private var isRestoringState = false
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder) {
             // Can be delivered after onDestroy (cold start, user closed the
@@ -75,6 +94,152 @@ class SettingsActivity : AppCompatActivity() {
         tvMasterGain = findViewById(R.id.tvMasterGain)
         seekBarMasterGain = findViewById(R.id.seekBarMasterGain)
         btnPitchBendChannels = findViewById(R.id.btnPitchBendChannels)
+        tvReverb = findViewById(R.id.tvReverb)
+        switchReverb = findViewById(R.id.switchReverb)
+        tvChorus = findViewById(R.id.tvChorus)
+        switchChorus = findViewById(R.id.switchChorus)
+        tvInterps = findViewById(R.id.tvInterps)
+        spinnerInterps = findViewById(R.id.spinnerInterps)
+        tvBufferSize = findViewById(R.id.tvBufferSize)
+        seekBarBufferSize = findViewById(R.id.seekBarBufferSize)
+        switchAutoTune = findViewById(R.id.switchAutoTune)
+
+        // Interpolation spinner (None / Linear / 4th Order → 0 / 1 / 4).
+        val interpsLabels = arrayOf(
+            getString(R.string.settings_interps_none),
+            getString(R.string.settings_interps_linear),
+            getString(R.string.settings_interps_4th)
+        )
+        spinnerInterps.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, interpsLabels)
+        spinnerInterps.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                val method = interpsValues[position]
+                tvInterps.text = getString(R.string.settings_interps_value, interpsLabels[position])
+                if (isFinishing || isDestroyed) return
+                val svc = service ?: return
+                CompletableFuture.runAsync({ svc.setInterps(method) }, mainExecutor)
+                    .whenComplete { _, ex ->
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            if (ex == null) {
+                                getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+                                    .putInt("interps", method).apply()
+                            }
+                        }
+                    }
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
+
+        // Reverb / Chorus switches (Fix #10-11).
+        switchReverb.setOnCheckedChangeListener { _, checked ->
+            tvReverb.text = getString(R.string.settings_reverb_value,
+                if (checked) getString(R.string.settings_on) else getString(R.string.settings_off))
+            if (isFinishing || isDestroyed) return@setOnCheckedChangeListener
+            val svc = service ?: return@setOnCheckedChangeListener
+            val on = checked
+            CompletableFuture.runAsync({ svc.setReverb(on) }, mainExecutor)
+                .whenComplete { _, ex ->
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (ex == null) {
+                            getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+                                .putInt("reverb", if (on) 1 else 0).apply()
+                        }
+                    }
+                }
+        }
+        switchChorus.setOnCheckedChangeListener { _, checked ->
+            tvChorus.text = getString(R.string.settings_chorus_value,
+                if (checked) getString(R.string.settings_on) else getString(R.string.settings_off))
+            if (isFinishing || isDestroyed) return@setOnCheckedChangeListener
+            val svc = service ?: return@setOnCheckedChangeListener
+            val on = checked
+            CompletableFuture.runAsync({ svc.setChorus(on) }, mainExecutor)
+                .whenComplete { _, ex ->
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (ex == null) {
+                            getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+                                .putInt("chorus", if (on) 1 else 0).apply()
+                        }
+                    }
+                }
+        }
+
+        // Auto buffer size (m3): when ON, the Oboe LatencyTuner manages the buffer
+        // size (2×burst..8×burst) and the seekbar below is disabled. When OFF,
+        // the seekbar sets a fixed buffer size.
+        switchAutoTune.setOnCheckedChangeListener { _, checked ->
+            if (isRestoringState) return@setOnCheckedChangeListener
+            if (isFinishing || isDestroyed) return@setOnCheckedChangeListener
+            val svc = service ?: return@setOnCheckedChangeListener
+            if (checked) {
+                // Auto-tune ON: the LatencyTuner manages the buffer size.
+                CompletableFuture.runAsync({ svc.setAutoTune(true) }, mainExecutor)
+                    .whenComplete { _, ex ->
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            seekBarBufferSize.isEnabled = false
+                            if (ex == null) {
+                                getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+                                    .putInt("auto_tune", 1).apply()
+                            }
+                        }
+                    }
+            } else {
+                // Auto-tune OFF: use the fixed buffer size from the seekbar.
+                val frames = 128 + (seekBarBufferSize.progress) * 128
+                CompletableFuture.runAsync({
+                    svc.setAutoTune(false)
+                    svc.setBufferSizeInFrames(frames)
+                }, mainExecutor)
+                    .whenComplete { _, ex ->
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            seekBarBufferSize.isEnabled = true
+                            if (ex == null) {
+                                getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+                                    .putInt("auto_tune", 0)
+                                    .putInt("buffer_size", frames).apply()
+                            }
+                        }
+                    }
+            }
+        }
+
+        // Buffer size (Fix #4): 128 + progress*128 frames (128..2048). Dragging
+        // the seekbar implies a manual buffer size — turn auto-tune off.
+        seekBarBufferSize.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                val frames = 128 + progress * 128
+                tvBufferSize.text = getString(R.string.settings_buffer_size_value, frames)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                if (isFinishing || isDestroyed) return
+                val frames = 128 + (sb?.progress ?: 0) * 128
+                val svc = service ?: return@onStopTrackingTouch
+                // Dragging the seekbar implies manual buffer size — turn
+                // auto-tune off (the switch listener applies the new size).
+                if (switchAutoTune.isChecked) {
+                    switchAutoTune.isChecked = false
+                    return@onStopTrackingTouch
+                }
+                CompletableFuture.supplyAsync({
+                    svc.setBufferSizeInFrames(frames)
+                }, mainExecutor)
+                    .whenComplete { _, ex ->
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            if (ex == null) {
+                                getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+                                    .putInt("buffer_size", frames).apply()
+                            }
+                        }
+                    }
+            }
+        })
 
         btnBrowse.setOnClickListener { sf2Picker.launch("*/*") }
 
@@ -179,6 +344,12 @@ class SettingsActivity : AppCompatActivity() {
         val gainProgress = (gain * 1000f).toInt().coerceIn(0, 2000)
         val sf2Path = svc.getSoundFontPath()
         val sf2Count = svc.getSoundFontCount()
+        val reverb = svc.getReverb()
+        val chorus = svc.getChorus()
+        val interps = svc.getInterps()
+        val bufferSize = svc.getBufferSizeInFrames()
+        // m3: auto-tune is a UI-side pref (default ON = 1).
+        val autoTune = getSharedPreferences("piano_prefs", MODE_PRIVATE).getInt("auto_tune", 1)
 
         runOnUiThread {
             seekBarPolyphony.progress = polyphony.coerceIn(1, 256)
@@ -186,6 +357,40 @@ class SettingsActivity : AppCompatActivity() {
 
             seekBarMasterGain.progress = gainProgress
             tvMasterGain.text = getString(R.string.settings_master_gain_value, gain)
+
+            // Reverb / Chorus (Fix #10-11).
+            val reverbOn = reverb != 0
+            switchReverb.isChecked = reverbOn
+            tvReverb.text = getString(R.string.settings_reverb_value,
+                if (reverbOn) getString(R.string.settings_on) else getString(R.string.settings_off))
+            val chorusOn = chorus != 0
+            switchChorus.isChecked = chorusOn
+            tvChorus.text = getString(R.string.settings_chorus_value,
+                if (chorusOn) getString(R.string.settings_on) else getString(R.string.settings_off))
+
+            // Interpolation (Fix #12): map the method (0/1/4) to a spinner position.
+            val interpsPos = interpsValues.indexOf(interps).coerceAtLeast(0)
+            spinnerInterps.setSelection(interpsPos)
+            tvInterps.text = getString(R.string.settings_interps_value,
+                arrayOf(
+                    getString(R.string.settings_interps_none),
+                    getString(R.string.settings_interps_linear),
+                    getString(R.string.settings_interps_4th)
+                )[interpsPos])
+
+            // Buffer size (Fix #4): map frames (128..2048) to a seekbar progress.
+            val bufProgress = ((bufferSize - 128) / 128).coerceIn(0, 15)
+            seekBarBufferSize.progress = bufProgress
+            tvBufferSize.text = getString(R.string.settings_buffer_size_value,
+                128 + bufProgress * 128)
+
+            // m3: restore the auto-tune switch + seekbar enabled state
+            // (suppress the listener so the programmatic change doesn't
+            // re-apply the already-current setting).
+            isRestoringState = true
+            switchAutoTune.isChecked = (autoTune != 0)
+            seekBarBufferSize.isEnabled = (autoTune == 0)
+            isRestoringState = false
 
             if (sf2Path.isEmpty()) {
                 tvSf2Path.text = getString(R.string.settings_sf2_none)

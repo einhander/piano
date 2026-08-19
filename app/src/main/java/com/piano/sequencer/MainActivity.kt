@@ -209,12 +209,19 @@ class MainActivity : AppCompatActivity() {
                 }
                 AppLogger.info("MainActivity", "Audio opened successfully")
 
-                if (!svc.initEngine(48000, 512)) {
+                // Fix #3: use the ACTUAL Oboe stream rate (device rate, e.g.
+                // 44100 or 48000) for the engine, not the hardcoded 48000. The
+                // FluidSynth sample rate is fixed at init (it cannot be changed
+                // after creation in this FluidSynth version), so this must be
+                // the real rate — otherwise the transport tick math and the
+                // synth render rate disagree.
+                val actualRate = svc.getSampleRate()
+                if (!svc.initEngine(actualRate, 512)) {
                     AppLogger.error("MainActivity", "Engine init failed")
                     runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this@MainActivity, "Engine init failed", Toast.LENGTH_SHORT).show() }
                     return@Thread
                 }
-                AppLogger.info("MainActivity", "Engine initialized (48000Hz, 512 buffer)")
+                AppLogger.info("MainActivity", "Engine initialized (${actualRate}Hz, 512 buffer)")
 
                 // Restore persisted state (SF2, polyphony, master gain, channel programs)
                 restorePersistedState(svc)
@@ -587,6 +594,28 @@ class MainActivity : AppCompatActivity() {
         // 2. Restore polyphony + master gain.
         svc.setPolyphony(prefs.getInt("polyphony", 64))
         svc.setMasterGain(prefs.getFloat("master_gain", 1.0f))
+
+        // 2b. Restore reverb / chorus / interps / buffer size (Fix #10-12, #4).
+        svc.setReverb(prefs.getInt("reverb", 1) != 0)
+        svc.setChorus(prefs.getInt("chorus", 1) != 0)
+        svc.setInterps(prefs.getInt("interps", 4))
+        // m3: restore the auto-tune state (default ON = 1). Backward compat:
+        // if no explicit auto_tune pref but a manual buffer_size was persisted
+        // (old code), treat it as auto-tune OFF.
+        val autoTune = if (prefs.contains("auto_tune")) {
+            prefs.getInt("auto_tune", 1)
+        } else {
+            if (prefs.getInt("buffer_size", 0) > 0) 0 else 1
+        }
+        if (autoTune != 0) {
+            svc.setAutoTune(true)
+        } else {
+            svc.setAutoTune(false)
+            val bufferSize = prefs.getInt("buffer_size", 0)
+            if (bufferSize > 0) {
+                svc.setBufferSizeInFrames(bufferSize)
+            }
+        }
 
         // 3. Restore the 16 channel programs (only meaningful with an SF2).
         if (sf2Loaded) {

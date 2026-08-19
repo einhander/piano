@@ -56,11 +56,19 @@ public:
     // Panic
     void panic();
 
-    // Master controls
+    // Master controls (all enqueue to the lock-free command queue — applied by
+    // the audio thread, so they never block the audio callback).
     void setMasterGain(float gain);
     void setPolyphony(int polyphony);
+    void setReverb(bool on);
+    void setChorus(bool on);
+    void setInterps(int method);  // 0=none, 1=linear, 4=4th order
     int getPolyphony() const;
     float getMasterGain() const;
+    int getReverb() const;
+    int getChorus() const;
+    int getInterps() const;
+    int getActiveVoices() const;
     int getSoundFontCount() const;
     std::string getSoundFontPath() const;
 
@@ -168,16 +176,61 @@ public:
     int getSampleRate() const;
     int getUnderrunCount() const;
 
+    // ── Diagnostics (worker-thread reads of atomics/benign ints) ──
+    int64_t getProcessedFrames() const;
+    int64_t getCallbackCount() const;
+    int getMidiQueueDrops() const;
+    int getSynthCmdQueueDrops() const;
+    int getMidiQueueDepth() const;
+    int getLiveMidiQueueDepth() const;
+    // [perf]: number of clips currently in the clip scheduler (1 Hz line).
+    int getActiveClipCount() const;
+    // [perf]: duration (ms) of the most recent SF2 load (one-time dump).
+    int64_t getSf2LoadMs() const;
+
+    // Oboe stream diagnostics (worker-thread reads).
+    int getBufferSizeInFrames();
+    int getBufferCapacityInFrames() const;
+    int getLatencyMillis() const;
+    int getSharingMode() const;      // 0=Exclusive, 1=Shared
+    int getPerformanceMode() const;  // 0=LowLatency, ...
+    // [perf]: frames per Oboe burst (one-time dump; buffer = N×burst).
+    int getFramesPerBurst() const;
+
+    // ── Oboe buffer size control (worker thread — NOT the audio callback) ──
+    void setAutoTune(bool autoTune);
+    bool isAutoTune() const;
+    int setBufferSizeInFrames(int frames);
+
+    // Update the transport sample rate (worker thread). Called after the Oboe
+    // stream is opened, with the ACTUAL device rate (Fix #3). The FluidSynth
+    // sample rate is fixed at init (it cannot be changed after creation in
+    // this FluidSynth version), so this must be called before the first
+    // render; the engine is a process-level singleton initialized once with
+    // the actual rate.
+    void updateSampleRate(int sampleRate);
+
+    // M5: handle a mid-session sample-rate change (worker thread). Called
+    // after the Oboe stream is (re)opened at a different rate than the engine
+    // was initialized with (e.g. BT device switch 44.1k→48k). Updates the
+    // transport AND re-prepares the inactive synth slot at the new rate
+    // (create synth at new rate, reload current SF2, apply desired state,
+    // flip). No-op if the engine is not initialized or the rate is unchanged.
+    void handleSampleRateChange(int newRate);
+
     // Callback hook — called from OboeOutput audio callback
     // MUST be real-time safe: no allocations, no locks, no syscalls
     void onAudioFrame(float* output, int numFrames);
 
     // MIDI queue — called from audio callback (real-time safe)
     void enqueueMidiMessage(uint8_t status, uint8_t data1, uint8_t data2, int64_t timestamp);
-    void processMidiQueue();
 
     // Static wrapper for OboeOutput callback registration
     static void onAudioFrameStatic(float* output, int32_t numFrames);
+
+    // M5: static wrapper for the OboeOutput "on open" callback (worker
+    // thread). Handles a mid-session sample-rate change.
+    static void onOpenStatic(int32_t newRate);
 
     static NativeEngine* getInstance();
 
@@ -194,12 +247,16 @@ private:
     static std::atomic<NativeEngine*> sInstance;
     FluidSynthEngine* mSynth = nullptr;
     MidiQueue mMidiQueue{4096};
-    MidiQueue mLiveMidiQueue{4096};  // Live MIDI → async FluidSynth processing
+    // Live keyboard events (timestamp == 0) pushed by the audio thread for the
+    // MIDI thread's RECORDING only (the audio thread feeds the synth directly).
+    MidiQueue mLiveMidiQueue{4096};
     std::thread mMidiThread;
     std::atomic<bool> mMidiThreadRunning{false};
     std::atomic<int32_t> mDroppedCount{0};
-    std::mutex mMidiMutex;
-    std::condition_variable mMidiCV;
+    // NOTE: no mutex/condition_variable for the MIDI thread — it polls the
+    // lock-free mLiveMidiQueue (recording only). The audio callback never
+    // touches a mutex/condvar (Fix #2: the old notify_one in processMidiQueue
+    // is removed; the synth feeding moved into the audio callback).
     int mSampleRate = 48000;
     int mBufferSize = 512;
     std::atomic<bool> mInitialized{false};

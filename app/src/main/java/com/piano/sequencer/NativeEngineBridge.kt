@@ -25,6 +25,46 @@ object NativeEngineBridge {
     external fun nativeSetPolyphony(polyphony: Int)
     external fun nativeGetPolyphony(): Int
     external fun nativeGetMasterGain(): Float
+
+    // Reverb / Chorus / Interpolation (Fix #10-12). Worker thread only.
+    external fun nativeSetReverb(on: Boolean)
+    external fun nativeSetChorus(on: Boolean)
+    external fun nativeSetInterps(method: Int)
+    external fun nativeGetReverb(): Int
+    external fun nativeGetChorus(): Int
+    external fun nativeGetInterps(): Int
+
+    // Sample-rate coordination (Fix #3). nativeGetSampleRate returns the ACTUAL
+    // Oboe stream rate (device rate) so it can be passed to nativeInitEngine /
+    // nativeUpdateSampleRate instead of the hardcoded 48000.
+    external fun nativeGetSampleRate(): Int
+    external fun nativeUpdateSampleRate(sampleRate: Int)
+
+    // Oboe buffer size control (Fix #4). Worker thread only.
+    external fun nativeSetAutoTune(autoTune: Boolean)
+    external fun nativeIsAutoTune(): Boolean
+    external fun nativeSetBufferSizeInFrames(frames: Int): Int
+
+    // Diagnostics (Part A). Worker thread only — never the audio callback.
+    external fun nativeGetActiveVoices(): Int
+    external fun nativeGetProcessedFrames(): Long
+    external fun nativeGetCallbackCount(): Long
+    external fun nativeGetMidiQueueDrops(): Int
+    external fun nativeGetSynthCmdQueueDrops(): Int
+    external fun nativeGetMidiQueueDepth(): Int
+    external fun nativeGetLiveMidiQueueDepth(): Int
+    // [perf]: number of clips currently in the clip scheduler (1 Hz line).
+    external fun nativeGetActiveClipCount(): Int
+    // [perf]: duration (ms) of the most recent SF2 load (one-time dump).
+    external fun nativeGetSf2LoadMs(): Long
+    external fun nativeGetBufferSizeInFrames(): Int
+    external fun nativeGetBufferCapacityInFrames(): Int
+    external fun nativeGetLatencyMillis(): Int
+    external fun nativeGetSharingMode(): Int
+    external fun nativeGetPerformanceMode(): Int
+    // [perf]: frames per Oboe burst (one-time dump; buffer = N×burst).
+    external fun nativeGetFramesPerBurst(): Int
+
     external fun nativeUnloadSoundFonts()
     external fun nativeGetSoundFontCount(): Int
     external fun nativeGetSoundFontPath(): String

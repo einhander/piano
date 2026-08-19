@@ -104,9 +104,16 @@ void Mixer::mix(float* output, int numFrames) {
             continue;
         }
 
-        // Equal-power panning gains (pan in [-1,1], 0=center)
-        float leftGain = std::cos((pan + 1.0f) * 3.14159265f / 4.0f);
-        float rightGain = std::sin((pan + 1.0f) * 3.14159265f / 4.0f);
+        // Equal-power panning gains (pan in [-1,1], 0=center). Fix #8: cache the
+        // cos/sin and recompute only when the (atomic) pan value changes —
+        // otherwise they are wasted every callback.
+        if (pan != mTracks[t].lastPan) {
+            mTracks[t].leftGain = std::cos((pan + 1.0f) * 3.14159265f / 4.0f);
+            mTracks[t].rightGain = std::sin((pan + 1.0f) * 3.14159265f / 4.0f);
+            mTracks[t].lastPan = pan;
+        }
+        float leftGain = mTracks[t].leftGain;
+        float rightGain = mTracks[t].rightGain;
 
         // Accumulate track into output with panning
         float* trackBuf = mTracks[t].buffer;
@@ -116,16 +123,20 @@ void Mixer::mix(float* output, int numFrames) {
             float sampleL = trackBuf[i * 2] * vol;
             float sampleR = trackBuf[i * 2 + 1] * vol;
 
-            // RMS calculation (left channel)
-            trackRms += sampleL * sampleL;
+            // RMS calculation (left channel). Fix #7: decimate every 4th
+            // sample (metering only — does not affect the audio output).
+            if ((i & 3) == 0) {
+                trackRms += sampleL * sampleL;
+            }
 
             // Channel-matched stereo panning: L→L, R→R
             output[i * 2]     += sampleL * leftGain;   // Left
             output[i * 2 + 1] += sampleR * rightGain;  // Right
         }
 
-        // Store peak RMS (sqrt already applied by caller, or store squared)
-        trackRms = std::sqrt(trackRms / numFrames);
+        // Store peak RMS. Decimated: only ~numFrames/4 samples were summed, so
+        // scale by the decimation factor (4) to estimate the full sum.
+        trackRms = std::sqrt((4.0f * trackRms) / numFrames);
         // Update peak: only increase, never decrease
         float currentPeak = mTracks[t].peakMeter.load();
         if (trackRms > currentPeak) {

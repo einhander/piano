@@ -15,12 +15,15 @@ set(ENABLE_DASHBOARD OFF CACHE BOOL "")
 set(ENABLE_READLINE OFF CACHE BOOL "")
 set(ENABLE_SQLITE3 OFF CACHE BOOL "")
 set(ENABLE_SHARED_INTERNAL OFF CACHE BOOL "")
-set(ENABLE_OPTIMIZATIONS OFF CACHE BOOL "")
 set(ENABLE_FFT_DIALOG OFF CACHE BOOL "")
-set(ENABLE_TRACE OFF CACHE BOOL "")
+# Fix #13: trim FluidSynth for a leaner, faster build on low-end devices.
+# (These are the real option names in fluidsynth/CMakeLists.txt; the old
+#  uppercase ENABLE_* names above are dead and have no effect.)
+set(enable-ladspa OFF CACHE BOOL "")
+set(enable-native-dls OFF CACHE BOOL "")
+set(enable-network OFF CACHE BOOL "")
+set(enable-ipv6 OFF CACHE BOOL "")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "")
-set(LIBSNDFILE_LIBRARY "" CACHE STRING "")
-set(LIBSNDFILE_INCLUDE_DIR "" CACHE PATH "")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/fluidsynth ${CMAKE_CURRENT_BINARY_DIR}/fluidsynth)
 
 # Native library
@@ -32,6 +35,7 @@ add_library(native-lib SHARED
     audio/AudioDecoderBridge.cpp
     synth/FluidSynthEngine.cpp
     realtime/MidiQueue.cpp
+    realtime/SynthCmdQueue.cpp
     engine/MidiRouter.cpp
     engine/MidiRecorder.cpp
     engine/Sequencer.cpp
