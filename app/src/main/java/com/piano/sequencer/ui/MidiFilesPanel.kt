@@ -536,12 +536,12 @@ class MidiFilesPanel @JvmOverloads constructor(
     }
 
     /**
-     * "● Record" with a red dot — same pattern as "▶ Test" / "■ Stop"
+     * "●Record" with a red dot — same pattern as "▶ Test" / "■ Stop"
      * (glyph in the text, so the dot always sits next to the word, not at
-     * the button edge).
+     * the button edge). No space between dot and word (user spec).
      */
     private fun recordLabel(): CharSequence {
-        val s = SpannableString("● Record")
+        val s = SpannableString("●Record")
         s.setSpan(ForegroundColorSpan(0xFFDC1414.toInt()), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
         return s
     }
