@@ -4,6 +4,9 @@ import android.content.Context
 import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
 import android.util.AttributeSet
 import android.view.Gravity
 import android.widget.ArrayAdapter
@@ -312,20 +315,12 @@ class MidiFilesPanel @JvmOverloads constructor(
             )
         }
 
-        val dot = context.getDrawable(R.drawable.ic_record_dot)
-
         val recordBtn = Button(context).apply {
-            text = "Record"
+            text = recordLabel()
             textSize = 10f
-            // 8dp left: keep the record dot off the button's left edge
-            // (4px ≈ 1dp left it flush against the edge on device).
-            setPadding(dpToPx(8, context), 4, 4, 4)
+            setPadding(4, 4, 4, 4)
             minWidth = 0
             layoutParams = btnParams().apply { setMargins(0, 0, marginEnd, 0) }
-            setCompoundDrawablesWithIntrinsicBounds(dot, null, null, null)
-            // 15dp dot↔"Record" gap (user spec: 30-50px on device ≈ 10-16dp;
-            // dp for density consistency, matches the 8dp left padding).
-            setCompoundDrawablePadding(dpToPx(15, context))
         }
 
         val exportBtn = Button(context).apply {
@@ -492,23 +487,18 @@ class MidiFilesPanel @JvmOverloads constructor(
             when {
                 id == recordingCellId -> {
                     btn.text = "■ Stop"
-                    btn.setCompoundDrawablesWithIntrinsicBounds(null, null, null, null)
                     btn.setBackgroundColor(0xFFDC1414.toInt())
                     btn.setTextColor(0xFFFFFFFF.toInt())
                     btn.isEnabled = true
                 }
                 recordingCellId != null -> {
-                    btn.text = "Record"
-                    val dot = context.getDrawable(R.drawable.ic_record_dot)
-                    btn.setCompoundDrawablesWithIntrinsicBounds(dot, null, null, null)
+                    btn.text = recordLabel()
                     btn.background = cellRecordButtonDefaults[id]
                     btn.setTextColor(0xFF000000.toInt())
                     btn.isEnabled = false
                 }
                 else -> {
-                    btn.text = "Record"
-                    val dot = context.getDrawable(R.drawable.ic_record_dot)
-                    btn.setCompoundDrawablesWithIntrinsicBounds(dot, null, null, null)
+                    btn.text = recordLabel()
                     btn.background = cellRecordButtonDefaults[id]
                     btn.setTextColor(0xFF000000.toInt())
                     btn.isEnabled = true
@@ -543,5 +533,16 @@ class MidiFilesPanel @JvmOverloads constructor(
 
     private fun dpToPx(dp: Int, context: Context): Int {
         return (dp * context.resources.displayMetrics.density).toInt()
+    }
+
+    /**
+     * "● Record" with a red dot — same pattern as "▶ Test" / "■ Stop"
+     * (glyph in the text, so the dot always sits next to the word, not at
+     * the button edge).
+     */
+    private fun recordLabel(): CharSequence {
+        val s = SpannableString("● Record")
+        s.setSpan(ForegroundColorSpan(0xFFDC1414.toInt()), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return s
     }
 }
