@@ -31,6 +31,7 @@ import com.piano.sequencer.midi.MidiDeviceManager
 import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.MidiInputReceiver
 import com.piano.sequencer.midi.MidiFileTriggerController
+import com.piano.sequencer.midi.PitchBendChannelResolver
 import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.midi.noteToName
 import com.piano.sequencer.project.PseqArchive
@@ -76,6 +77,14 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var midiManager: MidiDeviceManager
     private lateinit var midiInputReceiver: MidiInputReceiver
+
+    // Channel of the last note played — pitch bend / mod / breath follow this
+    // channel. -1 until the first note. MIDI input callbacks run on binder
+    // threads (MidiReceiver.onSend); @Volatile for cross-thread visibility of
+    // lastNoteChannel (an Int write is atomic, so worst case is one transient
+    // stale channel).
+    @Volatile
+    private var lastNoteChannel: Int = -1
 
     // Live re-enumeration: notified when any MIDI device is added/removed
     // (e.g. a virtual MIDI device connected after the app started).
@@ -407,6 +416,8 @@ class MainActivity : AppCompatActivity() {
         midiInputReceiver = MidiInputReceiver()
         midiInputReceiver.setCallback(object : MidiInputReceiver.Callback {
             override fun onNoteOn(channel: Int, note: Int, velocity: Int) {
+                // Keyboard is using this channel regardless of file triggering
+                lastNoteChannel = channel
                 // Delegate to trigger controller — consumed if mapped
                 if (MidiFileTriggerController.get(this@MainActivity).onNoteOn(channel, note, velocity)) return
                 // Unmapped note → forward to engine
@@ -420,13 +431,29 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             override fun onControlChange(channel: Int, controller: Int, value: Int) {
-                withService { it.sendMidiMessage(0xB0 or channel, controller, value) }
+                if (controller in 0..1) {
+                    // Modulation / breath follow the keyboard's current channel
+                    val targets = PitchBendChannelResolver.resolve(lastNoteChannel, 1)
+                    withService { svc ->
+                        for (t in targets) {
+                            svc.sendMidiMessage(0xB0 or t, controller, value)
+                        }
+                    }
+                } else {
+                    withService { it.sendMidiMessage(0xB0 or channel, controller, value) }
+                }
             }
             override fun onProgramChange(channel: Int, program: Int) {
                 withService { it.sendMidiMessage(0xC0 or channel, program, 0) }
             }
             override fun onPitchBend(channel: Int, value: Int) {
-                withService { it.sendMidiMessage(0xE0 or channel, value and 0x7F, (value shr 7) and 0x7F) }
+                // Pitch bend follows the keyboard's current channel
+                val targets = PitchBendChannelResolver.resolve(lastNoteChannel, 1)
+                withService { svc ->
+                    for (t in targets) {
+                        svc.sendMidiMessage(0xE0 or t, value and 0x7F, (value shr 7) and 0x7F)
+                    }
+                }
             }
             override fun onChannelPressure(channel: Int, value: Int) {
                 withService { it.sendMidiMessage(0xD0 or channel, value, 0) }
