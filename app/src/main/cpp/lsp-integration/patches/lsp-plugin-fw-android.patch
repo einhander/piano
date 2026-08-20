@@ -1,0 +1,53 @@
+diff --git a/dependencies.mk b/dependencies.mk
+index e0d2138e..e11eef1d 100644
+--- a/dependencies.mk
++++ b/dependencies.mk
+@@ -289,8 +289,16 @@ LINUX_DEPENDENCIES_STANDALONE_UI_ALL = \
+ LINUX_DEPENDENCIES_LADSPA = \
+   LIBDL \
+   LIBPTHREAD \
+-  LIBRT \
+-  LIBSNDFILE
++  LIBRT
++ifeq ($(ANDROID_TARGET),1)
++  # libsndfile is not available on Android bionic; the LADSPA DSP path does not
++  # load audio files from disk, so it is omitted when cross-compiling for Android.
++  # Bionic libc also has pthread and rt built in (no libpthread/librt), so the
++  # NDK linker cannot find -lpthread / -lrt; drop them from the LADSPA link set.
++  LINUX_DEPENDENCIES_LADSPA := $(filter-out LIBPTHREAD LIBRT,$(LINUX_DEPENDENCIES_LADSPA))
++else
++  LINUX_DEPENDENCIES_LADSPA += LIBSNDFILE
++endif
+   
+ LINUX_DEPENDENCIES_LADSPA_BIN =
+ 
+@@ -1324,4 +1332,10 @@ ALL_DEPENDENCIES = \
+   $(MACOS_DEPENDENCIES_VST3_BIN) \
+   $(MACOS_DEPENDENCIES_VST3_UI_BIN)
+ 
+-  
+\ No newline at end of file
++# --- Android cross-compile: libsndfile is not available on bionic and the
++# LADSPA DSP path does not load audio files from disk, so drop it from the
++# build dependency list (and thus the -DUSE_LIBSNDFILE define / link flags).
++ifeq ($(ANDROID_TARGET),1)
++  DEPENDENCIES := $(filter-out LIBSNDFILE,$(DEPENDENCIES))
++  TEST_DEPENDENCIES := $(filter-out LIBSNDFILE,$(TEST_DEPENDENCIES))
++endif
+diff --git a/src/Makefile b/src/Makefile
+index a89d7b0b..a81d2b30 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -367,7 +367,11 @@ LSP_PLUGIN_FW_OBJ                   = \
+     $(LSP_PLUGIN_FW_OBJ_CTL) \
+   )
+ 
+-LSP_PLUGIN_FW_ALL_MFLAGS           += $(foreach dep,$(DEPENDENCIES),-DUSE_$(dep)) 
++# Android: libsndfile is not available on bionic and the LADSPA DSP path does
++# not load audio files from disk, so drop the LIBSNDFILE USE_ define and link
++# flags. When ANDROID_TARGET=1 is passed, LIBSNDFILE is filtered out of the
++# dependency list used for compiler defines / cflags / link flags.
++LSP_PLUGIN_FW_ALL_MFLAGS           += $(foreach dep,$(DEPENDENCIES),-DUSE_$(dep))
+ LSP_PLUGIN_FW_ALL_CFLAGS           += $(foreach dep,$(DEPENDENCIES), $($(dep)_CFLAGS))
+ LSP_PLUGIN_FW_ALL_CFLAGS           += $(foreach feature,$(ENABLED_FEATURES_DEFS), -DWITH_$(feature)_FEATURE)
+ 
