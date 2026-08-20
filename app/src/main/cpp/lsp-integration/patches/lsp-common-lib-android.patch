@@ -1,0 +1,52 @@
+diff --git a/src/main/stdlib.cpp b/src/main/stdlib.cpp
+index 463396b..0e293fd 100644
+--- a/src/main/stdlib.cpp
++++ b/src/main/stdlib.cpp
+@@ -21,6 +21,34 @@
+ 
+ #include <lsp-plug.in/stdlib/stdlib.h>
+ 
++#if defined(__ANDROID__)
++    // Bionic libc's qsort_r() has the BSD argument order and is only available
++    // from API level 28; the LSP common-lib target uses minSdk 26 and the
++    // glibc-style signature (compar before arg). Provide a thread-local thunk
++    // adapter backed by the universally-available qsort() instead, so the
++    // LADSPA DSP build does not depend on a particular Bionic API level.
++    #include <stdlib.h>
++    namespace lsp
++    {
++        namespace
++        {
++            struct android_qsort_thunk_t
++            {
++                sort_compar_r_t compar;
++                void            *arg;
++            };
++
++            __thread android_qsort_thunk_t android_qsort_thunk;
++
++            int android_qsort_compare(const void *a, const void *b)
++            {
++                return android_qsort_thunk.compar(a, b, android_qsort_thunk.arg);
++            }
++        }
++    }
++    #define LSP_ANDROID_HAS_QSORT_FALLBACK 1
++#endif /* __ANDROID__ */
++
+ namespace lsp
+ {
+     namespace
+@@ -57,7 +85,11 @@ namespace lsp
+     LSP_COMMON_LIB_PUBLIC
+     void qsort_r(void *data, size_t count, size_t szof, sort_compar_r_t compar, void *arg)
+     {
+-        #if defined(PLATFORM_LINUX) || defined(_GNU_SOURCE) || defined(__GNU__) || defined(PLATFORM_HAIKU)
++        #if defined(__ANDROID__)
++            android_qsort_thunk.compar   = compar;
++            android_qsort_thunk.arg      = arg;
++            ::qsort(data, count, szof, android_qsort_compare);
++        #elif defined(PLATFORM_LINUX) || defined(_GNU_SOURCE) || defined(__GNU__) || defined(PLATFORM_HAIKU)
+             ::qsort_r(data, count, szof, compar, arg);
+         #elif defined(PLATFORM_BSD) || defined(PLATFORM_MACOSX)
+             bsd_qsort_r_t sort;

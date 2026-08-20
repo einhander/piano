@@ -52,33 +52,49 @@ index 30f3488..5d9beaa 100644
      #endif /* PLATFORM_LINUX, PLATFORM_FREEBSD */
  
 diff --git a/include/lsp-plug.in/mm/InAudioFileStream.h b/include/lsp-plug.in/mm/InAudioFileStream.h
-index 702b85e..a5acaac 100644
+index 702b85e..f2acc4b 100644
 --- a/include/lsp-plug.in/mm/InAudioFileStream.h
 +++ b/include/lsp-plug.in/mm/InAudioFileStream.h
-@@ -31,6 +31,11 @@
+@@ -29,8 +29,18 @@
+ #include <lsp-plug.in/mm/IInAudioStream.h>
+ #include <lsp-plug.in/runtime/LSPString.h>
  
- #ifdef USE_LIBSNDFILE
+-#ifdef USE_LIBSNDFILE
++#if defined(__ANDROID__)
++    // On Android (Bionic) libsndfile is not available and the LADSPA DSP path
++    // never loads audio files from disk; always use the vendored stub here,
++    // even if USE_LIBSNDFILE is still set by the per-module dependency list.
++    #include <lsp-plug.in/3rdparty/sndfile_stub.h>
++#elif defined(USE_LIBSNDFILE)
      #include <sndfile.h>
 +#else
-+    // libsndfile is not linked (e.g. Android LADSPA build). Pull in the
-+    // vendored stub which declares the libsndfile types/enums/functions; the
-+    // sf_* call sites resolve to no-op stubs that report failure.
++    // libsndfile is not linked. Pull in the vendored stub which declares the
++    // libsndfile types/enums/functions; the sf_* call sites resolve to no-op
++    // stubs that report failure.
 +    #include <lsp-plug.in/3rdparty/sndfile_stub.h>
  #endif /* USE_LIBSNDFILE */
  
  namespace lsp
 diff --git a/include/lsp-plug.in/mm/OutAudioFileStream.h b/include/lsp-plug.in/mm/OutAudioFileStream.h
-index d8db88d..c549de8 100644
+index d8db88d..aecb007 100644
 --- a/include/lsp-plug.in/mm/OutAudioFileStream.h
 +++ b/include/lsp-plug.in/mm/OutAudioFileStream.h
-@@ -31,6 +31,11 @@
+@@ -29,8 +29,18 @@
+ #include <lsp-plug.in/mm/IOutAudioStream.h>
+ #include <lsp-plug.in/runtime/LSPString.h>
  
- #ifdef USE_LIBSNDFILE
+-#ifdef USE_LIBSNDFILE
++#if defined(__ANDROID__)
++    // On Android (Bionic) libsndfile is not available and the LADSPA DSP path
++    // never loads audio files from disk; always use the vendored stub here,
++    // even if USE_LIBSNDFILE is still set by the per-module dependency list.
++    #include <lsp-plug.in/3rdparty/sndfile_stub.h>
++#elif defined(USE_LIBSNDFILE)
      #include <sndfile.h>
 +#else
-+    // libsndfile is not linked (e.g. Android LADSPA build). Pull in the
-+    // vendored stub which declares the libsndfile types/enums/functions; the
-+    // sf_* call sites resolve to no-op stubs that report failure.
++    // libsndfile is not linked. Pull in the vendored stub which declares the
++    // libsndfile types/enums/functions; the sf_* call sites resolve to no-op
++    // stubs that report failure.
 +    #include <lsp-plug.in/3rdparty/sndfile_stub.h>
  #endif /* USE_LIBSNDFILE */
  

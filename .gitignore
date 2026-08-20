@@ -45,6 +45,10 @@ app/src/main/cpp/3rdparty/fluidsynth/include/fluidsynth/
 # committed (it is a nested git checkout of upstream tag 1.2.34). Only the
 # integration layer under app/src/main/cpp/lsp-integration/ is committed.
 app/src/main/cpp/third_party/lsp/
+# The built LADSPA .so is reproducible via build-lsp-ladspa-android.sh and is
+# large (~9 MB); do not commit the binary. Milestone-3+ CMake will consume it
+# from this path at build time.
+app/src/main/cpp/lsp-integration/prebuilt/**/*.so
 
 app/src/main/cpp/3rdparty/oboe/build/
 

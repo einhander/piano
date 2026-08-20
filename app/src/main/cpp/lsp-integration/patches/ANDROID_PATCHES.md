@@ -20,11 +20,13 @@ script before the build:
 third_party/lsp/patches/
 ├── lsp-runtime-lib-android.patch   # modifications to lsp-runtime-lib
 ├── lsp-plugin-fw-android.patch     # modifications to lsp-plugin-fw
+├── lsp-common-lib-android.patch    # modifications to lsp-common-lib (qsort_r)
 ├── android_posix_shim.cpp          # NEW: shm_open/shm_unlink stubs
 ├── iconv_android_shim.cpp          # NEW: iconv_open/iconv/iconv_close stubs
 ├── sndfile_stub.h                  # NEW: libsndfile API stub header
 ├── sndfile_stub.cpp                # NEW: libsndfile API stub implementation
-└── apply-android-patches.sh        # applies the above to the fetched tree
+├── apply-android-patches.sh        # applies the above to the fetched tree
+└── filter-android-deps.sh          # global dep-list filter (libsndfile/libpthread/librt)
 ```
 
 `apply-android-patches.sh` is idempotent and is intended to be run after
@@ -120,9 +122,12 @@ third_party/lsp/patches/
   `src/main/mm/sndfile_stub.cpp`)
 - **Reason:** libsndfile dev headers are not available for Android, and the
   LADSPA DSP path does not load audio files from disk.
-- **Fix:** vendored stub header providing `SF_FORMAT_*`/`SF_ENDIAN_*`/
-  `SF_ERR_*`/`SFM_*` constants and `sf_*` function declarations, backed by
-  stub implementations that report failure / return 0.
+- **Fix:** the two `*AudioFileStream.h` headers prefer the vendored stub on
+  `__ANDROID__` even when `USE_LIBSNDFILE` is still emitted (the global dep
+  filter, item 13, removes it for the build, but the guard is defensive).
+  The stub header provides `SF_FORMAT_*`/`SF_ENDIAN_*`/`SF_ERR_*`/`SFM_*`
+  constants and `sf_*` function declarations, backed by stub implementations
+  that report failure / return 0.
 - **Upstream DSP impact:** none.
 
 ### 10. Drop libsndfile from the build dependency graph
@@ -143,6 +148,32 @@ third_party/lsp/patches/
 - **Fix:** when `ANDROID_TARGET=1`, filter `LIBPTHREAD`/`LIBRT` out of
   `LINUX_DEPENDENCIES_LADSPA`. The `LIBDL` dependency is retained
   (`-ldl` resolves fine in Bionic).
+- **Upstream DSP impact:** none.
+
+### 12. `qsort_r` fallback (lsp-common-lib)
+- **Module:** lsp-common-lib (`src/main/stdlib.cpp`)
+- **Reason:** Bionic's `qsort_r()` has the BSD argument order and is only
+  available from API 28; the build targets minSdk 26 and the LSP common-lib
+  uses the glibc-style signature (compar before arg). On `__ANDROID__` the
+  GNU branch would call a hidden/absent `::qsort_r`.
+- **Fix:** add an `__ANDROID__` branch that adapts via a thread-local thunk
+  and falls back to the universally-available `qsort()`.
+- **Upstream DSP impact:** none.
+
+### 13. Global dependency-list filter (libsndfile / libpthread / librt)
+- **Modules:** every submodule's `dependencies.mk` + the meta
+  `dependencies.mk` (via `filter-android-deps.sh`)
+- **Reason:** each LSP module adds `LIBSNDFILE`/`LIBPTHREAD`/`LIBRT` to its
+  own `LINUX_DEPENDENCIES` (which Android pulls in as `PLATFORM=Linux`), and
+  the host resource/meta pass (compiled with `g++`) also emits
+  `-DUSE_LIBSNDFILE`, which makes `*AudioFileStream.h` include `<sndfile.h>`
+  that is absent on the build host. Per-module patches (items 10/11) only
+  cover lsp-runtime-lib and lsp-plugin-fw.
+- **Fix:** `filter-android-deps.sh` appends an idempotent filter block to
+  every `dependencies.mk`, trimming `LIBSNDFILE`/`LIBPTHREAD`/`LIBRT` from
+  `DEPENDENCIES`, `TEST_DEPENDENCIES` and `ALL_DEPENDENCIES`. Applied
+  unconditionally because both the host meta pass and the target cross-build
+  compile the same patched sources.
 - **Upstream DSP impact:** none.
 
 ## Resulting artifact

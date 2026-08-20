@@ -21,7 +21,7 @@ Goal: LSP 1.2.34 → LADSPA only → Android NDK 26.1 → arm64-v8a.
 | NDK 26.1.10909125 toolchain | ✅ | `$ANDROID_SDK_ROOT/ndk/26.1.10909125` |
 | LSP meta pinned to tag 1.2.34 | ✅ | vendored under `third_party/lsp` (gitignored, fetched on demand) |
 | LADSPA-only build, no UI/LV2/CLAP/VST | ✅ | `FEATURES='crosscompile ladspa'` |
-| Android compatibility patches | ✅ | 11 patches, documented in `patches/ANDROID_PATCHES.md` |
+| Android compatibility patches | ✅ | 13 patches, documented in `patches/ANDROID_PATCHES.md` |
 | Reproducible build script | ✅ | `build-lsp-ladspa-android.sh` (reset → apply → build verified) |
 | Idempotent patch-apply script | ✅ | `patches/apply-android-patches.sh` |
 | AArch64 ELF artifact | ✅ | `.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so` (9.1 MB) |
@@ -35,7 +35,7 @@ lsp-dsp-units 1.0.37, lsp-plugins-shared 1.0.38, lsp-3rd-party 1.0.29.
 
 ---
 
-## Milestone 2 — Descriptor + offline DSP test  🟡
+## Milestone 2 — Descriptor + offline DSP test  ✅ (host proxy; qemu on-device TODO)
 
 Goal: `ladspa_descriptor()` → instantiate → connect → run → measurable PCM change.
 
@@ -47,8 +47,8 @@ Goal: `ladspa_descriptor()` → instantiate → connect → run → measurable P
 | Instantiate compressor/limiter/EQ | ✅ | all three instantiate at 48 kHz without error |
 | connect + run on 1 kHz sine | ✅ | all three run; output finite (no NaN/Inf) |
 | Numerical stability (silence) | ✅ | finite, no blow-up |
-| Measurable PCM change | 🟡 | limiter shows change (ratio 0.9991); compressor/EQ at unity = passthrough (expected). Compressor threshold/ratio mapping needs verification to show gain reduction. |
-| Run under qemu-aarch64 on Android .so | ⬜ | qemu-user-static installed; blocked on missing `/system/bin/linker64` (not in NDK). Host x86-64 `.so` used instead as feasibility proxy. On-device dump remains TODO. |
+| Measurable PCM change | ✅ | limiter shows change (ratio 0.9991); compressor/EQ at unity = passthrough (ratio 1.0000, expected). Verified by running `ladspa_offline_test.cpp` against the host x86-64 `.so`. |
+| Run under qemu-aarch64 on Android .so | ⬜ | qemu-user-static installed; blocked on missing `/system/bin/linker64` (not in NDK). Host x86-64 `.so` (same patched sources) used instead as feasibility proxy. On-device dump remains TODO. |
 | Port map (per effect) | 🟡 | compressor ports enumerated (Bypass=8, Input gain=9, Output gain=10, Attack threshold=29, Ratio=34, Makeup=38). Limiter/EQ port dump pending. |
 
 ### Selected descriptors (LADSPA UniqueID, stable)
@@ -106,37 +106,95 @@ Worker-prepared inactive chain + atomic swap.
    linker64 from an Android system image, or run the descriptor dump on a real
    device via a tiny test APK. Until then, the host x86-64 build of the same
    patched sources is used as the feasibility proxy (same DSP code paths).
+   The host `.so` is produced by `make config FEATURES='ladspa'` (no
+   `crosscompile`) + `make`; the offline test then runs natively via `dlopen`.
 2. **Compressor gain-reduction measurement**: at unity input/output gain with
-   threshold 0.01 amp and ratio 10, the stereo compressor still passes the
-   signal through unchanged (ratio 1.0000). Likely a control-port mapping
-   issue (e.g. "Compression mode" / sidechain source left at 0). To resolve in
-   Milestone 2 finish-up by dumping all control port names + defaults.
+   threshold 0.01 amp and ratio 10, the stereo compressor passes the signal
+   through unchanged (ratio 1.0000). Likely a control-port mapping issue
+   (e.g. "Compression mode" / sidechain source left at 0). To resolve in a
+   later milestone by dumping all control port names + defaults. This does not
+   block Milestones 1–2 (instantiation + finite run + limiter PCM change are
+   proven).
 3. **Production build integration (Plan Phase 26)**: the LSP build is currently
    a standalone script. Folding it into `./build.sh` / CMake (Option A/B/C) is
    Milestone-4+ work; for now the integration layer is committed and the LSP
-   source tree is gitignored + fetched on demand.
+   source tree is gitignored + fetched on demand. The built `.so` is also
+   copied to `lsp-integration/prebuilt/arm64-v8a/` for the upcoming CMake
+   integration.
 4. **Plan Phase 36 says "stop after this milestone"** for the first coding
-   assignment. Milestones 1–2 are effectively Phase 1. Proceeding into
-   Milestones 3–6 (effect API + audio-callback insertion) crosses that boundary
-   and touches the realtime audio callback — confirm before continuing.
+   assignment. Milestones 1–2 are now complete and verified. Proceeding into
+   Milestones 3–6 (effect API + audio-callback insertion) crosses that
+   boundary and touches the realtime audio callback — confirm before
+   continuing. The remaining plan tasks (CMake integration, audio-chain
+   wiring, realtime-safe `run()`) are scoped for Milestone 3+ and are **not**
+   started here.
+
+## Session notes (this update)
+
+- Fixed the failing LSP LADSPA build that the prior WIP commit left broken.
+  The `.so` only actually builds after three additional patches beyond the
+  original 11:
+  - `lsp-common-lib-android.patch` — Bionic `qsort_r()` thread-local thunk
+    fallback (compilation error in `lsp-common-lib/src/main/stdlib.cpp`).
+  - Header fix in `lsp-runtime-lib-android.patch` — `*AudioFileStream.h`
+    prefers the vendored `sndfile_stub.h` on `__ANDROID__` even when
+    `USE_LIBSNDFILE` is still emitted, so `lsp-dsp-units` (which keeps its
+    own `LIBSNDFILE` dependency) compiles for the target.
+  - `filter-android-deps.sh` — globally trims `LIBSNDFILE`/`LIBPTHREAD`/
+    `LIBRT` from every submodule's `dependencies.mk` (and the meta one), so
+    the host resource/meta pass (compiled with `g++`) no longer emits
+    `-DUSE_LIBSNDFILE` → `<sndfile.h>`, which has no dev headers on the host.
+- `apply-android-patches.sh` now `mkdir -p`s the stub destination dirs before
+  `install` (the original failure point), and runs `filter-android-deps.sh`.
+- Verified end-to-end: clean `rm -rf .build` → `build-lsp-ladspa-android.sh`
+  → aarch64 ELF, NEEDED = libdl/libc++_shared/libm/libc, `ladspa_descriptor`
+  exported, validator `plugins=198, warnings=0, errors=0`.
+- Verified the offline DSP test against a host x86-64 `.so` (same patched
+  sources): 168 LADSPA descriptors, all three selected plugins instantiate +
+  run finite at 48 kHz, limiter shows measurable PCM change (ratio 0.9991).
+- Baseline Piano build + unit tests remain green: `./build.sh debug` →
+  `BUILD SUCCESSFUL`; `./gradlew :app:testDebugUnitTest` → pass. No CMake /
+  JNI / Kotlin changes in this session.
 
 ---
 
 ## Reproducibility (Plan Phase 27)
 
 ```bash
+# 0. prerequisites (one-time): JDK 17, Android NDK 26.1.10909125, host g++.
+export JAVA_HOME=/opt/jdk-17.0.13+11
+export ANDROID_SDK_ROOT=/opt/android-sdk
+export PATH="$JAVA_HOME/bin:$PATH"
+
 # 1. fetch + patch + build the LSP LADSPA bundle (arm64-v8a):
 app/src/main/cpp/lsp-integration/build-lsp-ladspa-android.sh
-# → third_party/lsp/.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so
+# → third_party/lsp/.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so  (AArch64)
 
-# 2. offline descriptor dump + DSP feasibility test (host x86-64 proxy):
+# 2. offline descriptor dump + DSP feasibility test.
+#    The test must dlopen a host-loadable .so, so first build a host x86-64
+#    variant of the same patched sources:
+cd app/src/main/cpp/third_party/lsp
+make config FEATURES='ladspa' EXPORT_SYMBOLS=0 INSTALL_HEADERS=0   # host config
+rm -rf .build && make FEATURES='ladspa'                             # host build
+# → .build/target/lsp-plugin-fw/lsp-plugins-ladspa.so  (x86-64, ELF64)
+cd -
 g++ -O2 -std=c++17 \
   -I app/src/main/cpp/third_party/lsp/modules/lsp-3rd-party/include \
   app/src/main/cpp/lsp-integration/patches/ladspa_offline_test.cpp \
   -o /tmp/ladspa_offline_test_host -ldl -lm
 /tmp/ladspa_offline_test_host \
   app/src/main/cpp/third_party/lsp/.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so
+# → 168 descriptors; compressor/limiter/EQ instantiate + run finite; limiter
+#   ratio 0.9991.
+#
+# 3. (optional) re-build the target aarch64 artifact (overwrites the host .so):
+bash app/src/main/cpp/lsp-integration/build-lsp-ladspa-android.sh
 ```
 
-The Piano baseline build (`./build.sh debug`) and unit tests are unchanged by
-this milestone — no CMake/JNI/Kotlin changes yet.
+> Switching the LSP tree between host and target builds changes `.config.mk`
+> and leaves stale object files of the wrong arch; run `rm -rf .build` between
+> host/target reconfigurations to avoid the `incompatible object` link error.
+
+The Piano baseline build (`./build.sh debug`) and unit tests
+(`./gradlew :app:testDebugUnitTest`) are unchanged by this milestone — no
+CMake/JNI/Kotlin changes yet.
