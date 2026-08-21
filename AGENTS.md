@@ -160,3 +160,40 @@ Kotlin plugins: `org.jetbrains.kotlin.android`, `org.jetbrains.kotlin.plugin.ser
 
 - `docs/architecture.md` — architecture, data flow, threading model
 - `docs/realtime-rules.md` — real-time constraints, sample-accurate scheduling, JNI safety
+
+## Dev-machine toolchain (this container)
+
+- JDK 17 Temurin at `/opt/jdk-17`; Android SDK at `/opt/android-sdk`
+  (platform android-34, build-tools 34.0.0, ndk 26.1.10909125, cmake 3.22.1,
+  platform-tools, cmdline-tools/latest). Env exports live in `~/.piano_env.sh`
+  (sourced from `~/.bashrc` and `~/.profile`); `local.properties` points at the
+  SDK root. System `g++` 14.2 + `cmake` 3.31 are used only for the LSP host
+  build / offline tests.
+- Build/verify: `./build.sh debug` must print `BUILD SUCCESSFUL`; unit tests
+  `./gradlew :app:testDebugUnitTest` must pass.
+- Shallow-clone gotcha: the `oboe`/`fluidsynth` submodules are NOT fetched by
+  a shallow clone and CMake fails with missing `third_party/*/CMakeLists.txt`.
+  Run `git submodule update --init` once before the first native build.
+
+## LSP Plugins integration layer
+
+- LSP source tree (`app/src/main/cpp/third_party/lsp/`) is gitignored and
+  fetched on demand: clone `lsp-plugins/lsp-plugins` tag `1.2.34`, then the
+  build script's `make config`/`make fetch` pull the submodules.
+- Cross-compile: `app/src/main/cpp/lsp-integration/build-lsp-ladspa-android.sh`
+  → `third_party/lsp/.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so`
+  (AArch64, exports `ladspa_descriptor`, NEEDED = libdl/libc++_shared/libm/libc).
+  Copy it (with the `lib` prefix) to
+  `lsp-integration/prebuilt/arm64-v8a/liblsp-plugins-ladspa.so` so the Gradle
+  `jniLibs` sourceSet packages it.
+- Host x86-64 build (for the offline tests in `lsp-integration/tests/`): from
+  `third_party/lsp`, `make config FEATURES='ladspa'`, then `rm -rf .build` +
+  `make` (the `rm -rf .build` is required when switching host/target arch —
+  stale objects of the wrong arch cause `incompatible object` link errors).
+- `effect_chain_test.cpp` documents its own exact `g++` command line in a
+  header comment; it links the app effect sources directly.
+- The UI (`EffectsActivity`) reads parameter ranges/flags only from the native
+  descriptor tables (`piano::lsp::paramDescriptors`); do NOT duplicate DSP
+  ranges in Kotlin. Effect state persists to `piano_prefs` (`fx_enabled_<slot>`,
+  `fx_param_<slot>_<id>`); the project format (Milestone 8) is untouched.
+- Progress: `app/src/main/cpp/lsp-integration/PROGRESS.md` (milestone tracker).
