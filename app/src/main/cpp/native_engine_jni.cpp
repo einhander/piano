@@ -640,6 +640,88 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterPeakMeter(
     return 0.0f;
 }
 
+// ── Master effect chain (LSP) ──
+// Worker-thread only (touches the LADSPA bundle / dlopen).
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeLoadMasterEffectBundle(
+    JNIEnv* env, jclass, jstring soPath) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) {
+        return 0;
+    }
+    jint result = 0;
+    if (soPath != nullptr) {
+        const char* path = env->GetStringUTFChars(soPath, nullptr);
+        if (path != nullptr) {
+            result = inst->loadMasterEffectBundle(path);
+            env->ReleaseStringUTFChars(soPath, path);
+        }
+    }
+    return result;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeIsMasterEffectChainAvailable(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jboolean>(inst->isMasterEffectChainAvailable());
+    return JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterEffectCount(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getMasterEffectCount());
+    return 0;
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetMasterEffectEnabled(
+    JNIEnv* env, jclass, jint slot, jboolean enabled) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setMasterEffectEnabled(static_cast<int>(slot),
+                                     static_cast<bool>(enabled));
+    }
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeIsMasterEffectEnabled(
+    JNIEnv* env, jclass, jint slot) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jboolean>(inst->isMasterEffectEnabled(static_cast<int>(slot)));
+    return JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetMasterEffectParameter(
+    JNIEnv* env, jclass, jint slot, jint parameterId, jfloat value) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) {
+        inst->setMasterEffectParameter(static_cast<int>(slot),
+                                       static_cast<int>(parameterId),
+                                       static_cast<float>(value));
+    }
+}
+
+JNIEXPORT jfloat JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterEffectParameter(
+    JNIEnv* env, jclass, jint slot, jint parameterId) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jfloat>(inst->getMasterEffectParameter(
+        static_cast<int>(slot), static_cast<int>(parameterId)));
+    return 0.0f;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterEffectStableId(
+    JNIEnv* env, jclass, jint slot) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    const char* id = (inst) ? inst->getMasterEffectStableId(static_cast<int>(slot)) : "";
+    return env->NewStringUTF(id ? id : "");
+}
+
 // Launch quantization
 JNIEXPORT void JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeSetQuantizationGrid(

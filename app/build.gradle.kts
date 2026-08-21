@@ -94,6 +94,16 @@ android {
     buildFeatures {
         buildConfig = false
     }
+
+    // Package the prebuilt LSP LADSPA bundle (.so) as a JNI library so it is
+    // extracted into the app's nativeLibraryDir at install time and loadable
+    // via the absolute path passed to loadMasterEffectBundle(). Only arm64-v8a
+    // is shipped in v1 (the bundle is cross-compiled for aarch64 only).
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDir("src/main/cpp/lsp-integration/prebuilt")
+        }
+    }
 }
 
 dependencies {

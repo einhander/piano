@@ -58,34 +58,72 @@ All three selected plugins are stereo, exposing 4 audio ports:
 This matches PianoAPP's planar internal effect API
 (`AudioEffect::process(float* left, float* right, int frames)`).
 
-## Key control ports (Phase 2 preview)
+## Control-port maps (runtime-verified)
 
-Port IDs below come from the upstream plugin metadata (the `port_t` arrays in
-the per-plugin `meta/*.cpp`). PianoAPP will map these to its own stable
-parameter names (Phase 14). Exact port indexes and range hints will be
-confirmed by the offline descriptor-dump test (Milestone 2 runtime step).
+Audio ports are identical across the three plugins: `0`=in L, `1`=in R,
+`2`=out L, `3`=out R. The control ports below are the ones the PianoAPP
+adapter binds; `Bypass` is wired to the plugin's own bypass port (LADSPA hard
+bypass in `run()`), and `latency` (CTL_OUT) is read after `activate()` for
+chain delay compensation. Hint bits decoded: `0x4`=logarithmic, `0x20`=toggled,
+`0x40`=integer, `0x200`=sample-rate dependent, `0x1000`=SR-dependent-max.
 
-### Compressor Stereo (`compressor_stereo`)
-| Upstream port id | Display name      | Piano stable name (proposed) |
-|------------------|-------------------|------------------------------|
-| `al`             | Attack threshold  | `threshold`                  |
-| `cr`             | Ratio             | `ratio`                      |
-| `at`             | Attack time       | `attack_ms`                  |
-| `rt`             | Release time      | `release_ms`                 |
-| `mk`             | Makeup gain       | `makeup_db`                  |
+### `lsp.compressor` — `compressor_stereo` (uid 5002091, 66 ports)
 
-### Limiter Stereo (`limiter_stereo`)
-Threshold / release ports will be enumerated in the runtime dump.
+| Piano stable name | Port | Range        | Hint      | Notes |
+|-------------------|------|--------------|-----------|-------|
+| `bypass`          | 8    | 0..1         | tog       | plugin bypass |
+| `input_gain`      | 9    | 0..1000      | log,sr    | input trim (G) |
+| `output_gain`     | 10   | 0..1000      | log,sr    | output trim (G) |
+| `compression_mode`| 28   | 0..2         | int       | 0=classic; set ≠0 for active comp |
+| `threshold`       | 29   | 0.001..1     | sr        | attack threshold (G) |
+| `attack_ms`       | 30   | 0..2000      | sr        | attack time |
+| `release_ms`      | 32   | 0..5000      | log,sr    | release time |
+| `ratio`           | 34   | 1..100       |           | compression ratio |
+| `knee`            | 35   | 0.0631..1    | sr        | knee (G) |
+| `makeup`          | 38   | 0.001..1000  | log,sr    | makeup gain (G) |
+| `wet`             | 40   | 0..10        | log,sr    | wet gain (default 1.0) |
+| `latency`         | 65   | —            |           | CTL_OUT, read for delay comp |
 
-### Parametric EQ x16 Stereo (`para_equalizer_x16_stereo`)
-Per-band frequency / gain / Q ports will be enumerated in the runtime dump;
-only a few bands will be exposed to the UI initially.
+### `lsp.limiter` — `limiter_stereo` (uid 5002123, 46 ports)
 
-## Runtime enumeration (TODO)
+| Piano stable name | Port | Range          | Hint   | Notes |
+|-------------------|------|----------------|--------|-------|
+| `bypass`          | 8    | 0..1           | tog    | plugin bypass |
+| `input_gain`      | 9    | 0..1000        | log,sr | input trim (G) |
+| `output_gain`     | 10   | 0..1000        | log,sr | output trim (G) |
+| `threshold`       | 16   | 0.00398..1     | log,sr | ceiling threshold (G) |
+| `lookahead_ms`    | 19   | 0.1..20        | sr     | lookahead |
+| `attack_ms`       | 20   | 0.25..20       | sr     | attack time |
+| `release_ms`      | 21   | 0.25..20       | sr     | release time |
+| `knee_db`         | 44   | -48..0         |        | knee smooth (dB) |
+| `latency`         | 45   | —              |        | CTL_OUT, read for delay comp |
 
-A small host-side / on-device diagnostic that calls `ladspa_descriptor(i)` for
-increasing `i` until it returns `NULL`, printing UniqueID/Label/Name/
-PortCount/port classification, will be added to fully validate the table
-above against the actual Android ELF. Until qemu-aarch64 is available or the
-descriptor dump runs on-device, the values above are taken from the upstream
-metadata sources that were compiled into the artifact.
+### `lsp.parametric_eq` — `para_equalizer_x16_stereo` (uid 5002076, 206 ports)
+
+| Piano stable name | Port | Range             | Hint   | Notes |
+|-------------------|------|-------------------|--------|-------|
+| `bypass`          | 4    | 0..1              | tog    | plugin bypass |
+| `input_gain`      | 5    | 0..10             | log,sr | input trim (G) |
+| `output_gain`     | 6    | 0..10             | log,sr | output trim (G) |
+| `band0_type`      | 28   | 0..11             | int    | filter type (0=off) |
+| `band0_mode`      | 29   | 0..6              | int    | filter mode (RLC, etc.) |
+| `band0_mute`      | 32   | 0..1              | tog    | band mute |
+| `band0_freq`      | 33   | 10..24000         | log    | center frequency (Hz) |
+| `band0_gain`      | 35   | 0.01585..63.0957  | log,sr | band gain (G) |
+| `band0_q`         | 36   | 0..100            |        | quality factor |
+| `latency`         | 205  | —                 |        | CTL_OUT, read for delay comp |
+
+Band N (1..15) repeats with stride 11 from band 0: `type=28+N*11`,
+`mode=29+N*11`, `mute=32+N*11`, `freq=33+N*11`, `gain=35+N*11`,
+`q=36+N*11`. Band 0 is the only one wired in the first UI iteration; the
+remaining bands default to `type=0` (off) so the EQ is flat by default.
+
+## Runtime enumeration ✅
+
+The port tables above are no longer taken from metadata sources alone — they
+were validated by running `patches/ladspa_dump.cpp` against the host x86-64
+build of the same patched sources (the Android aarch64 `.so` cannot be dlopen'd
+on x86-64 without the Bionic linker; see PROGRESS.md open question #1). The
+dump confirms 168 LADSPA descriptors and the exact port indexes/ranges/hint
+bits recorded in the per-plugin tables above. Audio ports are `0`=in L,
+`1`=in R, `2`=out L, `3`=out R for all three plugins.

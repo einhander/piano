@@ -20,6 +20,7 @@
 #include "engine/MidiRecorder.h"
 #include "engine/MidiFilePlayer.h"
 #include "synth/FluidSynthEngine.h"
+#include "effects/EffectChain.h"
 
 class OboeOutput;
 
@@ -123,6 +124,26 @@ public:
     // Master bus controls
     void setMasterVolume(float volume);
     float getMasterPeakMeter() const;
+
+    // ── Master effect chain (LSP) ──
+    // All calls are service-owned and must run on a worker thread per
+    // AGENTS.md (they touch the LADSPA bundle / dlopen). The atomic parameter
+    // setters are cheap, but the architecture stays service-owned.
+    //
+    // Loads the LSP LADSPA bundle and prepares the fixed 3-effect chain
+    // (EQ → Compressor → Limiter) at the current sample rate / max frames.
+    // Returns the number of effects that became available (0..3). If the
+    // bundle cannot be opened, returns 0 and the chain stays bypassed (the
+    // engine keeps running). Worker thread.
+    int loadMasterEffectBundle(const char* soPath);
+    bool isMasterEffectChainAvailable() const;
+    int getMasterEffectCount() const;
+    void setMasterEffectEnabled(int slot, bool enabled);
+    bool isMasterEffectEnabled(int slot) const;
+    void setMasterEffectParameter(int slot, int parameterId, float value);
+    float getMasterEffectParameter(int slot, int parameterId) const;
+    // The stable id of the effect at a slot (e.g. "lsp.compressor"), or "".
+    const char* getMasterEffectStableId(int slot) const;
 
     // Project loading (called from worker thread, NOT audio callback)
     void loadProject(const char* json);
@@ -270,6 +291,10 @@ private:
     // Mixer + MasterBus (audio mixing pipeline)
     Mixer mMixer;
     MasterBus mMasterBus;
+    // Fixed LSP master effect chain (EQ → Compressor → Limiter). When the
+    // bundle is not loaded or all effects are bypassed, process() is a no-op
+    // passthrough — the engine behaves exactly as before LSP integration.
+    piano::EffectChain mMasterEffects;
 
     // Clip storage (owned by NativeEngine, safe for audio thread access)
     static constexpr int32_t kMaxClips = 64;

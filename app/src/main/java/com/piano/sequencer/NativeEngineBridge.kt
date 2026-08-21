@@ -126,6 +126,20 @@ object NativeEngineBridge {
     external fun nativeSetMasterVolume(volume: Float)
     external fun nativeGetMasterPeakMeter(): Float
 
+    // ── Master effect chain (LSP) — worker thread only ──
+    // Loads the LSP LADSPA bundle and prepares the fixed 3-effect chain
+    // (EQ → Compressor → Limiter). Returns the number of effects available
+    // (0..3). If the bundle cannot be opened, returns 0 and the chain stays
+    // bypassed (the engine keeps running). Call from a worker thread.
+    external fun nativeLoadMasterEffectBundle(soPath: String): Int
+    external fun nativeIsMasterEffectChainAvailable(): Boolean
+    external fun nativeGetMasterEffectCount(): Int
+    external fun nativeSetMasterEffectEnabled(slot: Int, enabled: Boolean)
+    external fun nativeIsMasterEffectEnabled(slot: Int): Boolean
+    external fun nativeSetMasterEffectParameter(slot: Int, parameterId: Int, value: Float)
+    external fun nativeGetMasterEffectParameter(slot: Int, parameterId: Int): Float
+    external fun nativeGetMasterEffectStableId(slot: Int): String
+
     // Count-in metronome
     external fun nativeStartCountIn(beats: Int): Long
     external fun nativeIsCountingIn(): Boolean

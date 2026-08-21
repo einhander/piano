@@ -34,6 +34,24 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         fun getPolyphony(): Int = this@PlaybackService.getPolyphony()
         fun setMasterGain(gain: Float) = this@PlaybackService.setMasterGain(gain)
         fun getMasterGain(): Float = this@PlaybackService.getMasterGain()
+
+        // Master effect chain (LSP). Worker thread only.
+        fun loadMasterEffectBundle(soPath: String): Int =
+            this@PlaybackService.loadMasterEffectBundle(soPath)
+        fun isMasterEffectChainAvailable(): Boolean =
+            this@PlaybackService.isMasterEffectChainAvailable()
+        fun getMasterEffectCount(): Int =
+            this@PlaybackService.getMasterEffectCount()
+        fun setMasterEffectEnabled(slot: Int, enabled: Boolean) =
+            this@PlaybackService.setMasterEffectEnabled(slot, enabled)
+        fun isMasterEffectEnabled(slot: Int): Boolean =
+            this@PlaybackService.isMasterEffectEnabled(slot)
+        fun setMasterEffectParameter(slot: Int, parameterId: Int, value: Float) =
+            this@PlaybackService.setMasterEffectParameter(slot, parameterId, value)
+        fun getMasterEffectParameter(slot: Int, parameterId: Int): Float =
+            this@PlaybackService.getMasterEffectParameter(slot, parameterId)
+        fun getMasterEffectStableId(slot: Int): String =
+            this@PlaybackService.getMasterEffectStableId(slot)
         fun loadSoundFont(filePath: String): Int = this@PlaybackService.loadSoundFont(filePath)
         fun unloadSoundFonts() = this@PlaybackService.unloadSoundFonts()
         fun getSoundFontCount(): Int = this@PlaybackService.getSoundFontCount()
@@ -235,6 +253,27 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun setPolyphony(value: Int) = NativeEngineBridge.nativeSetPolyphony(value)
     fun getPolyphony(): Int = NativeEngineBridge.nativeGetPolyphony()
     fun getMasterGain(): Float = NativeEngineBridge.nativeGetMasterGain()
+
+    // ── Master effect chain (LSP) — worker thread only ──
+    // dlopen + LADSPA instantiate happen in loadMasterEffectBundle(); the
+    // parameter setters are atomic but, per AGENTS.md, all PlaybackService
+    // methods are direct JNI calls and must be invoked off the main thread.
+    fun loadMasterEffectBundle(soPath: String): Int =
+        NativeEngineBridge.nativeLoadMasterEffectBundle(soPath)
+    fun isMasterEffectChainAvailable(): Boolean =
+        NativeEngineBridge.nativeIsMasterEffectChainAvailable()
+    fun getMasterEffectCount(): Int =
+        NativeEngineBridge.nativeGetMasterEffectCount()
+    fun setMasterEffectEnabled(slot: Int, enabled: Boolean) =
+        NativeEngineBridge.nativeSetMasterEffectEnabled(slot, enabled)
+    fun isMasterEffectEnabled(slot: Int): Boolean =
+        NativeEngineBridge.nativeIsMasterEffectEnabled(slot)
+    fun setMasterEffectParameter(slot: Int, parameterId: Int, value: Float) =
+        NativeEngineBridge.nativeSetMasterEffectParameter(slot, parameterId, value)
+    fun getMasterEffectParameter(slot: Int, parameterId: Int): Float =
+        NativeEngineBridge.nativeGetMasterEffectParameter(slot, parameterId)
+    fun getMasterEffectStableId(slot: Int): String =
+        NativeEngineBridge.nativeGetMasterEffectStableId(slot)
 
     // Reverb / Chorus / Interpolation (Fix #10-12). Worker thread only.
     fun setReverb(on: Boolean) = NativeEngineBridge.nativeSetReverb(on)

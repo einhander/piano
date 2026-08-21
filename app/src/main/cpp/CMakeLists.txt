@@ -48,6 +48,15 @@ add_library(native-lib SHARED
     engine/MidiFilePlayer.cpp
     midi/MidiFileParser.cpp
     midi/MidiFileWriter.cpp
+    # LSP master effect chain (Milestone 3+). The LADSPA bundle is loaded at
+    # runtime via dlopen (no build-time link dependency on the prebuilt .so),
+    # so a clean checkout builds with the chain as a passthrough. The vendored
+    # ladspa.h (LGPL) is the only header dependency.
+    effects/EffectChain.cpp
+    effects/ladspa/LadspaEffect.cpp
+    effects/ladspa/LadspaRegistry.cpp
+    effects/lsp/LspEffectFactory.cpp
+    effects/lsp/LspEffectIds.cpp
 )
 
 # Include directories
@@ -59,6 +68,7 @@ target_include_directories(native-lib PRIVATE
     realtime
     model
     midi
+    effects
 )
 
 # Link libraries
@@ -68,4 +78,6 @@ libfluidsynth
     log
     android
     OpenSLES
+    # dlopen for the runtime LSP LADSPA bundle loader.
+    dl
 )

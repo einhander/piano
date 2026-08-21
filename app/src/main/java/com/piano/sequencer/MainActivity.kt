@@ -223,6 +223,15 @@ class MainActivity : AppCompatActivity() {
                 }
                 AppLogger.info("MainActivity", "Engine initialized (${actualRate}Hz, 512 buffer)")
 
+                // Load the prebuilt LSP LADSPA bundle (master effect chain: EQ →
+                // Compressor → Limiter). Extracted into nativeLibraryDir at
+                // install time by the jniLibs sourceSet. Best-effort: if it is
+                // missing/incompatible, loadMasterEffectBundle() returns 0 and
+                // the chain stays a passthrough (the engine keeps running).
+                // Effects are loaded DISABLED (bypassed) by default; the UI
+                // toggles them on after the user opts in.
+                loadMasterEffectBundle(svc)
+
                 // Restore persisted state (SF2, polyphony, master gain, channel programs)
                 restorePersistedState(svc)
 
@@ -572,6 +581,28 @@ class MainActivity : AppCompatActivity() {
     // (SF2, polyphony, master gain, channel programs) is reset to defaults.
     // If the engine survived (activity recreation) its state is intact — the
     // sfcount guard skips the restore.
+    /**
+     * Load the prebuilt LSP LADSPA bundle into the master effect chain. Called
+     * on the worker thread after the engine is initialized. The bundle is
+     * packaged as a jniLib and extracted to nativeLibraryDir at install time.
+     * Effects are loaded DISABLED (bypassed); the UI enables them on opt-in.
+     */
+    private fun loadMasterEffectBundle(svc: PlaybackService) {
+        val libDir = applicationInfo.nativeLibraryDir
+        val soPath = "$libDir/liblsp-plugins-ladspa.so"
+        val available = try {
+            svc.loadMasterEffectBundle(soPath)
+        } catch (e: UnsatisfiedLinkError) {
+            AppLogger.warn("MainActivity", "LSP bundle load failed: ${e.message}")
+            0
+        }
+        if (available > 0) {
+            AppLogger.info("MainActivity", "LSP master effects available: $available/${svc.getMasterEffectCount()}")
+        } else {
+            AppLogger.warn("MainActivity", "LSP master effects unavailable (chain bypassed)")
+        }
+    }
+
     private fun restorePersistedState(svc: PlaybackService) {
         // A fresh engine always starts with no SoundFonts, so sfcount > 0
         // means the engine survived (activity recreation) — state intact.

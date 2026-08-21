@@ -78,6 +78,13 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     mMixer.init(16, mMaxSynthFrames);
     mMasterBus.init(mMaxSynthFrames);
 
+    // Prepare the master effect chain scratch buffers at the same max as
+    // Mixer/MasterBus (plan Phase 7). The LSP bundle is NOT loaded here — it
+    // is loaded lazily by loadMasterEffectBundle() (called from the
+    // PlaybackService worker thread after the engine is up, once the prebuilt
+    // .so path is known). With the bundle absent, process() is a passthrough.
+    mMasterEffects.prepare(sampleRate, mMaxSynthFrames);
+
     // Route FluidSynth output through Mixer track 0
     mMixer.setVolume(0, 1.0f);
     mMixer.setPan(0, 0.0f);
@@ -494,6 +501,16 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     // Mix all tracks through Mixer into stereo output
     mMixer.mix(output, safeFrames);
 
+    // ── LSP master effect chain (EQ → Compressor → Limiter) ──
+    // Inserted AFTER the Mixer and BEFORE the MasterBus, per plan Phase 6/17:
+    //   Mixer → EQ → Compressor → Limiter → MasterBus → Oboe
+    // This runs after endSynthAccess() (the FluidSynth sequence-lock region
+    // ended above), processes exactly safeFrames, and is a no-op passthrough
+    // when the bundle is not loaded or every effect is bypassed — so the
+    // baseline audio path is unchanged. Realtime-safe: deinterleave once into
+    // pre-allocated planar scratch, run fixed effect array, interleave once.
+    mMasterEffects.process(output, safeFrames);
+
     // Process through MasterBus (volume + soft clipper)
     mMasterBus.process(output, safeFrames);
 
@@ -648,6 +665,55 @@ void NativeEngine::setMasterVolume(float volume) {
 
 float NativeEngine::getMasterPeakMeter() const {
     return mMasterBus.getPeakMeter();
+}
+
+// ── Master effect chain (LSP) ──
+int NativeEngine::loadMasterEffectBundle(const char* soPath) {
+    // Worker thread. dlopen + instantiate happen here; the audio thread only
+    // ever calls process() (no alloc/lock). Re-prepares at the current rate/max.
+    return mMasterEffects.loadBundle(soPath, mSampleRate, mMaxSynthFrames);
+}
+
+bool NativeEngine::isMasterEffectChainAvailable() const {
+    return mMasterEffects.isAvailable();
+}
+
+int NativeEngine::getMasterEffectCount() const {
+    return mMasterEffects.effectCount();
+}
+
+void NativeEngine::setMasterEffectEnabled(int slot, bool enabled) {
+    if (auto* e = mMasterEffects.effect(slot)) {
+        // "Enabled" = not bypassed. Default is bypassed (safe).
+        e->setBypassed(!enabled);
+    }
+}
+
+bool NativeEngine::isMasterEffectEnabled(int slot) const {
+    if (auto* e = mMasterEffects.effect(slot)) {
+        return !e->isBypassed();
+    }
+    return false;
+}
+
+void NativeEngine::setMasterEffectParameter(int slot, int parameterId, float value) {
+    if (auto* e = mMasterEffects.effect(slot)) {
+        e->setParameter(static_cast<uint32_t>(parameterId), value);
+    }
+}
+
+float NativeEngine::getMasterEffectParameter(int slot, int parameterId) const {
+    if (auto* e = mMasterEffects.effect(slot)) {
+        return e->getParameter(static_cast<uint32_t>(parameterId));
+    }
+    return 0.0f;
+}
+
+const char* NativeEngine::getMasterEffectStableId(int slot) const {
+    if (auto* e = mMasterEffects.effect(slot)) {
+        return e->stableId();
+    }
+    return "";
 }
 
 void NativeEngine::addClip(int32_t clipId, int32_t trackId, int64_t startTick, int64_t lengthTicks,

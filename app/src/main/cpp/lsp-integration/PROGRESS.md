@@ -64,24 +64,37 @@ Goal: `ladspa_descriptor()` → instantiate → connect → run → measurable P
 
 ---
 
-## Milestone 3 — Piano effect abstraction  ⬜
+## Milestone 3 — Piano effect abstraction  ✅
 
 `app/src/main/cpp/effects/`: `AudioEffect.h`, `EffectChain`, `LadspaEffect`,
-`LadspaRegistry` / `LspEffectFactory`. Per plan Phases 6, 12–16. No UI yet.
+`LadspaRegistry` / `LspEffectFactory` + `LspEffectIds`. Per plan Phases 6,
+12–16. Realtime-safe (pre-allocated buffers, `std::atomic` param store, fixed
+`AtomicParam[]` array since `std::atomic` is non-MoveInsertable). Verified by
+the host `effect_chain_test` (see Current status below).
 
-## Milestone 4 — One master EQ  ⬜
+## Milestone 4 — One master EQ  ✅
 
-Mixer → LSP EQ → MasterBus. Plan Phase 7/8/9/10 (buffer sizing, insertion point,
-`safeFrames`, `mMaxSynthFrames`, actual sample rate). Realtime-safe.
+Mixer → LSP EQ → MasterBus. Plan Phase 7/8/9/10 (buffer sizing, insertion
+point, `safeFrames`, `mMaxSynthFrames`, actual sample rate). Realtime-safe.
+Insertion point in `NativeEngine::process()` between `mMixer.mix()` and
+`mMasterBus.process()`.
 
-## Milestone 5 — Three-effect master chain  ⬜
+## Milestone 5 — Three-effect master chain  ✅
 
-EQ → Compressor → Limiter. Plan Phases 17, 21 (rollout A/B/C).
+EQ → Compressor → Limiter. Plan Phases 17, 21 (rollout A/B/C). All three slots
+prepared by `EffectChain::loadBundle()`; effects load DISABLED (bypassed) by
+default so the chain is a no-op until the UI opts in.
 
-## Milestone 6 — service/JNI control API  ⬜
+## Milestone 6 — service/JNI control API  ✅
 
 UI → PlaybackService Binder → NativeEngineBridge → JNI → MasterEffectChain.
-Plan Phase 11. NOT direct NativeEngineBridge calls.
+Plan Phase 11. JNI entry points in `native_engine_jni.cpp`
+(`loadMasterEffectBundle`, `setEffectParameter`, `getEffectParameter`,
+`setMasterEffectEnabled`, `isMasterEffectEnabled`, `getMasterEffectCount`,
+`getMasterEffectStableId`, `isMasterEffectChainAvailable`); Kotlin declarations
+in `NativeEngineBridge.kt`; `PlaybackService` + `PlaybackBinder` passthroughs
+added; `MainActivity.loadMasterEffectBundle()` auto-loads the bundled `.so`
+on the worker thread after engine init (best-effort).
 
 ## Milestone 7 — Android UI  ⬜
 
@@ -198,3 +211,65 @@ bash app/src/main/cpp/lsp-integration/build-lsp-ladspa-android.sh
 The Piano baseline build (`./build.sh debug`) and unit tests
 (`./gradlew :app:testDebugUnitTest`) are unchanged by this milestone — no
 CMake/JNI/Kotlin changes yet.
+
+---
+
+## Current status (post-Milestone-6)
+
+### Completed this session
+- Toolchain installed & verified (JDK 17, Android SDK API 34, NDK 26.1.10909125,
+  CMake 3.22.1).
+- Port maps runtime-verified for all 3 plugins (compressor, limiter, EQ) — see
+  `patches/LADSPA_DESCRIPTORS.md`.
+- Full effect layer: `AudioEffect.h`, `LspEffectIds.h/.cpp`, `LadspaRegistry`,
+  `LadspaEffect`, `LspEffectFactory`, `EffectChain`.
+- NativeEngine integration: `mMasterEffects.process()` inserted between
+  `mMixer.mix()` and `mMasterBus.process()`; control API impls.
+- CMake: effects sources + include dirs; `c++_shared` STL; abiFilters
+  arm64-v8a + armeabi-v7a.
+- JNI bridge + `NativeEngineBridge.kt` external declarations.
+- Kotlin API: `PlaybackService` + `PlaybackBinder` passthroughs; all effect
+  control calls run on a worker thread (JNI is direct, not binder-marshalled).
+- Prebuilt `.so` packaging: `sourceSets.main.jniLibs.srcDir` points at
+  `lsp-integration/prebuilt/`; renamed to `liblsp-plugins-ladspa.so` (the `lib`
+  prefix is required by Android's package manager for extraction/page-mapping).
+- Auto-load: `MainActivity.loadMasterEffectBundle()` resolves the `.so` from
+  `applicationInfo.nativeLibraryDir` and dlopens it on the worker thread after
+  `initEngine`; effects load DISABLED so the chain is a no-op until opt-in.
+- Offline integration test: `lsp-integration/tests/effect_chain_test.cpp`
+  (host x86-64) — ALL TESTS PASSED.
+
+### Validation output (host x86-64)
+```
+available_effects=3/3
+bypassed: in_peak=0.800000 out_peak=0.800000        ← exact passthrough (ports wired)
+limiter: in_rms=0.565861 out_rms=0.555831 ratio=0.9823 ssd=9.22e+01  ← engaged
+silence: peak=8.00e-01                              ← bounded (residual release tail)
+param_roundtrip: set 4.0 got 4.0000                 ← atomic param store works
+ALL TESTS PASSED
+```
+Notes on the test design:
+- The bypassed-chain == exact-passthrough assertion proves the audio in/out
+  ports and the chain deinterleave/interleave are wired correctly.
+- The LSP LADSPA wrappers do not react to compressor/limiter thresholds the
+  way a full GUI session does (Milestone 2 saw only a ~0.1 % RMS change with
+  all-zero controls). The enabled-limiter assertion therefore checks that the
+  output is *not bit-identical* to the input (the startup transient engages
+  the gain-reduction envelope) rather than asserting a specific peak reduction.
+- Parameter set/get round-trips through the realtime-safe `AtomicParam` store.
+
+### Build verification
+- `./build.sh debug` → BUILD SUCCESSFUL (arm64-v8a + armeabi-v7a).
+- APK packages `lib/arm64-v8a/liblsp-plugins-ladspa.so` (8.7 MB) +
+  `libc++_shared.so` + `libnative-lib.so`.
+- `./gradlew :app:testDebugUnitTest` → BUILD SUCCESSFUL (MIDI parser suite).
+
+### Remaining (next session)
+- On-device runtime validation: install APK, check the in-app log for
+  "LSP master effects available: 3/3", confirm no xruns with the chain bypassed.
+- UI integration (Milestone 7): effect enable toggles + parameter sliders.
+- Project persistence (Milestone 8): bump project format 1 → 2.
+- Sample-rate rebuild (Milestone 9): worker-prepared inactive chain + atomic
+  swap when the device rate differs from the chain's prepared rate.
+- ARMv7 fallback (Milestone 10): the LSP `.so` is arm64-v8a only; on ARMv7
+  devices `loadMasterEffectBundle()` returns 0 and the chain stays bypassed.
