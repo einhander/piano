@@ -3,6 +3,14 @@ package com.piano.sequencer
 object NativeEngineBridge {
     init {
         System.loadLibrary("native-lib")
+        // Pre-load the LSP LADSPA bundle so the Android linker resolves its
+        // NEEDED deps (libc++_shared.so, already mapped above) and registers
+        // the soname in the app namespace. A later dlopen() by absolute path
+        // in LadspaRegistry::open() then succeeds; without this, API 24+
+        // namespace rules block dlopen of a bundled .so with unresolved deps
+        // and the effect chain stays bypassed.
+        runCatching { System.loadLibrary("lsp-plugins-ladspa") }
+            .onFailure { android.util.Log.e("NativeEngineBridge", "loadLibrary(lsp-plugins-ladspa) failed", it) }
     }
 
     external fun nativeInit(): Boolean
@@ -139,6 +147,9 @@ object NativeEngineBridge {
     external fun nativeSetMasterEffectParameter(slot: Int, parameterId: Int, value: Float)
     external fun nativeGetMasterEffectParameter(slot: Int, parameterId: Int): Float
     external fun nativeGetMasterEffectStableId(slot: Int): String
+    // Human-readable reason for the last loadMasterEffectBundle failure
+    // (empty on success). Safe from any thread.
+    external fun nativeGetMasterEffectLoadError(): String
     // Static parameter metadata for the UI (safe from any thread).
     // nativeGetMasterEffectParamInfo returns null for an out-of-range index,
     // else a FloatArray of 7: [paramId, min, max, def, log, integer, toggled]

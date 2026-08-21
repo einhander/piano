@@ -35,6 +35,10 @@ public:
     // Number of descriptors exposed (0 if not loaded).
     unsigned long descriptorCount() const;
 
+    // Human-readable reason for the last open() failure (empty on success).
+    // Worker-thread only; not for the audio thread.
+    const char* lastError() const;
+
     LadspaRegistry(const LadspaRegistry&) = delete;
     LadspaRegistry& operator=(const LadspaRegistry&) = delete;
 
@@ -47,6 +51,7 @@ private:
     const LADSPA_Descriptor* (*mDescriptorFn)(unsigned long) = nullptr;
     unsigned long mCount = 0;
     bool mLoaded = false;
+    std::string mLastError;  // set on open() failure (worker thread)
 };
 
 } // namespace ladspa

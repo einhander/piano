@@ -668,6 +668,15 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeIsMasterEffectChainAvailable(
     return JNI_FALSE;
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterEffectLoadError(
+    JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    const char* err = (inst != nullptr) ? inst->getMasterEffectLoadError() : "";
+    if (err == nullptr) err = "";
+    return env->NewStringUTF(err);
+}
+
 JNIEXPORT jint JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterEffectCount(
     JNIEnv* env, jclass) {

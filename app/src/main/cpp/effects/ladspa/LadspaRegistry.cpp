@@ -1,7 +1,9 @@
 #include "LadspaRegistry.h"
+#include "lsp/LspLog.h"
 
 #include <dlfcn.h>
 #include <cstring>
+#include <string>
 
 namespace piano {
 namespace ladspa {
@@ -29,23 +31,36 @@ bool LadspaRegistry::open(const char* soPath) {
         return mLoaded;
     }
 
+    mLastError.clear();
+
     if (!soPath || soPath[0] == '\0') {
+        mLastError = "empty bundle path";
+        LSP_LOGE("open: %s", mLastError.c_str());
         return false;
     }
 
+    // Clear any stale dlerror, then dlopen. RTLD_LOCAL keeps LSP symbols out of
+    // the global namespace; RTLD_NOW resolves all NEEDED deps immediately so a
+    // missing dependency (the usual Android failure) surfaces here, with a
+    // usable dlerror() message, rather than on first audio callback.
+    dlerror();
     void* h = dlopen(soPath, RTLD_NOW | RTLD_LOCAL);
     if (!h) {
-        // Diagnostic only — never log from the audio thread. open() is
-        // worker-thread.
-        mLoaded = false;
+        const char* err = dlerror();
+        mLastError = err ? err : "dlopen returned NULL (no dlerror)";
+        LSP_LOGE("dlopen(\"%s\") failed: %s", soPath, mLastError.c_str());
         return false;
     }
 
+    dlerror();
     auto fn = reinterpret_cast<const LADSPA_Descriptor* (*)(unsigned long)>(
         dlsym(h, "ladspa_descriptor"));
     if (!fn) {
+        const char* err = dlerror();
+        mLastError = std::string("dlsym(ladspa_descriptor) failed: ") +
+                     (err ? err : "symbol not found");
+        LSP_LOGE("%s (path=%s)", mLastError.c_str(), soPath);
         dlclose(h);
-        mLoaded = false;
         return false;
     }
 
@@ -59,6 +74,7 @@ bool LadspaRegistry::open(const char* soPath) {
     }
     mCount = n;
     mLoaded = true;
+    LSP_LOGI("bundle loaded: %s (%lu descriptors)", soPath, n);
     return true;
 }
 
@@ -81,6 +97,10 @@ const LADSPA_Descriptor* LadspaRegistry::findByLabel(const char* label) const {
 
 unsigned long LadspaRegistry::descriptorCount() const {
     return mCount;
+}
+
+const char* LadspaRegistry::lastError() const {
+    return mLastError.c_str();
 }
 
 } // namespace ladspa

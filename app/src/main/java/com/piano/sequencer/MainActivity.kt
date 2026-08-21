@@ -598,17 +598,32 @@ class MainActivity : AppCompatActivity() {
     private fun loadMasterEffectBundle(svc: PlaybackService) {
         val libDir = applicationInfo.nativeLibraryDir
         val soPath = "$libDir/liblsp-plugins-ladspa.so"
+        AppLogger.info("MainActivity", "Loading LSP bundle: $soPath")
+        // The bundle must be pre-loaded via System.loadLibrary (done in
+        // NativeEngineBridge init) so the linker resolves its NEEDED deps; if
+        // that preload failed it is logged there. Surface any file-existence
+        // issue here too.
+        if (!java.io.File(soPath).exists()) {
+            AppLogger.error("MainActivity", "LSP bundle NOT FOUND at $soPath — was it packaged for this ABI?")
+        }
         val available = try {
             svc.loadMasterEffectBundle(soPath)
         } catch (e: UnsatisfiedLinkError) {
-            AppLogger.warn("MainActivity", "LSP bundle load failed: ${e.message}")
+            AppLogger.error("MainActivity", "LSP bundle load threw UnsatisfiedLinkError: ${e.message}")
+            0
+        } catch (e: Exception) {
+            AppLogger.error("MainActivity", "LSP bundle load threw ${e.javaClass.simpleName}: ${e.message}")
             0
         }
         if (available > 0) {
             AppLogger.info("MainActivity", "LSP master effects available: $available/${svc.getMasterEffectCount()}")
             restorePersistedEffectState(svc, available)
         } else {
-            AppLogger.warn("MainActivity", "LSP master effects unavailable (chain bypassed)")
+            val reason = runCatching { svc.getMasterEffectLoadError() }.getOrDefault("")
+            AppLogger.error(
+                "MainActivity",
+                "LSP master effects unavailable (chain bypassed). Reason: ${reason.ifEmpty { "none reported" }}"
+            )
         }
     }
 

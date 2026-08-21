@@ -674,6 +674,10 @@ int NativeEngine::loadMasterEffectBundle(const char* soPath) {
     return mMasterEffects.loadBundle(soPath, mSampleRate, mMaxSynthFrames);
 }
 
+const char* NativeEngine::getMasterEffectLoadError() const {
+    return mMasterEffects.loadError();
+}
+
 bool NativeEngine::isMasterEffectChainAvailable() const {
     return mMasterEffects.isAvailable();
 }

@@ -1,10 +1,12 @@
 #include "EffectChain.h"
+#include "lsp/LspLog.h"
 
 #include "ladspa/LadspaRegistry.h"
 #include "lsp/LspEffectFactory.h"
 
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 namespace piano {
 
@@ -25,6 +27,7 @@ void EffectChain::disposeEffects() {
 
 bool EffectChain::prepare(double sampleRate, int maxFrames) {
     if (sampleRate <= 0.0 || maxFrames <= 0) {
+        LSP_LOGE("prepare: invalid rate=%g maxFrames=%d", sampleRate, maxFrames);
         return false;
     }
 
@@ -35,6 +38,7 @@ bool EffectChain::prepare(double sampleRate, int maxFrames) {
         mLeft  = static_cast<float*>(std::malloc(maxFrames * sizeof(float)));
         mRight = static_cast<float*>(std::malloc(maxFrames * sizeof(float)));
         if (!mLeft || !mRight) {
+            LSP_LOGE("prepare: scratch alloc failed (maxFrames=%d)", maxFrames);
             return false;
         }
         mMaxFrames = maxFrames;
@@ -53,8 +57,17 @@ bool EffectChain::prepare(double sampleRate, int maxFrames) {
 }
 
 int EffectChain::loadBundle(const char* soPath, double sampleRate, int maxFrames) {
+    mLoadError.clear();
+
     // Open the LADSPA bundle (dlopen) — worker thread only.
-    ladspa::LadspaRegistry::instance().open(soPath);
+    bool ok = ladspa::LadspaRegistry::instance().open(soPath);
+    if (!ok) {
+        // Registry logs the dlerror; capture it here too for the UI/log.
+        const char* e = ladspa::LadspaRegistry::instance().lastError();
+        mLoadError = std::string("bundle open failed: ") + (e && *e ? e : "unknown");
+        LSP_LOGE("loadBundle: %s", mLoadError.c_str());
+        return 0;
+    }
 
     // Rebuild the fixed chain from the registry.
     disposeEffects();
@@ -64,6 +77,8 @@ int EffectChain::loadBundle(const char* soPath, double sampleRate, int maxFrames
 
     // Size scratch + prepare effects.
     if (!prepare(sampleRate, maxFrames)) {
+        mLoadError = "prepare() failed (scratch allocation)";
+        LSP_LOGE("loadBundle: %s", mLoadError.c_str());
         return 0;
     }
 
@@ -71,9 +86,22 @@ int EffectChain::loadBundle(const char* soPath, double sampleRate, int maxFrames
     for (int i = 0; i < lsp::kMasterEffectCount; ++i) {
         if (mEffects[i] && mEffects[i]->isAvailable()) {
             ++available;
+        } else {
+            LSP_LOGE("loadBundle: slot %d unavailable (descriptor not found)", i);
         }
     }
+    if (available == 0) {
+        mLoadError = "bundle loaded but no effect descriptors matched "
+                     "(label lookup failed for all 3 slots)";
+        LSP_LOGE("loadBundle: %s", mLoadError.c_str());
+    } else {
+        LSP_LOGI("loadBundle: %d/%d effects available", available, lsp::kMasterEffectCount);
+    }
     return available;
+}
+
+const char* EffectChain::loadError() const {
+    return mLoadError.c_str();
 }
 
 void EffectChain::process(float* interleaved, int numFrames) noexcept {

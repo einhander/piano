@@ -136,6 +136,9 @@ public:
     // bundle cannot be opened, returns 0 and the chain stays bypassed (the
     // engine keeps running). Worker thread.
     int loadMasterEffectBundle(const char* soPath);
+    // Human-readable reason for the last loadMasterEffectBundle failure
+    // (empty on success). Worker-thread only.
+    const char* getMasterEffectLoadError() const;
     bool isMasterEffectChainAvailable() const;
     int getMasterEffectCount() const;
     void setMasterEffectEnabled(int slot, bool enabled);

@@ -4,6 +4,7 @@
 #include "lsp/LspEffectIds.h"
 
 #include <memory>
+#include <string>
 
 namespace piano {
 
@@ -54,6 +55,10 @@ public:
     // the number of effects that became available (0..3).
     int loadBundle(const char* soPath, double sampleRate, int maxFrames);
 
+    // Human-readable reason for the last loadBundle() failure (empty on
+    // success). Worker-thread only.
+    const char* loadError() const;
+
 private:
     void disposeEffects();
 
@@ -65,6 +70,8 @@ private:
 
     // Fixed array of 3 effect pointers. Immutable snapshot after prepare().
     AudioEffect* mEffects[lsp::kMasterEffectCount] = {};
+
+    std::string mLoadError;  // set on loadBundle() failure (worker thread)
 };
 
 } // namespace piano
