@@ -52,6 +52,12 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
             this@PlaybackService.getMasterEffectParameter(slot, parameterId)
         fun getMasterEffectStableId(slot: Int): String =
             this@PlaybackService.getMasterEffectStableId(slot)
+        fun getMasterEffectParamCount(slot: Int): Int =
+            this@PlaybackService.getMasterEffectParamCount(slot)
+        fun getMasterEffectParamInfo(slot: Int, index: Int): FloatArray? =
+            this@PlaybackService.getMasterEffectParamInfo(slot, index)
+        fun getMasterEffectParamName(slot: Int, index: Int): String =
+            this@PlaybackService.getMasterEffectParamName(slot, index)
         fun loadSoundFont(filePath: String): Int = this@PlaybackService.loadSoundFont(filePath)
         fun unloadSoundFonts() = this@PlaybackService.unloadSoundFonts()
         fun getSoundFontCount(): Int = this@PlaybackService.getSoundFontCount()
@@ -274,6 +280,12 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         NativeEngineBridge.nativeGetMasterEffectParameter(slot, parameterId)
     fun getMasterEffectStableId(slot: Int): String =
         NativeEngineBridge.nativeGetMasterEffectStableId(slot)
+    fun getMasterEffectParamCount(slot: Int): Int =
+        NativeEngineBridge.nativeGetMasterEffectParamCount(slot)
+    fun getMasterEffectParamInfo(slot: Int, index: Int): FloatArray? =
+        NativeEngineBridge.nativeGetMasterEffectParamInfo(slot, index)
+    fun getMasterEffectParamName(slot: Int, index: Int): String =
+        NativeEngineBridge.nativeGetMasterEffectParamName(slot, index)
 
     // Reverb / Chorus / Interpolation (Fix #10-12). Worker thread only.
     fun setReverb(on: Boolean) = NativeEngineBridge.nativeSetReverb(on)

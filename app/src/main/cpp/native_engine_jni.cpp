@@ -722,6 +722,49 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterEffectStableId(
     return env->NewStringUTF(id ? id : "");
 }
 
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterEffectParamCount(
+    JNIEnv* env, jclass, jint slot) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jint>(inst->getMasterEffectParamCount(static_cast<int>(slot)));
+    return 0;
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterEffectParamInfo(
+    JNIEnv* env, jclass, jint slot, jint index) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return nullptr;
+    uint32_t paramId = 0;
+    float minValue = 0, maxValue = 0, defaultValue = 0;
+    bool logarithmic = false, integer = false, toggled = false;
+    if (!inst->getMasterEffectParamInfo(static_cast<int>(slot), static_cast<int>(index),
+                                       paramId, minValue, maxValue, defaultValue,
+                                       logarithmic, integer, toggled)) {
+        return nullptr;
+    }
+    // [paramId, min, max, def, log, integer, toggled]
+    jfloat info[7] = {
+        static_cast<jfloat>(paramId),
+        minValue, maxValue, defaultValue,
+        logarithmic ? 1.0f : 0.0f,
+        integer ? 1.0f : 0.0f,
+        toggled ? 1.0f : 0.0f,
+    };
+    jfloatArray arr = env->NewFloatArray(7);
+    if (arr != nullptr) env->SetFloatArrayRegion(arr, 0, 7, info);
+    return arr;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterEffectParamName(
+    JNIEnv* env, jclass, jint slot, jint index) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    const char* name = (inst) ? inst->getMasterEffectParamName(static_cast<int>(slot),
+                                                              static_cast<int>(index)) : "";
+    return env->NewStringUTF(name ? name : "");
+}
+
 // Launch quantization
 JNIEXPORT void JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeSetQuantizationGrid(

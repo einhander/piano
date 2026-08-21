@@ -32,6 +32,11 @@
             android:label="@string/instruments_title" />
 
         <activity
+            android:name=".EffectsActivity"
+            android:parentActivityName=".MainActivity"
+            android:label="@string/master_effects_title" />
+
+        <activity
             android:name=".SequencerActivity"
             android:parentActivityName=".MainActivity"
             android:label="@string/sequencer_title" />

@@ -59,6 +59,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var aboutButton: Button
     private lateinit var settingsButton: Button
     private lateinit var instrumentsButton: Button
+    private lateinit var effectsButton: Button
     private lateinit var midiStatusText: TextView
     private lateinit var midiDeviceButton: Button
 
@@ -370,9 +371,15 @@ class MainActivity : AppCompatActivity() {
             }
         }
         instrumentsButton = Button(this).apply {
-            text = "Instruments"
+            text = getString(R.string.instruments_title)
             setOnClickListener {
                 startActivity(Intent(this@MainActivity, InstrumentActivity::class.java))
+            }
+        }
+        effectsButton = Button(this).apply {
+            text = getString(R.string.master_effects_title)
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, EffectsActivity::class.java))
             }
         }
         layout.addView(statusText)
@@ -393,9 +400,10 @@ class MainActivity : AppCompatActivity() {
         layout.addView(projectsButton)
         layout.addView(aboutButton)
         layout.addView(instrumentsButton)
+        layout.addView(effectsButton)
         layout.addView(settingsButton)
         layout.addView(Button(this).apply {
-            text = "Sequencer"
+            text = getString(R.string.sequencer_title)
             setOnClickListener {
                 startActivity(Intent(this@MainActivity, SequencerActivity::class.java))
             }
@@ -598,8 +606,32 @@ class MainActivity : AppCompatActivity() {
         }
         if (available > 0) {
             AppLogger.info("MainActivity", "LSP master effects available: $available/${svc.getMasterEffectCount()}")
+            restorePersistedEffectState(svc, available)
         } else {
             AppLogger.warn("MainActivity", "LSP master effects unavailable (chain bypassed)")
+        }
+    }
+
+    /**
+     * Re-apply persisted master-effect enable flags and parameter values after
+     * the bundle is (re)loaded. Effects default to bypassed; this restores the
+     * user's last choices across process death. Worker thread only (direct JNI).
+     */
+    private fun restorePersistedEffectState(svc: PlaybackService, effectCount: Int) {
+        val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+        for (slot in 0 until effectCount) {
+            val paramCount = try { svc.getMasterEffectParamCount(slot) } catch (e: Exception) { continue }
+            for (index in 0 until paramCount) {
+                val info = svc.getMasterEffectParamInfo(slot, index) ?: continue
+                if (info.size < 1) continue
+                val paramId = info[0].toInt()
+                if (prefs.contains("fx_param_${slot}_$paramId")) {
+                    val v = prefs.getFloat("fx_param_${slot}_$paramId", info[3])
+                    try { svc.setMasterEffectParameter(slot, paramId, v) } catch (e: Exception) { }
+                }
+            }
+            val enabled = prefs.getBoolean("fx_enabled_$slot", false)
+            try { svc.setMasterEffectEnabled(slot, enabled) } catch (e: Exception) { }
         }
     }
 

@@ -5,6 +5,12 @@
 #include <cstdint>
 
 namespace piano {
+
+// Forward declaration so the descriptor getter below can be declared here
+// without pulling the whole EffectChain/AudioEffect dependency graph into
+// every TU that includes LspEffectIds.h.
+struct EffectParameterDescriptor;
+
 namespace lsp {
 
 // ── Stable effect ids (Piano-owned, independent of LADSPA UniqueID) ──
@@ -103,6 +109,17 @@ struct ParamPort {
 
 const ParamPort* paramPortFor(int slot, uint32_t paramId);
 const ParamPort* paramTable(int slot, int& count);
+
+// Descriptors for the UI/control layer. Returns a pointer to a static table
+// of EffectParameterDescriptor entries (with stable + display names, range and
+// flags) for the given slot, writing the entry count to `count`. The data is
+// static metadata (independent of any loaded effect instance), safe to query
+// from any thread.
+const EffectParameterDescriptor* paramDescriptors(int slot, int& count);
+
+// A short human-readable name for a stable parameter id (e.g. "Threshold"),
+// or nullptr if the id is not known. Used by the UI as a fallback label.
+const char* paramDisplayName(uint32_t paramId);
 
 // Lookup the binding for a slot. Always returns a valid pointer (3 entries).
 inline const LadspaBinding* bindingForSlot(int slot) {

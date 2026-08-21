@@ -96,7 +96,26 @@ in `NativeEngineBridge.kt`; `PlaybackService` + `PlaybackBinder` passthroughs
 added; `MainActivity.loadMasterEffectBundle()` auto-loads the bundled `.so`
 on the worker thread after engine init (best-effort).
 
-## Milestone 7 — Android UI  ⬜
+## Milestone 7 — Android UI  ✅
+
+Effect enable toggles + parameter sliders, driven by native parameter
+metadata (no duplicated DSP ranges). Plan Phase 11 (control surface).
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Parameter metadata JNI API | ✅ | `nativeGetMasterEffectParamCount` / `nativeGetMasterEffectParamInfo` (FloatArray[7]: paramId,min,max,def,log,integer,toggled) / `nativeGetMasterEffectParamName`; backed by new `piano::lsp::paramDescriptors()` descriptor tables in `LspEffectIds.cpp` |
+| `EffectsActivity` | ✅ | 3 effect cards (EQ/Compressor/Limiter) built dynamically from native descriptors; enable `SwitchCompat` + per-param `SeekBar` (log-scaled where `logarithmic`, snapped where `integer`, on/off where `toggled`) |
+| Worker-thread JNI | ✅ | all effect calls via `CompletableFuture.runAsync(..., mainExecutor)` (direct JNI, never main thread) |
+| Light theme | ✅ | uses `Theme.PianoSequencer` + `@drawable/card_frame` (not DayNight) |
+| Persistence | ✅ | enable flags + param values stored in `piano_prefs` (`fx_enabled_<slot>`, `fx_param_<slot>_<id>`); restored on engine boot in `MainActivity.restorePersistedEffectState()` (does not touch project format — that is Milestone 8) |
+| Entry point | ✅ | "Master Effects" button in `MainActivity` → `EffectsActivity` (registered in manifest) |
+
+### Validation
+- `./build.sh debug` → BUILD SUCCESSFUL; `libnative-lib.so` rebuilt with the new
+  JNI entry points; `liblsp-plugins-ladspa.so` (8.7 MB) still packaged.
+- `./gradlew :app:testDebugUnitTest` → BUILD SUCCESSFUL (MIDI parser suite).
+- Host `effect_chain_test` re-run after the C++ descriptor additions →
+  ALL TESTS PASSED (no regression in the DSP path).
 
 ## Milestone 8 — project persistence  ⬜
 
@@ -214,9 +233,35 @@ CMake/JNI/Kotlin changes yet.
 
 ---
 
-## Current status (post-Milestone-6)
+## Current status (post-Milestone-7)
 
 ### Completed this session
+- Installed the Android toolchain (JDK 17 Temurin, SDK API 34, NDK
+  26.1.10909125, CMake 3.22.1); fixed the shallow-clone missing oboe/fluidsynth
+  submodules (`git submodule update --init`).
+- Rebuilt the LSP LADSPA bundle end-to-end: cloned `lsp-plugins/lsp-plugins`
+  tag 1.2.34, `make fetch`, `build-lsp-ladspa-android.sh` → aarch64 `.so`
+  (9.1 MB, `ladspa_descriptor` exported, NEEDED = libdl/libc++_shared/libm/libc);
+  copied to `lsp-integration/prebuilt/arm64-v8a/liblsp-plugins-ladspa.so`.
+- Re-ran the host `effect_chain_test` → ALL TESTS PASSED.
+- Added native parameter-metadata API (the UI must not duplicate DSP ranges):
+  - `LspEffectIds.{h,cpp}`: new `paramDescriptors(slot,count)` +
+    `paramDisplayName(id)` returning `EffectParameterDescriptor` tables (with
+    stable + display names) mirroring the existing `ParamPort` tables.
+  - `NativeEngine`: `getMasterEffectParamCount/ParamInfo/ParamName`.
+  - JNI: `nativeGetMasterEffectParamCount` / `nativeGetMasterEffectParamInfo`
+    (FloatArray[7]) / `nativeGetMasterEffectParamName`.
+  - `NativeEngineBridge.kt`, `PlaybackService` + `PlaybackBinder` passthroughs.
+- New `EffectsActivity` + `activity_effects.xml`: 3 cards (EQ/Compressor/
+  Limiter) built dynamically from native descriptors; enable `SwitchCompat` +
+  per-param `SeekBar` (log-scaled / integer-snapped / toggled as flagged);
+  all JNI on a single-thread worker executor; light theme + `card_frame`.
+- `MainActivity`: "Master Effects" button + `restorePersistedEffectState()`
+  (re-applies `piano_prefs` enable flags + param values on engine boot).
+- Persistence is in `piano_prefs` (`fx_enabled_<slot>`, `fx_param_<slot>_<id>`)
+  and deliberately does not touch the project format (Milestone 8).
+
+### Earlier (Milestones 1–6)
 - Toolchain installed & verified (JDK 17, Android SDK API 34, NDK 26.1.10909125,
   CMake 3.22.1).
 - Port maps runtime-verified for all 3 plugins (compressor, limiter, EQ) — see
@@ -265,10 +310,11 @@ Notes on the test design:
 - `./gradlew :app:testDebugUnitTest` → BUILD SUCCESSFUL (MIDI parser suite).
 
 ### Remaining (next session)
-- On-device runtime validation: install APK, check the in-app log for
-  "LSP master effects available: 3/3", confirm no xruns with the chain bypassed.
-- UI integration (Milestone 7): effect enable toggles + parameter sliders.
-- Project persistence (Milestone 8): bump project format 1 → 2.
+- On-device runtime validation: install APK, open "Master Effects", confirm the
+  3 cards render with correct ranges and that toggling/sliding changes the
+  signal (check the in-app log for "LSP master effects available: 3/3").
+- Project persistence (Milestone 8): bump project format 1 → 2; migrate the
+  `piano_prefs`-based effect state into the project (or keep both).
 - Sample-rate rebuild (Milestone 9): worker-prepared inactive chain + atomic
   swap when the device rate differs from the chain's prepared rate.
 - ARMv7 fallback (Milestone 10): the LSP `.so` is arm64-v8a only; on ARMv7

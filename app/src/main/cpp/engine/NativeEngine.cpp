@@ -716,6 +716,45 @@ const char* NativeEngine::getMasterEffectStableId(int slot) const {
     return "";
 }
 
+int NativeEngine::getMasterEffectParamCount(int slot) const {
+    int count = 0;
+    piano::lsp::paramDescriptors(slot, count);
+    return count;
+}
+
+bool NativeEngine::getMasterEffectParamInfo(int slot, int index,
+                                           uint32_t& paramId,
+                                           float& minValue,
+                                           float& maxValue,
+                                           float& defaultValue,
+                                           bool& logarithmic,
+                                           bool& integer,
+                                           bool& toggled) const {
+    int count = 0;
+    const auto* descriptors = piano::lsp::paramDescriptors(slot, count);
+    if (descriptors == nullptr || index < 0 || index >= count) {
+        return false;
+    }
+    const auto& d = descriptors[index];
+    paramId = d.id;
+    minValue = d.minValue;
+    maxValue = d.maxValue;
+    defaultValue = d.defaultValue;
+    logarithmic = d.logarithmic;
+    integer = d.integer;
+    toggled = d.toggled;
+    return true;
+}
+
+const char* NativeEngine::getMasterEffectParamName(int slot, int index) const {
+    int count = 0;
+    const auto* descriptors = piano::lsp::paramDescriptors(slot, count);
+    if (descriptors == nullptr || index < 0 || index >= count) {
+        return "";
+    }
+    return descriptors[index].displayName ? descriptors[index].displayName : "";
+}
+
 void NativeEngine::addClip(int32_t clipId, int32_t trackId, int64_t startTick, int64_t lengthTicks,
                            const uint8_t* events, int32_t eventCount) {
     if (!events || eventCount <= 0 || eventCount > ClipData::kMaxEvents) return;

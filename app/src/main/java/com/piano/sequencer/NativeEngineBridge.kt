@@ -139,6 +139,13 @@ object NativeEngineBridge {
     external fun nativeSetMasterEffectParameter(slot: Int, parameterId: Int, value: Float)
     external fun nativeGetMasterEffectParameter(slot: Int, parameterId: Int): Float
     external fun nativeGetMasterEffectStableId(slot: Int): String
+    // Static parameter metadata for the UI (safe from any thread).
+    // nativeGetMasterEffectParamInfo returns null for an out-of-range index,
+    // else a FloatArray of 7: [paramId, min, max, def, log, integer, toggled]
+    // (the last three are 0.0/1.0 flags).
+    external fun nativeGetMasterEffectParamCount(slot: Int): Int
+    external fun nativeGetMasterEffectParamInfo(slot: Int, index: Int): FloatArray?
+    external fun nativeGetMasterEffectParamName(slot: Int, index: Int): String
 
     // Count-in metronome
     external fun nativeStartCountIn(beats: Int): Long

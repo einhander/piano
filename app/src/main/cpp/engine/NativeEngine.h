@@ -144,6 +144,19 @@ public:
     float getMasterEffectParameter(int slot, int parameterId) const;
     // The stable id of the effect at a slot (e.g. "lsp.compressor"), or "".
     const char* getMasterEffectStableId(int slot) const;
+    // Static effect-parameter metadata for the UI. The descriptor tables are
+    // independent of whether the bundle is loaded; safe to query from any
+    // thread.
+    int getMasterEffectParamCount(int slot) const;
+    bool getMasterEffectParamInfo(int slot, int index,
+                                 /*out*/ uint32_t& paramId,
+                                 /*out*/ float& minValue,
+                                 /*out*/ float& maxValue,
+                                 /*out*/ float& defaultValue,
+                                 /*out*/ bool& logarithmic,
+                                 /*out*/ bool& integer,
+                                 /*out*/ bool& toggled) const;
+    const char* getMasterEffectParamName(int slot, int index) const;
 
     // Project loading (called from worker thread, NOT audio callback)
     void loadProject(const char* json);
