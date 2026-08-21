@@ -16,7 +16,7 @@ name: Build APK
 
 on:
   push:
-    branches: [master, gh-wf]
+    branches: [master, feature/lsp-plugins-integration]
     tags: ['v*']
   pull_request:
     branches: [master]
