@@ -104,6 +104,17 @@ android {
             jniLibs.srcDir("src/main/cpp/lsp-integration/prebuilt")
         }
     }
+
+    // Force extraction of native libs to disk (extractNativeLibs=true).
+    // AGP's default useLegacyPackaging=false leaves the .so inside the APK and
+    // serves System.loadLibrary from there, but LadspaRegistry::open() dlopens
+    // the bundle by its absolute nativeLibraryDir path — which fails with
+    // "library not found" when the file is never materialized on disk.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 dependencies {
