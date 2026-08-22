@@ -32,6 +32,7 @@ bool LadspaRegistry::open(const char* soPath) {
     }
 
     mLastError.clear();
+    mDescriptorDump.clear();
 
     if (!soPath || soPath[0] == '\0') {
         mLastError = "empty bundle path";
@@ -102,6 +103,28 @@ bool LadspaRegistry::open(const char* soPath) {
     }
     mCount = n;
     mLoaded = true;
+
+    // Build a compact dump (count + first N labels/UniqueIDs). This mirrors
+    // the per-line LSP_LOGI output below, but is kept in a std::string so a
+    // caller can surface it in the in-app log — the only log channel visible
+    // on the dev machine (logcat is unreachable without adb, per AGENTS.md).
+    // Label lookup failures are almost always either "table empty (n==0)" or
+    // "labels don't match the expected URIs"; this dump distinguishes them.
+    mDescriptorDump = "descriptors=" + std::to_string(n);
+    const unsigned long kDumpN = 40;
+    for (unsigned long i = 0; i < n && i < kDumpN; ++i) {
+        const LADSPA_Descriptor* d = fn(i);
+        mDescriptorDump += "\n  [";
+        mDescriptorDump += std::to_string(i);
+        mDescriptorDump += "] Label=\"";
+        mDescriptorDump += (d && d->Label) ? d->Label : "(null)";
+        mDescriptorDump += "\" UniqueID=";
+        mDescriptorDump += std::to_string(d ? d->UniqueID : 0);
+    }
+    if (n > kDumpN) {
+        mDescriptorDump += "\n  ... (" + std::to_string(n - kDumpN) + " more)";
+    }
+
     LSP_LOGI("bundle loaded: %s (%lu descriptors)", soPath, n);
     // Diagnostic: dump all descriptor labels so we can see what the bundle
     // actually exposes vs. what we expect (kBindings[]).
@@ -137,6 +160,10 @@ unsigned long LadspaRegistry::descriptorCount() const {
 
 const char* LadspaRegistry::lastError() const {
     return mLastError.c_str();
+}
+
+const char* LadspaRegistry::descriptorDump() const {
+    return mDescriptorDump.c_str();
 }
 
 } // namespace ladspa

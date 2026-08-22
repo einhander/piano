@@ -87,12 +87,38 @@ int EffectChain::loadBundle(const char* soPath, double sampleRate, int maxFrames
         if (mEffects[i] && mEffects[i]->isAvailable()) {
             ++available;
         } else {
-            LSP_LOGE("loadBundle: slot %d unavailable (descriptor not found)", i);
+            const lsp::LadspaBinding* b = lsp::bindingForSlot(i);
+            LSP_LOGE("loadBundle: slot %d unavailable (label lookup failed for \"%s\")",
+                     i, b ? b->label : "?");
         }
     }
     if (available == 0) {
+        // The bundle opened (dlopen + ladspa_descriptor resolved) but none of
+        // the 3 expected LADSPA Labels were found. The two root causes are:
+        //   (a) the descriptor table is empty (mCount==0) — the aarch64 cross
+        //       build dead-stripped the per-plugin factory registrations so
+        //       plug::Factory::root() enumerates nothing;
+        //   (b) the table is populated but the Labels don't match the URIs in
+        //       kBindings[] (a build/config drift).
+        // Append the registry's dump (count + first N labels) and the expected
+        // labels to the error so it surfaces in the in-app log — logcat is not
+        // reachable on the dev machine, so this string is the only diagnostic
+        // channel that reaches the user.
+        const char* dump = ladspa::LadspaRegistry::instance().descriptorDump();
         mLoadError = "bundle loaded but no effect descriptors matched "
                      "(label lookup failed for all 3 slots)";
+        mLoadError += "\nRegistry dump: ";
+        mLoadError += (dump && *dump) ? dump : "(none)";
+        mLoadError += "\nExpected labels:";
+        for (int i = 0; i < lsp::kMasterEffectCount; ++i) {
+            const lsp::LadspaBinding* b = lsp::bindingForSlot(i);
+            mLoadError += "\n  slot ";
+            mLoadError += std::to_string(i);
+            mLoadError += " (";
+            mLoadError += b ? b->stableId : "?";
+            mLoadError += ") -> ";
+            mLoadError += b ? b->label : "?";
+        }
         LSP_LOGE("loadBundle: %s", mLoadError.c_str());
     } else {
         LSP_LOGI("loadBundle: %d/%d effects available", available, lsp::kMasterEffectCount);

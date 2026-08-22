@@ -1,4 +1,4 @@
-# LSP Plugins Integration — Progress Tracker
+# LSP Plugins Integration тАФ Progress Tracker
 
 Branch: `feature/lsp-plugins-integration`
 Master plan: `/workspace/LSP_Plugins_Integration_Plan_PianoAPP.md`
@@ -8,26 +8,26 @@ This file tracks milestone-level progress against the plan. Update it at the
 end of every working session. The plan's Phase 35 lists the full report items
 required at each milestone; this tracker is the running summary.
 
-Legend: ✅ done · 🟡 in progress / partial · ⬜ not started
+Legend: тЬЕ done ┬╖ ЁЯЯб in progress / partial ┬╖ тмЬ not started
 
 ---
 
-## Milestone 1 — Android build feasibility  ✅
+## Milestone 1 тАФ Android build feasibility  тЬЕ
 
-Goal: LSP 1.2.34 → LADSPA only → Android NDK 26.1 → arm64-v8a.
+Goal: LSP 1.2.34 тЖТ LADSPA only тЖТ Android NDK 26.1 тЖТ arm64-v8a.
 
 | Item | Status | Notes |
 |------|--------|-------|
-| NDK 26.1.10909125 toolchain | ✅ | `$ANDROID_SDK_ROOT/ndk/26.1.10909125` |
-| LSP meta pinned to tag 1.2.34 | ✅ | `third_party/lsp` is now a **git submodule** pinned to tag 1.2.34 (was gitignored + fetched on demand); nested module repos are still fetched by `make fetch` at build time |
-| LADSPA-only build, no UI/LV2/CLAP/VST | ✅ | `FEATURES='crosscompile ladspa'` |
-| Android compatibility patches | ✅ | 13 patches, documented in `patches/ANDROID_PATCHES.md` |
-| Reproducible build script | ✅ | `build-lsp-ladspa-android.sh` (reset → apply → build verified) |
-| Idempotent patch-apply script | ✅ | `patches/apply-android-patches.sh` |
-| AArch64 ELF artifact | ✅ | `.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so` (9.1 MB) |
-| ELF ABI / symbol check | ✅ | e_machine=183, `ladspa_descriptor` GLOBAL FUNC exported |
-| NEEDED libs = Android runtime only | ✅ | libdl, libc++_shared, libm, libc (no pthread/rt/sndfile/X11) |
-| Plugin metadata validated | ✅ | 198 plugins, warnings=0, errors=0 (host validator) |
+| NDK 26.1.10909125 toolchain | тЬЕ | `$ANDROID_SDK_ROOT/ndk/26.1.10909125` |
+| LSP meta pinned to tag 1.2.34 | тЬЕ | `third_party/lsp` is now a **git submodule** pinned to tag 1.2.34 (was gitignored + fetched on demand); nested module repos are still fetched by `make fetch` at build time |
+| LADSPA-only build, no UI/LV2/CLAP/VST | тЬЕ | `FEATURES='crosscompile ladspa'` |
+| Android compatibility patches | тЬЕ | 13 patches, documented in `patches/ANDROID_PATCHES.md` |
+| Reproducible build script | тЬЕ | `build-lsp-ladspa-android.sh` (reset тЖТ apply тЖТ build verified) |
+| Idempotent patch-apply script | тЬЕ | `patches/apply-android-patches.sh` |
+| AArch64 ELF artifact | тЬЕ | `.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so` (9.1 MB) |
+| ELF ABI / symbol check | тЬЕ | e_machine=183, `ladspa_descriptor` GLOBAL FUNC exported |
+| NEEDED libs = Android runtime only | тЬЕ | libdl, libc++_shared, libm, libc (no pthread/rt/sndfile/X11) |
+| Plugin metadata validated | тЬЕ | 198 plugins, warnings=0, errors=0 (host validator) |
 
 Pinned module versions (from `.config.mk`): lsp-runtime-lib 1.0.35,
 lsp-plugin-fw 1.0.39, lsp-common-lib 1.0.48, lsp-dsp-lib 1.1.0,
@@ -35,59 +35,59 @@ lsp-dsp-units 1.0.37, lsp-plugins-shared 1.0.38, lsp-3rd-party 1.0.29.
 
 ---
 
-## Milestone 2 — Descriptor + offline DSP test  ✅ (host proxy; qemu on-device TODO)
+## Milestone 2 тАФ Descriptor + offline DSP test  тЬЕ (host proxy; qemu on-device TODO)
 
-Goal: `ladspa_descriptor()` → instantiate → connect → run → measurable PCM change.
+Goal: `ladspa_descriptor()` тЖТ instantiate тЖТ connect тЖТ run тЖТ measurable PCM change.
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Descriptor enumeration tool | ✅ | `patches/ladspa_dump.cpp` (host build) |
-| Total descriptors exported | ✅ | **168** LADSPA entries (host `.so`); validator counts 198 incl. non-LADSPA |
-| Selected descriptors identified | ✅ | see `patches/LADSPA_DESCRIPTORS.md` |
-| Instantiate compressor/limiter/EQ | ✅ | all three instantiate at 48 kHz without error |
-| connect + run on 1 kHz sine | ✅ | all three run; output finite (no NaN/Inf) |
-| Numerical stability (silence) | ✅ | finite, no blow-up |
-| Measurable PCM change | ✅ | limiter shows change (ratio 0.9991); compressor/EQ at unity = passthrough (ratio 1.0000, expected). Verified by running `ladspa_offline_test.cpp` against the host x86-64 `.so`. |
-| Run under qemu-aarch64 on Android .so | ⬜ | qemu-user-static installed; blocked on missing `/system/bin/linker64` (not in NDK). Host x86-64 `.so` (same patched sources) used instead as feasibility proxy. On-device dump remains TODO. |
-| Port map (per effect) | 🟡 | compressor ports enumerated (Bypass=8, Input gain=9, Output gain=10, Attack threshold=29, Ratio=34, Makeup=38). Limiter/EQ port dump pending. |
+| Descriptor enumeration tool | тЬЕ | `patches/ladspa_dump.cpp` (host build) |
+| Total descriptors exported | тЬЕ | **168** LADSPA entries (host `.so`); validator counts 198 incl. non-LADSPA |
+| Selected descriptors identified | тЬЕ | see `patches/LADSPA_DESCRIPTORS.md` |
+| Instantiate compressor/limiter/EQ | тЬЕ | all three instantiate at 48 kHz without error |
+| connect + run on 1 kHz sine | тЬЕ | all three run; output finite (no NaN/Inf) |
+| Numerical stability (silence) | тЬЕ | finite, no blow-up |
+| Measurable PCM change | тЬЕ | limiter shows change (ratio 0.9991); compressor/EQ at unity = passthrough (ratio 1.0000, expected). Verified by running `ladspa_offline_test.cpp` against the host x86-64 `.so`. |
+| Run under qemu-aarch64 on Android .so | тмЬ | qemu-user-static installed; blocked on missing `/system/bin/linker64` (not in NDK). Host x86-64 `.so` (same patched sources) used instead as feasibility proxy. On-device dump remains TODO. |
+| Port map (per effect) | ЁЯЯб | compressor ports enumerated (Bypass=8, Input gain=9, Output gain=10, Attack threshold=29, Ratio=34, Makeup=38). Limiter/EQ port dump pending. |
 
 ### Selected descriptors (LADSPA UniqueID, stable)
 
 | Piano stable ID | LADSPA Label (URI) | UniqueID | Name |
 |-----------------|--------------------|----------|------|
-| `lsp.parametric_eq` | `…/ladspa/para_equalizer_x16_stereo` | 5002076 | Parametric Equalizer x16 Stereo |
-| `lsp.compressor`    | `…/ladspa/compressor_stereo`         | 5002091 | Compressor Stereo |
-| `lsp.limiter`       | `…/ladspa/limiter_stereo`            | 5002123 | Limiter Stereo |
+| `lsp.parametric_eq` | `тАж/ladspa/para_equalizer_x16_stereo` | 5002076 | Parametric Equalizer x16 Stereo |
+| `lsp.compressor`    | `тАж/ladspa/compressor_stereo`         | 5002091 | Compressor Stereo |
+| `lsp.limiter`       | `тАж/ladspa/limiter_stereo`            | 5002123 | Limiter Stereo |
 
 `LSP_LADSPA_BASE = 0x4C5350 = 5002064`. Label is a full URI
 (`http://lsp-plug.in/plugins/ladspa/<name>`); UniqueID is the stable key.
 
 ---
 
-## Milestone 3 — Piano effect abstraction  ✅
+## Milestone 3 тАФ Piano effect abstraction  тЬЕ
 
 `app/src/main/cpp/effects/`: `AudioEffect.h`, `EffectChain`, `LadspaEffect`,
 `LadspaRegistry` / `LspEffectFactory` + `LspEffectIds`. Per plan Phases 6,
-12–16. Realtime-safe (pre-allocated buffers, `std::atomic` param store, fixed
+12тАУ16. Realtime-safe (pre-allocated buffers, `std::atomic` param store, fixed
 `AtomicParam[]` array since `std::atomic` is non-MoveInsertable). Verified by
 the host `effect_chain_test` (see Current status below).
 
-## Milestone 4 — One master EQ  ✅
+## Milestone 4 тАФ One master EQ  тЬЕ
 
-Mixer → LSP EQ → MasterBus. Plan Phase 7/8/9/10 (buffer sizing, insertion
+Mixer тЖТ LSP EQ тЖТ MasterBus. Plan Phase 7/8/9/10 (buffer sizing, insertion
 point, `safeFrames`, `mMaxSynthFrames`, actual sample rate). Realtime-safe.
 Insertion point in `NativeEngine::process()` between `mMixer.mix()` and
 `mMasterBus.process()`.
 
-## Milestone 5 — Three-effect master chain  ✅
+## Milestone 5 тАФ Three-effect master chain  тЬЕ
 
-EQ → Compressor → Limiter. Plan Phases 17, 21 (rollout A/B/C). All three slots
+EQ тЖТ Compressor тЖТ Limiter. Plan Phases 17, 21 (rollout A/B/C). All three slots
 prepared by `EffectChain::loadBundle()`; effects load DISABLED (bypassed) by
 default so the chain is a no-op until the UI opts in.
 
-## Milestone 6 — service/JNI control API  ✅
+## Milestone 6 тАФ service/JNI control API  тЬЕ
 
-UI → PlaybackService Binder → NativeEngineBridge → JNI → MasterEffectChain.
+UI тЖТ PlaybackService Binder тЖТ NativeEngineBridge тЖТ JNI тЖТ MasterEffectChain.
 Plan Phase 11. JNI entry points in `native_engine_jni.cpp`
 (`loadMasterEffectBundle`, `setEffectParameter`, `getEffectParameter`,
 `setMasterEffectEnabled`, `isMasterEffectEnabled`, `getMasterEffectCount`,
@@ -96,95 +96,110 @@ in `NativeEngineBridge.kt`; `PlaybackService` + `PlaybackBinder` passthroughs
 added; `MainActivity.loadMasterEffectBundle()` auto-loads the bundled `.so`
 on the worker thread after engine init (best-effort).
 
-## Milestone 7 — Android UI  ✅
+## Milestone 7 тАФ Android UI  тЬЕ
 
 Effect enable toggles + parameter sliders, driven by native parameter
 metadata (no duplicated DSP ranges). Plan Phase 11 (control surface).
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Parameter metadata JNI API | ✅ | `nativeGetMasterEffectParamCount` / `nativeGetMasterEffectParamInfo` (FloatArray[7]: paramId,min,max,def,log,integer,toggled) / `nativeGetMasterEffectParamName`; backed by new `piano::lsp::paramDescriptors()` descriptor tables in `LspEffectIds.cpp` |
-| `EffectsActivity` | ✅ | 3 effect cards (EQ/Compressor/Limiter) built dynamically from native descriptors; enable `SwitchCompat` + per-param `SeekBar` (log-scaled where `logarithmic`, snapped where `integer`, on/off where `toggled`) |
-| Worker-thread JNI | ✅ | all effect calls via `CompletableFuture.runAsync(..., mainExecutor)` (direct JNI, never main thread) |
-| Light theme | ✅ | uses `Theme.PianoSequencer` + `@drawable/card_frame` (not DayNight) |
-| Persistence | ✅ | enable flags + param values stored in `piano_prefs` (`fx_enabled_<slot>`, `fx_param_<slot>_<id>`); restored on engine boot in `MainActivity.restorePersistedEffectState()` (does not touch project format — that is Milestone 8) |
-| Entry point | ✅ | "Master Effects" button in `MainActivity` → `EffectsActivity` (registered in manifest) |
+| Parameter metadata JNI API | тЬЕ | `nativeGetMasterEffectParamCount` / `nativeGetMasterEffectParamInfo` (FloatArray[7]: paramId,min,max,def,log,integer,toggled) / `nativeGetMasterEffectParamName`; backed by new `piano::lsp::paramDescriptors()` descriptor tables in `LspEffectIds.cpp` |
+| `EffectsActivity` | тЬЕ | 3 effect cards (EQ/Compressor/Limiter) built dynamically from native descriptors; enable `SwitchCompat` + per-param `SeekBar` (log-scaled where `logarithmic`, snapped where `integer`, on/off where `toggled`) |
+| Worker-thread JNI | тЬЕ | all effect calls via `CompletableFuture.runAsync(..., mainExecutor)` (direct JNI, never main thread) |
+| Light theme | тЬЕ | uses `Theme.PianoSequencer` + `@drawable/card_frame` (not DayNight) |
+| Persistence | тЬЕ | enable flags + param values stored in `piano_prefs` (`fx_enabled_<slot>`, `fx_param_<slot>_<id>`); restored on engine boot in `MainActivity.restorePersistedEffectState()` (does not touch project format тАФ that is Milestone 8) |
+| Entry point | тЬЕ | "Master Effects" button in `MainActivity` тЖТ `EffectsActivity` (registered in manifest) |
 
 ### Validation
-- `./build.sh debug` → BUILD SUCCESSFUL; `libnative-lib.so` rebuilt with the new
+- `./build.sh debug` тЖТ BUILD SUCCESSFUL; `libnative-lib.so` rebuilt with the new
   JNI entry points; `liblsp-plugins-ladspa.so` (8.7 MB) still packaged.
-- `./gradlew :app:testDebugUnitTest` → BUILD SUCCESSFUL (MIDI parser suite).
-- Host `effect_chain_test` re-run after the C++ descriptor additions →
+- `./gradlew :app:testDebugUnitTest` тЖТ BUILD SUCCESSFUL (MIDI parser suite).
+- Host `effect_chain_test` re-run after the C++ descriptor additions тЖТ
   ALL TESTS PASSED (no regression in the DSP path).
 
-## Milestone 8 — project persistence  ⬜
+## Milestone 8 тАФ project persistence  тмЬ
 
-Bump project format 1 → 2; migrate old projects to neutral/bypassed.
+Bump project format 1 тЖТ 2; migrate old projects to neutral/bypassed.
 
-## Milestone 9 — sample-rate rebuild  ⬜
+## Milestone 9 тАФ sample-rate rebuild  тмЬ
 
 Worker-prepared inactive chain + atomic swap.
 
-## Milestone 10 — ARMv7  ⬜
+## Milestone 10 тАФ ARMv7  тмЬ
 
-## Milestone 11 — optional track inserts  ⬜
+## Milestone 11 тАФ optional track inserts  тмЬ
 
 ---
 
 ## Open questions / blockers
 
-1. **On-device load crashes the app (native SIGSEGV, no log)** — the current
-   top blocker. The `.so` builds and links cleanly (valid AArch64 ELF,
-   `ladspa_descriptor` exported, NEEDED = libdl/libc++_shared/libm/libc) and
-   the host x86-64 `.so` of the same sources passes the offline DSP test, but
-   `System.loadLibrary("lsp-plugins-ladspa")` crashes the app on launch on the
-   target device. The process dies before the in-memory `AppLogger` flushes and
-   before the Java `UncaughtExceptionHandler` runs (it only catches Java
-   throwables), so there was no trace. The LADSPA plugin registration is lazy
-   (`lsp_singletone_init` in `ladspa.cpp`), so the crash is in a **static
-   constructor of the linked runtime/common/DSP code**, not in the LADSPA entry.
-   **Diag build committed (`1a49a40`):** a native signal handler
-   (`diagnostics/CrashHandler`) writes the fault PC + an `_Unwind_Backtrace`/
-   `dladdr` backtrace to `<filesDir>/native_crash.log`, which `MainActivity`
-   surfaces in the App Log on the next launch and then skips the bundle load
-   so the app stays up to read it.
-   **First backtrace captured (commit `460b677`, on-device):** the crash is a
-   **SIGABRT (signal 6)**, not a SIGSEGV, and the backtrace is **entirely in
-   `libc.so`** (`abort +0xa0` → anonymous libc frames). The LSP bundle's frames
-   do not appear because `_Unwind_Backtrace` stops where unwind info ends (the
-   libc abort trampoline). The LADSPA plugin registration is lazy, so the abort
-   is triggered during `System.loadLibrary` — i.e. the Android dynamic linker
-   calls `abort()` itself (the classic signature of a load-time failure:
-   soname/dependency conflict, unsatisfied versioned symbol, or bad ELF).
-   Bionic writes the *reason* to **logcat and stderr (fd 2) *before* abort()**;
-   the backtrace alone can't name the culprit, and we have no logcat/adb.
-   **Stderr-capture diag (`3712e04`):** `CrashHandler` now also
-   (a) dumps `/proc/self/maps` at crash time (async-signal-safe `open`/`read`;
-   `dl_iterate_phdr` would deadlock on the linker's `g_dl_mutex` held during a
-   dlopen abort) — the map shows whether the LSP `.so` was mapped before the
-   abort (mapped ⇒ fault in a static ctor; not mapped ⇒ the linker aborted
-   during mapping), and (b) redirects fd 2 to `<filesDir>/lsp_load_stderr.log`
-   around `System.loadLibrary` (`crash::beginStderrCapture`/`endStderrCapture`
-   via `dup`/`dup2`), so the linker's fatal message is captured. Both files are
-   surfaced in the App Log on the next launch.
-   **Second on-device capture (from `3712e04`):** the crash is still a
-   **SIGABRT**, and `/proc/self/maps` shows **`liblsp-plugins-ladspa.so` IS
-   mapped** (all 4 PT_LOAD segments: r--p / r-xp / r--p / rw-p + `.bss`).
-   → The linker **successfully loaded and mapped** the library; the abort is
-   AFTER mapping, during relocation or `.init_array` (static constructor).
-   **The stderr capture is EMPTY** — on this device (sdk=36 / Android 16)
-   Bionic's `async_safe_fatal` wrote the abort reason to **logd (logcat) only**,
-   NOT to fd 2. So fd-2 capture can't name the culprit here.
-   **This commit (logcat + FP backtrace):** adds (c) a `fork`+`exec` of
-   `/system/bin/logcat --pid=<us>` writing to `<filesDir>/lsp_load_logcat.log`
-   around the load (filtered to tags `linker/DEBUG/libc/art/AndroidRuntime`),
-   so the abort message text is captured without adb; and (d) an aarch64
-   **frame-pointer-chain backtrace** (walk x29: `[fp]=next fp`, `[fp+8]=return
-   addr`) in the crash handler — `_Unwind_Backtrace` stops at the libc abort
-   trampoline (no unwind info), but NDK clang keeps frame pointers on aarch64,
-   so the manual walk reaches the LSP static-ctor frames above `abort()`.
-   Next: read the logcat abort message + FP backtrace to identify the exact
-   crashing ctor / abort reason. See "On-device load — diagnosis" below.
+1. **On-device load no longer crashes — RESOLVED.** The chain of diagnostic
+   builds (native signal handler, stderr/maps capture, logcat + FP-chain
+   backtrace, LADSPA instantiate sub-step markers + cleanup bypass) converged:
+   the cleanup-bypass build confirmed the primary failure was inside
+   `wrapper->init()` and the SIGABRT was secondary cleanup of a
+   partially-initialized object. With the bypass in place the bundle now
+   `dlopen`s cleanly. The latest on-device log shows:
+   ```
+   [INFO] NativeEngineBridge: loadLibrary("lsp-plugins-ladspa") OK
+   [INFO] MainActivity: Loading LSP bundle: .../lib/arm64/liblsp-plugins-ladspa.so
+   ```
+   i.e. `System.loadLibrary` succeeds and `LadspaRegistry::open()` reaches the
+   `dlsym(ladspa_descriptor)` + descriptor-enumeration stage without aborting.
+   **The top blocker is now the label-lookup failure (see blocker 1b).**
+1b. **Label lookup fails for all 3 effect slots (current top blocker).** The
+   bundle loads, but `EffectChain::loadBundle()` returns `available==0`:
+   ```
+   [ERROR] MainActivity: LSP master effects unavailable (chain bypassed).
+   Reason: bundle loaded but no effect descriptors matched (label lookup
+   failed for all 3 slots)
+   ```
+   `LspEffectFactory::create()` calls `LadspaRegistry::findByLabel()` for each
+   slot's LADSPA Label (a full URI, e.g.
+   `http://lsp-plug.in/plugins/ladspa/compressor_stereo`); all three return
+   `nullptr`, so every `LadspaEffect` is constructed with `mDescriptor=nullptr`
+   and `isAvailable()==false`.
+
+   **Confirmed correct (not the cause):** the `kBindings[]` URIs match
+   upstream exactly. `LSP_LADSPA_URI(id)` in
+   `lsp-plugins-shared/include/lsp-plug.in/shared/meta/developers.h` expands to
+   `LSP_BASE_URI "plugins/ladspa/" id` = `http://lsp-plug.in/plugins/ladspa/<id>`,
+   and the per-plugin meta (e.g. `lsp-plugins-compressor/src/main/meta/compressor.cpp`)
+   sets `uids.ladspa_lbl = LSP_LADSPA_URI("compressor_stereo")`. The LADSPA
+   wrapper (`lsp-plugin-fw/src/wrap/ladspa.cpp`, `make_descriptor()`) assigns
+   `d->Label = m->uids.ladspa_lbl`. So a present descriptor's Label **is** the
+   full URI the adapter looks up — the host x86-64 `.so` enumerates 168
+   descriptors and all three match.
+
+   **Leading hypothesis:** the aarch64 cross-compile produces an **empty
+   descriptor table** (`mCount==0`), i.e. `ladspa_descriptor(0)` returns
+   `nullptr` on device. Descriptors are generated lazily on first call by
+   enumerating `plug::Factory::root()` (`wrap/ladspa.cpp`); the factories are
+   registered by per-module static initializers. With `EXPORT_SYMBOLS=0` and
+   the NDK link using `--gc-sections`, the unreferenced factory-registration
+   translation units can be dead-stripped, leaving `Factory::root()` empty.
+   The host build (different link flags, no gc-sections) keeps them → 168.
+
+   **Diagnosis gap fixed this session:** the descriptor dump
+   (`descriptor[i] Label="..." UniqueID=...`) was written via `LSP_LOGI` →
+   **logcat** (tag `PianoLSP`), which is unreachable on the dev machine (no
+   adb, per AGENTS.md). So the prior diagnostic build's dump never reached the
+   user. Fixed: `LadspaRegistry` now also builds a compact `descriptorDump()`
+   string (count + first 40 labels/UniqueIDs), and `EffectChain::loadBundle()`
+   appends it — plus the expected labels per slot — to `mLoadError`, which
+   flows through `NativeEngine::getMasterEffectLoadError()` → JNI
+   `nativeGetMasterEffectLoadError` → `MainActivity` App Log. So the next
+   on-device launch will show, in the **in-app log**, whether `descriptors=0`
+   (confirms the dead-strip hypothesis) or `descriptors=168` with non-matching
+   labels (a config drift). One of:
+     - `descriptors=0` → root cause is factory dead-stripping; fix is a build/
+       link change (force-keep the registration objects: a `-u` linker flag on
+       each module's factory symbol, or a single `KEEP()` in a linker script,
+       or compile the registration TUs with `-ffunction-sections` off / reference
+       them from `ladspa.cpp`). Rebuild the `.so`, repackage, retest.
+     - `descriptors=N>0` but no Label matches → dump the actual labels and
+       reconcile `kBindings[]` (config drift between 1.2.34 meta and the
+       pinned submodule versions).
 2. **qemu on-device-style run**: the Android `.so` needs `/system/bin/linker64`
    (Bionic dynamic linker), which the NDK does not ship. Options: extract
    linker64 from an Android system image, or run the descriptor dump on a real
@@ -204,7 +219,7 @@ Worker-prepared inactive chain + atomic swap.
    runs `build-lsp-ladspa-android.sh` and copies the `.so` into
    `prebuilt/arm64-v8a/` before `assembleDebug`. The `.so` stays gitignored
    (CI reproduces it every run); committing the binary was tried and reverted
-   (it crashed on-device — see blocker 1).
+   (it crashed on-device — see blocker 1, now resolved by the cleanup bypass).
 5. **Plan Phase 36 says "stop after this milestone"** for the first coding
    assignment. Milestones 1–2 are now complete and verified. Proceeding into
    Milestones 3–6 (effect API + audio-callback insertion) crosses that
@@ -218,36 +233,80 @@ Worker-prepared inactive chain + atomic swap.
 - Fixed the failing LSP LADSPA build that the prior WIP commit left broken.
   The `.so` only actually builds after three additional patches beyond the
   original 11:
-  - `lsp-common-lib-android.patch` — Bionic `qsort_r()` thread-local thunk
+  - `lsp-common-lib-android.patch` тАФ Bionic `qsort_r()` thread-local thunk
     fallback (compilation error in `lsp-common-lib/src/main/stdlib.cpp`).
-  - Header fix in `lsp-runtime-lib-android.patch` — `*AudioFileStream.h`
+  - Header fix in `lsp-runtime-lib-android.patch` тАФ `*AudioFileStream.h`
     prefers the vendored `sndfile_stub.h` on `__ANDROID__` even when
     `USE_LIBSNDFILE` is still emitted, so `lsp-dsp-units` (which keeps its
     own `LIBSNDFILE` dependency) compiles for the target.
-  - `filter-android-deps.sh` — globally trims `LIBSNDFILE`/`LIBPTHREAD`/
+  - `filter-android-deps.sh` тАФ globally trims `LIBSNDFILE`/`LIBPTHREAD`/
     `LIBRT` from every submodule's `dependencies.mk` (and the meta one), so
     the host resource/meta pass (compiled with `g++`) no longer emits
-    `-DUSE_LIBSNDFILE` → `<sndfile.h>`, which has no dev headers on the host.
+    `-DUSE_LIBSNDFILE` тЖТ `<sndfile.h>`, which has no dev headers on the host.
 - `apply-android-patches.sh` now `mkdir -p`s the stub destination dirs before
   `install` (the original failure point), and runs `filter-android-deps.sh`.
-- Verified end-to-end: clean `rm -rf .build` → `build-lsp-ladspa-android.sh`
-  → aarch64 ELF, NEEDED = libdl/libc++_shared/libm/libc, `ladspa_descriptor`
+- Verified end-to-end: clean `rm -rf .build` тЖТ `build-lsp-ladspa-android.sh`
+  тЖТ aarch64 ELF, NEEDED = libdl/libc++_shared/libm/libc, `ladspa_descriptor`
   exported, validator `plugins=198, warnings=0, errors=0`.
 - Verified the offline DSP test against a host x86-64 `.so` (same patched
   sources): 168 LADSPA descriptors, all three selected plugins instantiate +
   run finite at 48 kHz, limiter shows measurable PCM change (ratio 0.9991).
-- Baseline Piano build + unit tests remain green: `./build.sh debug` →
-  `BUILD SUCCESSFUL`; `./gradlew :app:testDebugUnitTest` → pass. No CMake /
+- Baseline Piano build + unit tests remain green: `./build.sh debug` тЖТ
+  `BUILD SUCCESSFUL`; `./gradlew :app:testDebugUnitTest` тЖТ pass. No CMake /
   JNI / Kotlin changes in this session.
+
+### Session update — on-device load resolved; label-lookup diagnosis surfaced
+
+Triggered by the user's on-device log, which (for the first time) shows the
+bundle loading without crashing:
+```
+[INFO] NativeEngineBridge: loadLibrary("lsp-plugins-ladspa") OK
+[INFO] MainActivity: Loading LSP bundle: .../lib/arm64/liblsp-plugins-ladspa.so
+[ERROR] MainActivity: LSP master effects unavailable (chain bypassed).
+        Reason: bundle loaded but no effect descriptors matched
+        (label lookup failed for all 3 slots)
+```
+
+Findings:
+- **The on-device crash blocker is RESOLVED.** `System.loadLibrary` succeeds
+  and `LadspaRegistry::open()` reaches descriptor enumeration. The
+  cleanup-bypass + sub-step-marker diagnostic builds did their job; no further
+  crash work is needed.
+- **New top blocker: label lookup fails for all 3 slots.** Confirmed the
+  `kBindings[]` URIs are correct by tracing upstream:
+  `LSP_LADSPA_URI(id)` (`lsp-plugins-shared/.../developers.h`) →
+  `uids.ladspa_lbl` (per-plugin `meta/*.cpp`) → `d->Label`
+  (`lsp-plugin-fw/src/wrap/ladspa.cpp`, `make_descriptor()`). The host x86-64
+  `.so` enumerates 168 descriptors and all three match, so a present
+  descriptor's Label is exactly the URI the adapter looks up.
+- **Diagnosis gap found & fixed.** The prior descriptor dump (`eda7b9d`)
+  wrote via `LSP_LOGI` → logcat (tag `PianoLSP`), unreachable on the dev
+  machine (no adb). So the dump never reached the user — the `Reason:` string
+  was the only on-device signal, and it cannot distinguish "empty descriptor
+  table" from "labels don't match". Fixed this session:
+  - `LadspaRegistry`: new `mDescriptorDump` (count + first 40 labels/UniqueIDs)
+    built in `open()`, exposed via `descriptorDump()`; cleared on re-open.
+  - `EffectChain::loadBundle()`: when `available==0`, appends the registry
+    dump + the per-slot expected labels to `mLoadError`. This already flows to
+    the App Log via `nativeGetMasterEffectLoadError`, so no new JNI/Kotlin
+    plumbing was needed.
+  - DSP/audio path untouched (diagnostic-only); host `g++` compile of all
+    touched TUs + the `effect_chain_test` binary succeeds.
+
+Leading hypothesis (to confirm with the next on-device dump): the aarch64
+cross-compile dead-strips the per-module factory registrations, so
+`plug::Factory::root()` is empty and `ladspa_descriptor()` generates 0
+descriptors (`descriptors=0` in the new dump). Fix would be at the build/link
+layer (force-keep the registration objects), not in the app code.
 
 ---
 
-## On-device load — diagnosis (current session)
+## On-device load тАФ diagnosis (current session)
 
 ### What broke
 The committed prebuilt `.so` (and the CI-built-from-submodule `.so`) crash the
 app **on launch**. `MainActivity` boots the engine on a worker thread and
-calls `NativeEngineBridge.preloadLspBundle()` → `System.loadLibrary(
+calls `NativeEngineBridge.preloadLspBundle()` тЖТ `System.loadLibrary(
 "lsp-plugins-ladspa")`, which runs the bundle's static constructors; one of
 them SIGSEGVs and kills the process. Because `AppLogger` is in-memory and the
 Java `UncaughtExceptionHandler` only catches Java throwables, **nothing** was
@@ -256,23 +315,23 @@ logged. The LADSPA plugin registration itself is lazy
 constructor of the linked runtime/common/DSP code, not in the LADSPA entry.
 
 ### Root-cause investigation log (this session)
-1. **Initial hypothesis — .so missing from the CI-built APK.** The prebuilt
+1. **Initial hypothesis тАФ .so missing from the CI-built APK.** The prebuilt
    `.so` was gitignored, so CI clones never had it; the APK the user installed
    contained only the CMake-built libs (no `liblsp-plugins-ladspa.so`). Every
    load path (System.loadLibrary, dlopen by path/soname, extract-from-APK into
    codeCacheDir, scan sibling split APKs) reported the binary absent.
-   Fixes 1–5 (useLegacyPackaging, soname fallback, surfaced preload errors,
+   Fixes 1тАУ5 (useLegacyPackaging, soname fallback, surfaced preload errors,
    APK-extract, split-APK scan) were all correct but moot without the binary.
-2. **Fix attempt — commit the prebuilt .so** (`360b76e`, then reverted). This
+2. **Fix attempt тАФ commit the prebuilt .so** (`360b76e`, then reverted). This
    got the binary into the APK (verified: 8 758 616 bytes,
    `lib/arm64-v8a/liblsp-plugins-ladspa.so`), but the app **crashed on
-   launch**. User: "пребилд крашит приложение при открытии".
-3. **Fix attempt — build from a pinned submodule in CI** (`c36139b`).
+   launch**. User: "╨┐╤А╨╡╨▒╨╕╨╗╨┤ ╨║╤А╨░╤И╨╕╤В ╨┐╤А╨╕╨╗╨╛╨╢╨╡╨╜╨╕╨╡ ╨┐╤А╨╕ ╨╛╤В╨║╤А╤Л╤В╨╕╨╕".
+3. **Fix attempt тАФ build from a pinned submodule in CI** (`c36139b`).
    `third_party/lsp` is now a git submodule @ tag 1.2.34; the CI workflow runs
    `build-lsp-ladspa-android.sh` + copies the `.so` into `prebuilt/arm64-v8a/`
    before `assembleDebug`. Verified: CI APK contains the submodule-built `.so`
-   (AArch64 ELF, `ladspa_descriptor` exported). **Still crashes on launch** —
-   same source ⇒ same crashing static ctor. So the load mechanism (the earlier
+   (AArch64 ELF, `ladspa_descriptor` exported). **Still crashes on launch** тАФ
+   same source тЗТ same crashing static ctor. So the load mechanism (the earlier
    codeCache/APK-extraction machinery) was removed and the load simplified back
    to plain `System.loadLibrary` (same path as `libnative-lib`, which loads
    fine); the crash is in the binary, not the loader.
@@ -289,7 +348,7 @@ constructor of the linked runtime/common/DSP code, not in the LADSPA entry.
 ### State of the on-device binary (verified)
 - AArch64 ELF, `e_machine=183`, little-endian.
 - Exports `ladspa_descriptor` (GLOBAL FUNC).
-- NEEDED = `libdl.so`, `libc++_shared.so`, `libm.so`, `libc.so` — only
+- NEEDED = `libdl.so`, `libc++_shared.so`, `libm.so`, `libc.so` тАФ only
   Android/NDK runtime libs (no pthread/rt/sndfile/X11/jack/pipewire).
 - 198 plugins validated by the host validator (warnings=0, errors=0).
 - Host x86-64 `.so` of the same patched sources passes the offline DSP test
@@ -297,14 +356,14 @@ constructor of the linked runtime/common/DSP code, not in the LADSPA entry.
   the crash is an init-time Android incompatibility, not a DSP bug.
 
 ### Next steps
-1. ✅ DONE (commit `460b677`): shipped the backtrace diag build; the App Log
+1. тЬЕ DONE (commit `460b677`): shipped the backtrace diag build; the App Log
    shows the crash is a **SIGABRT** with a **libc-only backtrace** (`abort`
-   machinery) — i.e. the Android linker itself calls `abort()` during
+   machinery) тАФ i.e. the Android linker itself calls `abort()` during
    `System.loadLibrary`. The fault PC + `dladdr` backtrace alone do NOT name
    the culprit because the LSP frames above `abort()` are lost.
-2. ✅ DONE (commit `3712e04`): stderr-capture + `/proc/self/maps`. The maps
-   show the `.so` **IS mapped** (4 PT_LOAD segments) → the abort is AFTER
-   mapping (relocation / `.init_array`). The stderr capture is EMPTY → on
+2. тЬЕ DONE (commit `3712e04`): stderr-capture + `/proc/self/maps`. The maps
+   show the `.so` **IS mapped** (4 PT_LOAD segments) тЖТ the abort is AFTER
+   mapping (relocation / `.init_array`). The stderr capture is EMPTY тЖТ on
    sdk=36 Bionic writes the reason to **logd only**, not fd 2.
 3. **Read the logcat abort message + FP backtrace** (this commit). The
    logcat capture (`lsp_load_logcat.log`) filters to this pid + tags
@@ -315,22 +374,22 @@ constructor of the linked runtime/common/DSP code, not in the LADSPA entry.
    `patches/lsp-runtime-lib-android.patch` / `lsp-plugin-fw-android.patch` /
    `lsp-common-lib-android.patch` as appropriate) and update
    `ANDROID_PATCHES.md`.
-5. Re-run CI → install → confirm `loadLibrary("lsp-plugins-ladspa") OK` +
+5. Re-run CI тЖТ install тЖТ confirm `loadLibrary("lsp-plugins-ladspa") OK` +
    `LSP master effects available: 3/3` in the App Log.
 
 ### CI status (this session)
-- `c36139b` (submodule + CI build) — `success` (run `32559428994`, 8m42s); CI
+- `c36139b` (submodule + CI build) тАФ `success` (run `32559428994`, 8m42s); CI
   APK verified to contain the submodule-built `.so`.
-- `1a49a40` (crash diagnostics) — CI run `32560496489` started.
-- `460b677` (PROGRESS update) — `success` (run `32564653795`, 10m15s); APK
+- `1a49a40` (crash diagnostics) тАФ CI run `32560496489` started.
+- `460b677` (PROGRESS update) тАФ `success` (run `32564653795`, 10m15s); APK
   verified to contain the `.so` (8 758 616 bytes) + the crash handler in
   `libnative-lib.so` (`nativeInitCrashHandler`, `crash::install`).
 - **First on-device backtrace captured from `460b677`:** SIGABRT, libc-only
-  frames. → triggered the `3712e04` stderr-capture diag.
-- `3712e04` (stderr + maps diag) — `success` (run `32569154127`, ~9m); APK
+  frames. тЖТ triggered the `3712e04` stderr-capture diag.
+- `3712e04` (stderr + maps diag) тАФ `success` (run `32569154127`, ~9m); APK
   verified to contain `nativeBeginStderrCapture`/`crash::beginStderrCapture`.
 - **Second on-device capture from `3712e04`:** `.so` IS mapped; stderr capture
-  EMPTY. → triggered this commit's logcat + FP-backtrace diag.
+  EMPTY. тЖТ triggered this commit's logcat + FP-backtrace diag.
 
 ---
 
@@ -344,7 +403,7 @@ export PATH="$JAVA_HOME/bin:$PATH"
 
 # 1. fetch + patch + build the LSP LADSPA bundle (arm64-v8a):
 app/src/main/cpp/lsp-integration/build-lsp-ladspa-android.sh
-# → third_party/lsp/.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so  (AArch64)
+# тЖТ third_party/lsp/.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so  (AArch64)
 
 # 2. offline descriptor dump + DSP feasibility test.
 #    The test must dlopen a host-loadable .so, so first build a host x86-64
@@ -352,7 +411,7 @@ app/src/main/cpp/lsp-integration/build-lsp-ladspa-android.sh
 cd app/src/main/cpp/third_party/lsp
 make config FEATURES='ladspa' EXPORT_SYMBOLS=0 INSTALL_HEADERS=0   # host config
 rm -rf .build && make FEATURES='ladspa'                             # host build
-# → .build/target/lsp-plugin-fw/lsp-plugins-ladspa.so  (x86-64, ELF64)
+# тЖТ .build/target/lsp-plugin-fw/lsp-plugins-ladspa.so  (x86-64, ELF64)
 cd -
 g++ -O2 -std=c++17 \
   -I app/src/main/cpp/third_party/lsp/modules/lsp-3rd-party/include \
@@ -360,7 +419,7 @@ g++ -O2 -std=c++17 \
   -o /tmp/ladspa_offline_test_host -ldl -lm
 /tmp/ladspa_offline_test_host \
   app/src/main/cpp/third_party/lsp/.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so
-# → 168 descriptors; compressor/limiter/EQ instantiate + run finite; limiter
+# тЖТ 168 descriptors; compressor/limiter/EQ instantiate + run finite; limiter
 #   ratio 0.9991.
 #
 # 3. (optional) re-build the target aarch64 artifact (overwrites the host .so):
@@ -372,7 +431,7 @@ bash app/src/main/cpp/lsp-integration/build-lsp-ladspa-android.sh
 > host/target reconfigurations to avoid the `incompatible object` link error.
 
 The Piano baseline build (`./build.sh debug`) and unit tests
-(`./gradlew :app:testDebugUnitTest`) are unchanged by this milestone — no
+(`./gradlew :app:testDebugUnitTest`) are unchanged by this milestone тАФ no
 CMake/JNI/Kotlin changes yet.
 
 ---
@@ -384,10 +443,10 @@ CMake/JNI/Kotlin changes yet.
   26.1.10909125, CMake 3.22.1); fixed the shallow-clone missing oboe/fluidsynth
   submodules (`git submodule update --init`).
 - Rebuilt the LSP LADSPA bundle end-to-end: cloned `lsp-plugins/lsp-plugins`
-  tag 1.2.34, `make fetch`, `build-lsp-ladspa-android.sh` → aarch64 `.so`
+  tag 1.2.34, `make fetch`, `build-lsp-ladspa-android.sh` тЖТ aarch64 `.so`
   (9.1 MB, `ladspa_descriptor` exported, NEEDED = libdl/libc++_shared/libm/libc);
   copied to `lsp-integration/prebuilt/arm64-v8a/liblsp-plugins-ladspa.so`.
-- Re-ran the host `effect_chain_test` → ALL TESTS PASSED.
+- Re-ran the host `effect_chain_test` тЖТ ALL TESTS PASSED.
 - Added native parameter-metadata API (the UI must not duplicate DSP ranges):
   - `LspEffectIds.{h,cpp}`: new `paramDescriptors(slot,count)` +
     `paramDisplayName(id)` returning `EffectParameterDescriptor` tables (with
@@ -405,10 +464,10 @@ CMake/JNI/Kotlin changes yet.
 - Persistence is in `piano_prefs` (`fx_enabled_<slot>`, `fx_param_<slot>_<id>`)
   and deliberately does not touch the project format (Milestone 8).
 
-### Earlier (Milestones 1–6)
+### Earlier (Milestones 1тАУ6)
 - Toolchain installed & verified (JDK 17, Android SDK API 34, NDK 26.1.10909125,
   CMake 3.22.1).
-- Port maps runtime-verified for all 3 plugins (compressor, limiter, EQ) — see
+- Port maps runtime-verified for all 3 plugins (compressor, limiter, EQ) тАФ see
   `patches/LADSPA_DESCRIPTORS.md`.
 - Full effect layer: `AudioEffect.h`, `LspEffectIds.h/.cpp`, `LadspaRegistry`,
   `LadspaEffect`, `LspEffectFactory`, `EffectChain`.
@@ -426,15 +485,15 @@ CMake/JNI/Kotlin changes yet.
   `applicationInfo.nativeLibraryDir` and dlopens it on the worker thread after
   `initEngine`; effects load DISABLED so the chain is a no-op until opt-in.
 - Offline integration test: `lsp-integration/tests/effect_chain_test.cpp`
-  (host x86-64) — ALL TESTS PASSED.
+  (host x86-64) тАФ ALL TESTS PASSED.
 
 ### Validation output (host x86-64)
 ```
 available_effects=3/3
-bypassed: in_peak=0.800000 out_peak=0.800000        ← exact passthrough (ports wired)
-limiter: in_rms=0.565861 out_rms=0.555831 ratio=0.9823 ssd=9.22e+01  ← engaged
-silence: peak=8.00e-01                              ← bounded (residual release tail)
-param_roundtrip: set 4.0 got 4.0000                 ← atomic param store works
+bypassed: in_peak=0.800000 out_peak=0.800000        тЖР exact passthrough (ports wired)
+limiter: in_rms=0.565861 out_rms=0.555831 ratio=0.9823 ssd=9.22e+01  тЖР engaged
+silence: peak=8.00e-01                              тЖР bounded (residual release tail)
+param_roundtrip: set 4.0 got 4.0000                 тЖР atomic param store works
 ALL TESTS PASSED
 ```
 Notes on the test design:
@@ -448,46 +507,54 @@ Notes on the test design:
 - Parameter set/get round-trips through the realtime-safe `AtomicParam` store.
 
 ### Build verification
-- `./build.sh debug` → BUILD SUCCESSFUL (arm64-v8a + armeabi-v7a).
+- `./build.sh debug` тЖТ BUILD SUCCESSFUL (arm64-v8a + armeabi-v7a).
 - APK packages `lib/arm64-v8a/liblsp-plugins-ladspa.so` (8.7 MB) +
   `libc++_shared.so` + `libnative-lib.so`. (Locally the `.so` is produced by
   `build-lsp-ladspa-android.sh` into `prebuilt/`; in CI the workflow builds it
   from the submodule and copies it there before `assembleDebug`.)
-- `./gradlew :app:testDebugUnitTest` → BUILD SUCCESSFUL (MIDI parser suite).
+- `./gradlew :app:testDebugUnitTest` тЖТ BUILD SUCCESSFUL (MIDI parser suite).
 
 ### Remaining (next session)
-- **On-device load fix (top priority).** The first diagnostic build (`959e4cc`)
-  confirmed: cleanup bypass works — **no more SIGABRT**. The marker was
-  `I_CL_WRAP_BYPASS`, meaning `wrapper->init()` returned a non-OK status and
-  the bypass returned nullptr instead of crashing during cleanup. This
-  confirms Variant B: the primary failure is inside `wrapper->init()`, and
-  the SIGABRT was secondary (cleanup of a partially-initialized object).
+- **On-device load — RESOLVED.** The cleanup-bypass build confirmed the
+  SIGABRT was secondary (cleanup of a partially-initialized object); with the
+  bypass in place `System.loadLibrary("lsp-plugins-ladspa")` succeeds on
+  device (`loadLibrary(...) OK` in the App Log) and `LadspaRegistry::open()`
+  reaches the descriptor-enumeration stage without aborting. No further
+  crash-diagnosis work needed on this front.
 
-  The second diagnostic build (`eda7b9d`, CI run `32578284537`, artifact
-  `app-debug-apk`) adds:
-  1. **Sub-step markers inside `Wrapper::init()`** (wrapper.h): `WI_ENTER` →
-     `WI_MANIFEST_B` → `WI_MANIFEST_OK`/`WI_MANIFEST_NULL` → `WI_MLOAD_B` →
-     `WI_MLOAD_RC=<n>` → `WI_PORTS_B`/`WI_PORTS_OK` → `WI_REORDER_*` →
-     `WI_PINIT_B`/`WI_PINIT_OK` → `WI_OK`. The last `WI_*` marker before the
-     bypass identifies the exact failing sub-step. Most likely candidate:
-     `WI_MANIFEST_NULL` (the `builtin://manifest.json` resource is not
-     available — the BuiltinLoader has no data, or the DirLoader can't find
-     the file in the APK's native lib dir).
-  2. **`I_CL_WRAP_BYPASS` now includes `rc=<n>`** — the numeric `status_t`
-     return code from `wrapper->init()`.
-  3. **Descriptor label dump** — `LadspaRegistry::open()` logs all
-     `descriptor[i] Label="..." UniqueID=...` to the App Log. This diagnoses
-     the "label lookup failed for all 3 slots" issue seen on the non-crashing
-     launch (the bundle loads but none of the Labels match the expected
-     `kBindings[]` URIs).
+- **Label-lookup diagnosis (top priority).** The bundle loads but
+  `EffectChain::loadBundle()` reports `available==0` (label lookup failed for
+  all 3 slots). The prior diagnostic build (`eda7b9d`) added a
+  `descriptor[i] Label="..."` dump, but it routes through `LSP_LOGI` → logcat
+  (tag `PianoLSP`), which is unreachable on the dev machine, so it never
+  reached the user. **This session fixed that gap:** `LadspaRegistry` now also
+  builds a `descriptorDump()` string (count + first 40 labels/UniqueIDs), and
+  `EffectChain::loadBundle()` appends it + the per-slot expected labels to
+  `mLoadError`, which already flows to the App Log via
+  `nativeGetMasterEffectLoadError`. So the **next** on-device launch's App Log
+  `Reason:` block will contain, for the first time, what the bundle actually
+  exports on the target arch.
 
-  Install the build, launch the app, use the **Save** button to export the
-  log. Report:
-  - The `Previous launch LSP prepare marker:` line (will show `WI_*` or
-    `I_CL_WRAP_BYPASS rc=<n>`)
-  - The `descriptor[0] Label="..."` lines (what the bundle actually exposes)
-- On-device runtime validation (after the load is fixed): open "Master
-  Effects", confirm the 3 cards render with correct ranges and that
+  Next actions:
+  1. Rebuild the APK (the C++ changes are in `libnative-lib.so`; the LSP
+     `.so` itself is unchanged) and install.
+  2. Launch, then **Copy** the App Log. Report the `Reason:` block under
+     `LSP master effects unavailable (chain bypassed).` — specifically the
+     `Registry dump: descriptors=<N>` line and the first few `Label="..."`
+     entries.
+  3. Interpret:
+     - `descriptors=0` → confirms the leading hypothesis: the aarch64
+       cross-compile dead-strips the per-module factory registrations, so
+       `plug::Factory::root()` is empty and `ladspa_descriptor()` generates
+       nothing. Fix at the **build/link** layer: force-keep the registration
+       objects (e.g. a `-Wl,-u,<factory-symbol>` per module, or a linker
+       script `KEEP()`, or reference them from `wrap/ladspa.cpp`). Rebuild the
+       `.so` via `build-lsp-ladspa-android.sh`, repackage, retest.
+     - `descriptors=N>0` but no Label matches → reconcile `kBindings[]`
+       against the dumped labels (config drift between the 1.2.34 meta and
+       the pinned submodule versions).
+- On-device runtime validation (after the label lookup is fixed): open
+  "Master Effects", confirm the 3 cards render with correct ranges and that
   toggling/sliding changes the signal.
 - Project persistence (Milestone 8): bump project format 1 → 2; migrate the
   `piano_prefs`-based effect state into the project (or keep both).

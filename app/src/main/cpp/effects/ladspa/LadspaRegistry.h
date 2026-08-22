@@ -39,6 +39,14 @@ public:
     // Worker-thread only; not for the audio thread.
     const char* lastError() const;
 
+    // Diagnostic dump of the descriptors the bundle actually exposes: the
+    // total count plus the Label/UniqueID of the first N entries. Filled by
+    // open() and safe to read afterwards from the control thread. This is the
+    // only on-device-visible view of what the bundle exports (the per-line
+    // LSP_LOGI dump goes to logcat, which is unreachable on the dev machine),
+    // so callers surface it in the in-app log when label lookup fails.
+    const char* descriptorDump() const;
+
     LadspaRegistry(const LadspaRegistry&) = delete;
     LadspaRegistry& operator=(const LadspaRegistry&) = delete;
 
@@ -52,6 +60,7 @@ private:
     unsigned long mCount = 0;
     bool mLoaded = false;
     std::string mLastError;  // set on open() failure (worker thread)
+    std::string mDescriptorDump;  // count + first N labels (worker thread)
 };
 
 } // namespace ladspa
