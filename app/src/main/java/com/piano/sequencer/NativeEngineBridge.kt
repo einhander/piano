@@ -77,18 +77,39 @@ object NativeEngineBridge {
         try {
             val zip = java.util.zip.ZipFile(apkPath)
             zip.use { z ->
-                // Find the first supported ABI whose lib entry exists in the APK.
-                val entryName = android.os.Build.SUPPORTED_ABIS
-                    .map { "lib/$it/$soname" }
-                    .firstOrNull { z.getEntry(it) != null }
-                if (entryName == null) {
+                // Enumerate every entry whose path ends with the soname (case-
+                // insensitive). This survives split-APK repackaging and ABI-dir
+                // naming differences that a fixed "lib/<abi>/$soname" lookup
+                // would miss. Prefer an arm64-v8a entry if several match.
+                val matching = z.entries()
+                    .asSequence()
+                    .filter { e -> !e.isDirectory && e.name.endsWith(soname, ignoreCase = true) }
+                    .map { it.name }
+                    .toList()
+                // Also log all lib/ entries for diagnosis.
+                val libEntries = z.entries()
+                    .asSequence()
+                    .filter { e -> !e.isDirectory && e.name.startsWith("lib/") }
+                    .map { it.name }
+                    .toList()
+                AppLogger.info(
+                    "NativeEngineBridge",
+                    "APK lib/ entries (${libEntries.size}): ${libEntries.joinToString()}"
+                )
+                if (matching.isEmpty()) {
                     AppLogger.error(
                         "NativeEngineBridge",
-                        "no lib/<abi>/$soname entry found in APK for any of " +
-                            android.os.Build.SUPPORTED_ABIS.joinToString()
+                        "no entry ending with $soname found in base.apk; " +
+                            "native libs may be in a split APK (lib_split/*.apk) or stripped on install"
                     )
+                    // Try sibling split APKs (base.apk dir): split_config.arm64_v8a.apk etc.
+                    val fromSplit = loadFromSplitApks(context, soname, outFile)
+                    if (fromSplit != null) return fromSplit
                     return null
                 }
+                // Prefer arm64-v8a, else first match.
+                val entryName = matching.firstOrNull { it.contains("arm64-v8a") }
+                    ?: matching.first()
                 AppLogger.info("NativeEngineBridge", "APK entry: $entryName")
                 z.getInputStream(z.getEntry(entryName)).use { input ->
                     java.io.FileOutputStream(outFile).use { out ->
@@ -112,6 +133,60 @@ object NativeEngineBridge {
             )
             return null
         }
+    }
+
+    /**
+     * Look for the soname in sibling split APKs next to base.apk (e.g. the
+     * Play-style split_config.<abi>.apk) and extract+load from there.
+     */
+    private fun loadFromSplitApks(
+        context: android.content.Context,
+        soname: String,
+        outFile: java.io.File
+    ): String? {
+        val baseApk = java.io.File(context.applicationInfo.sourceDir)
+        val dir = baseApk.parentFile ?: return null
+        val splits = dir.listFiles { f ->
+            f.isFile && f.name.endsWith(".apk") && f.name != baseApk.name
+        }?.sortedByDescending { it.length() } ?: emptyList()
+        AppLogger.info(
+            "NativeEngineBridge",
+            "scanning ${splits.size} sibling APK(s) in $dir: ${splits.map { it.name }.joinToString()}"
+        )
+        for (split in splits) {
+            try {
+                java.util.zip.ZipFile(split).use { z ->
+                    val entry = z.entries()
+                        .asSequence()
+                        .firstOrNull { e ->
+                            !e.isDirectory && e.name.endsWith(soname, ignoreCase = true)
+                        }
+                    if (entry != null) {
+                        AppLogger.info(
+                            "NativeEngineBridge",
+                            "found $soname in split ${split.name}: ${entry.name}"
+                        )
+                        z.getInputStream(entry).use { input ->
+                            java.io.FileOutputStream(outFile).use { out -> input.copyTo(out) }
+                        }
+                        outFile.setExecutable(true, true)
+                        AppLogger.info(
+                            "NativeEngineBridge",
+                            "extracted ${outFile.length()} bytes from split, exec=${outFile.canExecute()}"
+                        )
+                        System.load(outFile.absolutePath)
+                        AppLogger.info("NativeEngineBridge", "System.load(\"${outFile.absolutePath}\") OK (from split)")
+                        return outFile.absolutePath
+                    }
+                }
+            } catch (e: Throwable) {
+                AppLogger.warn(
+                    "NativeEngineBridge",
+                    "scan of split ${split.name} failed: ${e.javaClass.simpleName}: ${e.message}"
+                )
+            }
+        }
+        return null
     }
 
     external fun nativeInit(): Boolean
