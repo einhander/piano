@@ -32,9 +32,19 @@ static const char* sigName(int sig) {
 // Strip Pointer Authentication Code (PAC) from a return address. Android
 // arm64 with PAC enabled tags return addresses stored on the stack; without
 // stripping, dladdr fails (the tagged address falls outside mapped segments).
-// xpaci strips PAC from a general-purpose register — a hint, always safe.
+// We emit the XPACI instruction (strips PAC from a GP register) via .inst
+// because the NDK target (android26) doesn't enable the pauth feature, so the
+// assembler rejects the mnemonic. Encoding: XPACI xd = 0xDAC10800 | Rd.
+// It's a hint — always safe, no-op if PAC is off.
 static unsigned long stripPac(unsigned long addr) {
-    __asm__ volatile("xpaci %0" : "+r"(addr));
+    // xpaci x8 = 0xDAC10808 — we force x8 via a clobber + mov.
+    __asm__ volatile(
+        "mov x8, %0\n"
+        ".inst 0xdac10808\n"   // xpaci x8
+        "mov %0, x8\n"
+        : "+r"(addr)
+        :
+        : "x8");
     return addr;
 }
 #else
