@@ -39,6 +39,14 @@ git -C "$PLUG_FW" apply --whitespace=nowarn --reverse --check "$PATCH_DIR/lsp-pl
     && echo "   (already applied)" \
     || git -C "$PLUG_FW" apply --whitespace=nowarn "$PATCH_DIR/lsp-plugin-fw-android.patch"
 
+echo ">> Applying lsp-plugin-fw Android diagnostic patch (instantiate markers)"
+# DIAGNOSTIC ONLY: adds persistent sub-step markers to the LADSPA instantiate()
+# function and bypasses destructive cleanup after init failure. Remove for
+# production. Safe to apply multiple times (idempotent check).
+git -C "$PLUG_FW" apply --whitespace=nowarn --reverse --check "$PATCH_DIR/lsp-plugin-fw-android-diag.patch" >/dev/null 2>&1 \
+    && echo "   (already applied)" \
+    || git -C "$PLUG_FW" apply --whitespace=nowarn "$PATCH_DIR/lsp-plugin-fw-android-diag.patch"
+
 echo ">> Copying new stub sources into lsp-runtime-lib"
 # The vendored stub header lives under include/lsp-plug.in/3rdparty/, which
 # does not exist in the upstream tree; create the destination dirs first so

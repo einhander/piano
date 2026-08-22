@@ -36,6 +36,14 @@ export ANDROID_TARGET=1
 export ANDROID_API="${ANDROID_MIN_API}"
 export ANDROID_ABI="arm64-v8a"
 
+# DIAGNOSTIC ONLY: enables sub-step markers + cleanup bypass in the LADSPA
+# instantiate() function (see patches/lsp-plugin-fw-android-diag.patch).
+# The LSP make system appends to CXXFLAGS, so setting it as an env var makes
+# make use our value as the initial value. This affects only the target
+# (cross-compiled) build — the host pass uses HOST_CXXFLAGS.
+# Remove this for production builds.
+export CXXFLAGS="-DLSP_ANDROID_INSTANTIATE_DIAGNOSTIC=1"
+
 # NDK toolchain variables consumed by LSP's make (CC ?= / CXX ?= / ...).
 export CC="${PRE}/bin/aarch64-linux-android${ANDROID_MIN_API}-clang"
 export CXX="${PRE}/bin/aarch64-linux-android${ANDROID_MIN_API}-clang++"

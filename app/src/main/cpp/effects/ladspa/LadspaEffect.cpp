@@ -13,13 +13,14 @@ namespace ladspa {
 // the LSP instantiate/connect_port/activate call aborts the process, the
 // crash handler (or next launch) can read which call was in progress. The
 // file is opened/flushed synchronously (worker thread, not audio thread).
-static void writePrepareMarker(const char* slot, const char* phase) {
+// The LSP-side instantiate() also writes to this same file with finer-grained
+// sub-step markers; whichever writes last wins (O_TRUNC).
+static void writePrepareMarker(const char* line) {
     int fd = ::open("/data/data/com.piano.sequencer/files/lsp_prepare_marker.log",
                     O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (fd < 0) return;
-    char buf[128];
-    int len = snprintf(buf, sizeof(buf), "slot=%s phase=%s\n", slot, phase);
-    ::write(fd, buf, static_cast<size_t>(len));
+    ::write(fd, line, strlen(line));
+    ::write(fd, "\n", 1);
     ::close(fd);
 }
 
@@ -69,14 +70,26 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
     mPortValues = std::make_unique<float[]>(mPortCount);
     std::memset(mPortValues.get(), 0, mPortCount * sizeof(float));
 
-    // Instantiate at the actual sample rate.
+    // Instantiate at the actual sample rate. Log plugin identity + sample rate
+    // for diagnostics — the LSP-side instantiate() also writes sub-step markers
+    // to the same file (lsp_prepare_marker.log), but only after this call
+    // enters the LSP code. This marker survives if the crash happens before
+    // the LSP marker is written.
     {
-        char slotStr[16];
-        snprintf(slotStr, sizeof(slotStr), "%d", mSlot);
-        writePrepareMarker(slotStr, "instantiate");
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "slot=%d phase=instantiate sr=%.0f label=%s",
+                 mSlot, sampleRate,
+                 mDescriptor->Label ? mDescriptor->Label : "?");
+        writePrepareMarker(buf);
     }
     mHandle = mDescriptor->instantiate(mDescriptor, static_cast<unsigned long>(sampleRate));
     if (!mHandle) {
+        // In diagnostic mode (LSP_ANDROID_INSTANTIATE_DIAGNOSTIC), instantiate()
+        // returns nullptr after a failed wrapper->init() WITHOUT cleaning up
+        // the partially-initialized objects. This is expected — the app should
+        // continue without this effect, not crash. The LSP marker file has the
+        // last sub-step and wrapper->init() return code.
         return false;
     }
 
@@ -97,9 +110,9 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
     // applyParameters() writes and the plugin reads in run(). Without this,
     // control ports are unconnected and the plugin reads garbage.
     {
-        char slotStr[16];
-        snprintf(slotStr, sizeof(slotStr), "%d", mSlot);
-        writePrepareMarker(slotStr, "connect_port");
+        char buf[128];
+        snprintf(buf, sizeof(buf), "slot=%d phase=connect_port", mSlot);
+        writePrepareMarker(buf);
     }
     for (unsigned long p = 0; p < mPortCount; ++p) {
         mDescriptor->connect_port(mHandle, p, &mPortValues[p]);
@@ -129,9 +142,9 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
     // Activate (if supported). LADSPA activate() is non-realtime; called once
     // before the first run().
     {
-        char slotStr[16];
-        snprintf(slotStr, sizeof(slotStr), "%d", mSlot);
-        writePrepareMarker(slotStr, "activate");
+        char buf[128];
+        snprintf(buf, sizeof(buf), "slot=%d phase=activate", mSlot);
+        writePrepareMarker(buf);
     }
     if (mDescriptor->activate) {
         mDescriptor->activate(mHandle);
@@ -139,7 +152,7 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
     }
 
     // Clear the marker — if we reach here, prepare() succeeded.
-    writePrepareMarker("", "done");
+    writePrepareMarker("done");
     mLatencyPort = mBinding->latencyPort;
     mLatencyFrames = 0;
 

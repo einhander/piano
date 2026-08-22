@@ -680,10 +680,13 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Read filesDir/lsp_prepare_marker.log — the phase marker written by
-     * LadspaEffect::prepare() before each LSP call (instantiate /
-     * connect_port / activate). If the process aborted during prepare(), this
-     * shows which call was in progress. Does NOT delete the file (the crash
-     * handler may not have run); cleared on next successful prepare.
+     * LadspaEffect::prepare() before each LSP call, AND by the LSP
+     * instantiate() function itself with finer-grained sub-step markers
+     * (I_ENTER, I_DSP_B, I_FACTORY_B, I_PLUGIN_B, I_RL_B, I_WRAP_B,
+     * I_WINIT_B, I_WINIT_RC_<n>, etc.). The last marker written before a
+     * crash identifies the failing sub-step. Does NOT delete the file on
+     * read if it indicates a crash (the LSP sub-step markers are the key
+     * diagnostic); cleared on next successful prepare.
      */
     private fun readLspPrepareMarker(): String? {
         return try {

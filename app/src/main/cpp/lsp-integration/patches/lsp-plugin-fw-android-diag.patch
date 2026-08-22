@@ -1,0 +1,166 @@
+diff --git a/src/wrap/ladspa.cpp b/src/wrap/ladspa.cpp
+index 2b2e88bc..84733c34 100644
+--- a/src/wrap/ladspa.cpp
++++ b/src/wrap/ladspa.cpp
+@@ -38,6 +38,40 @@
+ #include <lsp-plug.in/plug-fw/wrap/ladspa/wrapper.h>
+ #include <lsp-plug.in/plug-fw/wrap/ladspa/impl/wrapper.h>
+ 
++// --- Android diagnostic: persistent sub-step markers for instantiate() ---
++// Writes a one-line marker to a file in the app's filesDir. Survives native
++// crashes (SIGABRT during cleanup) so the next launch can read which sub-step
++// of instantiate() was in progress when the abort fired.
++// DIAGNOSTIC ONLY — remove for production.
++#ifdef __ANDROID__
++#include <fcntl.h>
++#include <unistd.h>
++#include <stdio.h>
++static void lsp_diag_marker(const char *phase)
++{
++    int fd = ::open("/data/data/com.piano.sequencer/files/lsp_prepare_marker.log",
++                    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
++    if (fd < 0) return;
++    char buf[256];
++    int n = snprintf(buf, sizeof(buf), "slot=0 phase=%s\n", phase);
++    ::write(fd, buf, static_cast<size_t>(n));
++    ::close(fd);
++}
++static void lsp_diag_marker_rc(const char *phase, int rc)
++{
++    int fd = ::open("/data/data/com.piano.sequencer/files/lsp_prepare_marker.log",
++                    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
++    if (fd < 0) return;
++    char buf[256];
++    int n = snprintf(buf, sizeof(buf), "slot=0 phase=%s rc=%d\n", phase, rc);
++    ::write(fd, buf, static_cast<size_t>(n));
++    ::close(fd);
++}
++#else
++static inline void lsp_diag_marker(const char *) {}
++static inline void lsp_diag_marker_rc(const char *, int) {}
++#endif
++
+ 
+ #define LADSPA_LOG_FILE         "lsp-ladspa.log"
+ 
+@@ -69,25 +103,32 @@ namespace lsp
+ 
+         LADSPA_Handle instantiate(const LADSPA_Descriptor *descriptor, unsigned long sample_rate)
+         {
++            lsp_diag_marker("I_ENTER");
++
+             // Check sample rate
+             if (sample_rate > MAX_SAMPLE_RATE)
+             {
+                 lsp_error("Unsupported sample rate: %ld, maximum supportes sample rate is %ld",
+                         long(sample_rate), long(MAX_SAMPLE_RATE));
++                lsp_diag_marker("I_SR_FAIL");
+                 return NULL;
+             }
+ 
+             // Initialize DSP
++            lsp_diag_marker("I_DSP_B");
+             dsp::init();
++            lsp_diag_marker("I_DSP_OK");
+ 
+             ssize_t index = descriptors.index_of(descriptor);
+             if (index < 0)
+             {
+                 lsp_error("Unknown LADSPA descriptor has been passed in the call");
++                lsp_diag_marker("I_DESC_UNKNOWN");
+                 return NULL;
+             }
+ 
+             // Lookup plugin identifier among all registered plugin factories
++            lsp_diag_marker("I_FACTORY_B");
+             plug::Module *plugin = NULL;
+             const meta::plugin_t *meta = NULL;
+ 
+@@ -103,43 +144,87 @@ namespace lsp
+                     if ((meta->uids.ladspa_id == descriptor->UniqueID) &&
+                         (!::strcmp(meta->uids.ladspa_lbl, descriptor->Label)))
+                     {
++                        lsp_diag_marker("I_PLUGIN_B");
+                         // Instantiate the plugin and return
+                         if ((plugin = f->create(meta)) == NULL)
+                         {
+                             lsp_error("Plugin instantiation error: %s", meta->uids.ladspa_lbl);
++                            lsp_diag_marker("I_PLUGIN_NULL");
+                             return NULL;
+                         }
++                        lsp_diag_marker("I_PLUGIN_OK");
+                     }
+                 }
+             }
++            lsp_diag_marker("I_FACTORY_OK");
+ 
+             // No plugin has been found?
+             if (plugin == NULL)
+             {
+                 lsp_error("Unknown plugin identifier: %s", descriptor->Label);
++                lsp_diag_marker("I_PLUGIN_NOT_FOUND");
+                 return NULL;
+             }
+ 
+             // Create resource loader
++            lsp_diag_marker("I_RL_B");
+             resource::ILoader *loader = core::create_resource_loader();
+             if (loader != NULL)
+             {
++                lsp_diag_marker("I_RL_OK");
++                lsp_diag_marker("I_WRAP_B");
+                 ladspa::Wrapper *wrapper  = new ladspa::Wrapper(plugin, loader);
+                 if (wrapper != NULL)
+                 {
++                    lsp_diag_marker("I_WRAP_OK");
++                    lsp_diag_marker("I_WINIT_B");
+                     status_t res = wrapper->init(sample_rate);
++                    lsp_diag_marker_rc("I_WINIT_RC", int(res));
+                     if (res == STATUS_OK)
++                    {
++                        lsp_diag_marker("I_WINIT_OK");
++                        lsp_diag_marker("I_OK");
+                         return reinterpret_cast<LADSPA_Handle>(wrapper);
++                    }
+                     lsp_error("Error initializing plugin wrapper, code: %d", int(res));
++                    // DIAGNOSTIC ONLY: intentionally bypass destructive cleanup
++                    // to expose the primary initialization failure. The previous
++                    // SIGABRT fires during cleanup (delete wrapper) of a
++                    // partially-initialized object. This leaks memory and must
++                    // not be enabled in production.
++                    #ifdef LSP_ANDROID_INSTANTIATE_DIAGNOSTIC
++                    lsp_diag_marker("I_CL_WRAP_BYPASS");
++                    return NULL;
++                    #else
++                    lsp_diag_marker("I_CL_WRAP");
+                     delete wrapper;
++                    #endif
+                 }
+                 else
++                {
+                     lsp_error("Error allocating plugin wrapper");
++                    lsp_diag_marker("I_WRAP_NULL");
++                }
++                #ifdef LSP_ANDROID_INSTANTIATE_DIAGNOSTIC
++                lsp_diag_marker("I_CL_RL_BYPASS");
++                return NULL;
++                #else
++                lsp_diag_marker("I_CL_RL");
+                 delete loader;
++                #endif
+             }
+             else
++            {
+                 lsp_error("No resource loader available");
++                lsp_diag_marker("I_RL_NULL");
++            }
++            #ifdef LSP_ANDROID_INSTANTIATE_DIAGNOSTIC
++            lsp_diag_marker("I_CL_PLUGIN_BYPASS");
++            return NULL;
++            #else
++            lsp_diag_marker("I_CL_PLUGIN");
+             delete plugin;
++            #endif
+ 
+             // Plugin could not be instantiated
+             return NULL;
