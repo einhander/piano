@@ -10,6 +10,13 @@ required at each milestone; this tracker is the running summary.
 
 Legend: тЬЕ done ┬╖ ЁЯЯб in progress / partial ┬╖ тмЬ not started
 
+> **ON-DEVICE BREAKTHROUGH (commit 5557233):** the LSP master effects are
+> now available on-device (3/3 slots). Root cause of the long-standing
+> instantiate failure was the no-op iconv_android_shim.cpp returning
+> (iconv_t)-1 -> STATUS_BAD_LOCALE (rc=29) during manifest decode in
+> Wrapper::init(). Replaced with a real minimal iconv; the user confirmed
+> effects show up after the .so rebuild.
+
 ---
 
 ## Milestone 1 тАФ Android build feasibility  тЬЕ
@@ -147,7 +154,7 @@ Worker-prepared inactive chain + atomic swap.
    i.e. `System.loadLibrary` succeeds and `LadspaRegistry::open()` reaches the
    `dlsym(ladspa_descriptor)` + descriptor-enumeration stage without aborting.
    **The top blocker is now the on-device instantiate failure (see blocker 1b).**
-1b. **Effects unavailable on device — ROOT CAUSE FOUND + FIX IMPLEMENTED (pending .so rebuild).** The bundle loads
+1b. **Effects unavailable on device — RESOLVED (on-device confirmed).** Root cause: the no-op `iconv_android_shim.cpp` returned `(iconv_t)-1`, failing `CharsetDecoder::init()` (`STATUS_BAD_LOCALE`, rc=29) during `meta::load_manifest()` in `wrapper->init()`. Fix: rewrote the shim into a real minimal iconv. After the LSP `.so` rebuild the user confirmed **effects show up** on-device (3/3 slots available). The bundle loads
    and the descriptor table is **fully populated**, but `EffectChain::loadBundle()`
    still returns `available==0`. The first diagnostic build's dump (now
    surfaced in the App Log, see below) shows:
@@ -292,6 +299,19 @@ Worker-prepared inactive chain + atomic swap.
    started here.
 
 ## Session notes (this update)
+
+- **ON-DEVICE EFFECTS WORK (commit 5557233).** After rebuilding the LSP
+  .so with the real iconv shim, the user confirmed the master effects
+  show up on-device (3/3 slots available, UI renders). This closes the
+  long-running instantiate-failure blocker. Root-cause recap: the no-op
+  iconv_android_shim.cpp returned (iconv_t)-1, which made
+  CharsetDecoder::init() return STATUS_BAD_LOCALE (rc=29) during
+  meta::load_manifest() inside Wrapper::init(); the manifest was found,
+  but its UTF-8->wchar_t decode failed because Bionic lacks the iconv
+  functions. Replaced the shim with a real minimal iconv (UTF-8/UTF-16
+  /UTF-32/WCHAR_T/ASCII/ISO-8859-1); host g++ test (11 cases) ALL PASS.
+  Remaining: audible DSP validation (toggle/slide changes the signal);
+  the DSP path was already host-tested, so this is confirmation only.
 
 - Fixed the failing LSP LADSPA build that the prior WIP commit left broken.
   The `.so` only actually builds after three additional patches beyond the
@@ -629,9 +649,12 @@ Notes on the test design:
   3. If still failing: the marker will now advance past `I_CL_WRAP_BYPASS`
      toward a later `WI_*` sub-step — that names the next blocker. The iconv
      fix is necessary and almost certainly sufficient for manifest decode.
-- On-device runtime validation (after the instantiate failure is fixed): open
-  "Master Effects", confirm the 3 cards render with correct ranges and that
-  toggling/sliding changes the signal.
+- On-device runtime validation: ✅ CONFIRMED. After the iconv fix + LSP
+  `.so` rebuild, the user reports **effects show up** on-device (3/3 master
+  effect slots available, UI renders). The iconv shim was the necessary and
+  sufficient fix for the manifest-decode/instantiate failure. Remaining
+  runtime validation: confirm toggling/sliding audibly changes the signal
+  (DSP path was already host-tested).
 - Project persistence (Milestone 8): bump project format 1 → 2; migrate the
   `piano_prefs`-based effect state into the project (or keep both).
 - Sample-rate rebuild (Milestone 9): worker-prepared inactive chain + atomic
