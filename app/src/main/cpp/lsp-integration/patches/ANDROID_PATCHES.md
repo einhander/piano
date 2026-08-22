@@ -112,8 +112,21 @@ third_party/lsp/patches/
   `src/main/io/iconv_android_shim.cpp`)
 - **Reason:** Bionic ships `<iconv.h>` with the `iconv_t` typedef but does not
   declare the `iconv`/`iconv_open`/`iconv_close` functions.
-- **Fix:** declare them and link a no-op shim.
-- **Upstream DSP impact:** none.
+- **Fix:** provide a REAL minimal iconv (not a no-op). The LSP
+  `Wrapper::init()` reads `builtin://manifest.json` via `io::InSequence`,
+  which decodes the UTF-8 stream to `lsp_wchar_t` (uint32_t = UTF-32) through
+  `CharsetDecoder`. `CharsetDecoder::init()` calls
+  `init_iconv_to_wchar_t()` -> `iconv_open("UTF-32LE"/"WCHAR_T", "UTF-8")`.
+  The previous no-op returned (iconv_t)-1 -> `STATUS_BAD_LOCALE` (status code
+  29) -> `wrapper->init()` failed -> `instantiate()` returned nullptr -> all
+  master effect slots unavailable. The shim now implements UTF-8, UTF-16LE/BE,
+  UTF-32LE/BE, WCHAR_T (=UTF-32LE on arm LE), US-ASCII, ISO-8859-1 via a
+  Unicode code-point intermediate, with case/dash-insensitive charset name
+  matching. Unknown charsets still return -1 so unsupported conversions fall
+  back as before.
+- **Upstream DSP impact:** none on the DSP/render path, but REQUIRED for
+  wrapper init (manifest decode). Without it, no LSP plugin can instantiate
+  on-device.
 
 ### 9. libsndfile stub
 - **Module:** lsp-runtime-lib (`include/lsp-plug.in/mm/InAudioFileStream.h`,

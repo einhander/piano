@@ -147,7 +147,7 @@ Worker-prepared inactive chain + atomic swap.
    i.e. `System.loadLibrary` succeeds and `LadspaRegistry::open()` reaches the
    `dlsym(ladspa_descriptor)` + descriptor-enumeration stage without aborting.
    **The top blocker is now the on-device instantiate failure (see blocker 1b).**
-1b. **Effects unavailable on device (current top blocker).** The bundle loads
+1b. **Effects unavailable on device — ROOT CAUSE FOUND + FIX IMPLEMENTED (pending .so rebuild).** The bundle loads
    and the descriptor table is **fully populated**, but `EffectChain::loadBundle()`
    still returns `available==0`. The first diagnostic build's dump (now
    surfaced in the App Log, see below) shows:
@@ -177,17 +177,48 @@ Worker-prepared inactive chain + atomic swap.
    - The descriptor table is NOT empty (168 entries, same as the host x86-64
      `.so`). Dead-stripping of factory registrations is ruled out.
 
-   **Refined leading hypothesis:** `wrapper->init()` fails on-device. The prior
-   sub-step-marker diag (`eda7b9d`) instrumented `Wrapper::init()` with
-   `WI_ENTER` → `WI_MANIFEST_B` → `WI_MANIFEST_OK`/`WI_MANIFEST_NULL` →
-   `WI_MLOAD_B` → `WI_MLOAD_RC=<n>` → `WI_PORTS_*` → `WI_REORDER_*` →
-   `WI_PINIT_*` → `WI_OK`, and `I_CL_WRAP_BYPASS rc=<n>` carries the numeric
-   return code. The most likely failing sub-step is `WI_MANIFEST_NULL` — the
-   `builtin://manifest.json` resource is not available on-device (the
-   BuiltinLoader has no embedded data, or the DirLoader can't find the file
-   inside the APK's native-lib dir where `extractNativeLibs=false` keeps the
-   `.so`). This is consistent with the host x86-64 `.so` working (the host
-   loader resolves the manifest from the build tree / cwd).
+   **ROOT CAUSE FOUND + FIX IMPLEMENTED (this session).** The sub-step-marker
+   diag (`eda7b9d`) instrumented `Wrapper::init()`; the on-device log
+   (`piano_log (3).txt`) now shows the marker in-process (Pass 3 fix):
+   ```
+   Last LSP prepare marker (this launch): slot=0 phase=I_CL_WRAP_BYPASS rc=29
+   ```
+   Decoding `rc=29` against the `status_codes` enum
+   (`lsp-common-lib/include/lsp-plug.in/common/status.h`, 0-indexed:
+   OK=0 ... EOF=25, CLOSED=26, NOT_SUPPORTED=27, INVALID_VALUE=28,
+   BAD_LOCALE=29) → **rc=29 = STATUS_BAD_LOCALE**.
+
+   This is NOT `WI_MANIFEST_NULL` (the manifest IS found — else
+   `wrapper->init()` would return STATUS_BAD_STATE=15, not 29). The manifest
+   stream opens fine; the failure is in `meta::load_manifest()` parsing it.
+   `load_manifest()` wraps the stream in `io::InSequence` with charset
+   autodetect, which drives `CharsetDecoder::init()` →
+   `init_iconv_to_wchar_t()` → `iconv_open("UTF-32LE", "UTF-8")`. On
+   Android Bionic ships `<iconv.h>` (the `iconv_t` typedef) but NOT the
+   `iconv`/`iconv_open`/`iconv_close` functions. The previous
+   `iconv_android_shim.cpp` was a **no-op** returning `(iconv_t)-1`
+   (premised on "the LADSPA DSP path does not perform charset conversion"
+   — true for render, false for init). `(iconv_t)-1` →
+   `CharsetDecoder::init()` returns STATUS_BAD_LOCALE (29) →
+   `meta::load_manifest()` returns 29 → `wrapper->init()` returns 29 →
+   `instantiate()` returns nullptr → all 3 slots unavailable.
+
+   **Fix:** rewrote `patches/iconv_android_shim.cpp` from a no-op into a real
+   minimal iconv that supports UTF-8, UTF-16LE/BE, UTF-32LE/BE, WCHAR_T
+   (=UTF-32LE on arm LE), US-ASCII, ISO-8859-1 via a Unicode code-point
+   intermediate, with case/dash-insensitive charset name matching. Unknown
+   charsets still return -1 (unsupported conversions fall back as before).
+   Host g++ test (11 cases incl. UTF-8→UTF-32LE, multibyte, U+1F600
+   reverse, identity, unsupported) → ALL PASS. `ANDROID_PATCHES.md` item 8
+   updated (was wrong: "Upstream DSP impact: none" → required for wrapper
+   init).
+
+   **Action required:** the fix is in the LSP `.so`, NOT `libnative-lib.so`.
+   Must **rebuild `liblsp-plugins-ladspa.so`** (re-run
+   `build-lsp-ladspa-android.sh`), copy the new `.so` to
+   `lsp-integration/prebuilt/arm64-v8a/liblsp-plugins-ladspa.so`, then rebuild
+   the APK. Rebuild the host x86-64 `.so` only if re-running the offline
+   tests. After install, expect `LSP master effects available: 3/3`.
 
    **Diagnosis gap fixed this session (three passes):**
    - Pass 1 — the descriptor dump was going to logcat (tag `PianoLSP`),
@@ -216,19 +247,21 @@ Worker-prepared inactive chain + atomic swap.
      surviving reinstalls.
 
    Next actions:
-   1. Rebuild + install (C++ changes in `libnative-lib.so`; LSP `.so`
-      unchanged).
-   2. Launch, **Copy** the App Log → report the `Last LSP prepare marker
-      (this launch): <WI_*>` line at the end of the `Reason:` block. This is
-      the exact failing `Wrapper::init()` sub-step, now visible in the SAME
-      launch (Pass 3 fix — no next-launch/reinstall survival needed).
-   3. Most probable outcome: marker at `WI_MANIFEST_NULL` → the
-      `builtin://manifest.json` resource is unavailable on-device. Fix
-      candidates: embed the manifest as a static resource in the `.so` (LSP
-      build option), ship the manifest file alongside the `.so` and point the
-      DirLoader at it, or patch `wrapper->init()` to tolerate a missing
-      manifest (default empty package). This is a **build/patch** fix in the
-      LSP layer, not an app-code change.
+   1. **ROOT CAUSE FOUND + FIX IMPLEMENTED — rebuild the LSP `.so`.**
+      The marker (`piano_log (3).txt`) decoded to `rc=29 = STATUS_BAD_LOCALE`
+      → the no-op `iconv_android_shim.cpp` returned `(iconv_t)-1`, failing
+      `CharsetDecoder::init()` during `meta::load_manifest()` (manifest IS
+      found; parsing fails on charset decode). Rewrote the shim into a real
+      minimal iconv (UTF-8/UTF-16/UTF-32/WCHAR_T/ASCII/ISO-8859-1); host test
+      ALL PASS.
+   2. Re-run `build-lsp-ladspa-android.sh` → copy the new
+      `liblsp-plugins-ladspa.so` to `prebuilt/arm64-v8a/` → rebuild the
+      APK → install → launch. Expect `LSP master effects available: 3/3`.
+   3. If still unavailable: re-check the marker (now expected to advance past
+      `I_CL_WRAP_BYPASS` toward `WI_PORTS_*`/`WI_PINIT_*`); a new failure
+      sub-step would point to the next blocker (e.g. resource loader for
+      locale strings). The iconv fix is necessary and almost certainly
+      sufficient for the manifest decode.
 
 2. **qemu on-device-style run**: the Android `.so` needs `/system/bin/linker64`
    (Bionic dynamic linker), which the NDK does not ship. Options: extract
@@ -581,22 +614,21 @@ Notes on the test design:
   **next** launch.
 
   Next actions:
-  1. Rebuild the APK (C++ changes in `libnative-lib.so`; LSP `.so` unchanged)
-     and install.
-  2. Launch, **Copy** the App Log. Report the new `Last LSP prepare marker
-     (this launch): <WI_*>` line at the end of the `Reason:` block — the
-     exact failing `Wrapper::init()` sub-step, now visible in the SAME launch
-     (Pass 3: the marker is read in-process, so it survives CI reinstalls that
-     wipe `filesDir`). No second launch needed.
-  3. Most probable: marker at `WI_MANIFEST_NULL` → the
-     `builtin://manifest.json` resource is unavailable on-device (the
-     BuiltinLoader has no embedded data, or the DirLoader can't find the file
-     in the APK native-lib dir under `extractNativeLibs=false`). Fix
-     candidates: embed the manifest as a static resource in the `.so` (LSP
-     build option), ship the manifest file alongside the `.so` and point the
-     DirLoader at it, or patch `wrapper->init()` to tolerate a missing
-     manifest (default empty package). This is a **build/patch** fix in the
-     LSP layer, not an app-code change.
+  1. **ROOT CAUSE FOUND + FIX IMPLEMENTED — rebuild the LSP `.so`.**
+     `piano_log (3).txt` decoded the marker to `rc=29 = STATUS_BAD_LOCALE`
+     (0-indexed status_codes enum). Cause: the no-op `iconv_android_shim.cpp`
+     returned `(iconv_t)-1`, failing `CharsetDecoder::init()` inside
+     `meta::load_manifest()` — the manifest IS found, but its UTF-8→wchar_t
+     decode fails because Bionic ships `<iconv.h>` (the typedef) but not the
+     iconv functions, and our shim was a no-op. Rewrote the shim into a real
+     minimal iconv (UTF-8/UTF-16/UTF-32/WCHAR_T/ASCII/ISO-8859-1); host g++
+     test (11 cases) ALL PASS. `ANDROID_PATCHES.md` item 8 corrected.
+  2. Re-run `build-lsp-ladspa-android.sh` → copy the new
+     `liblsp-plugins-ladspa.so` to `prebuilt/arm64-v8a/` → rebuild APK →
+     install → launch. Expect `LSP master effects available: 3/3`.
+  3. If still failing: the marker will now advance past `I_CL_WRAP_BYPASS`
+     toward a later `WI_*` sub-step — that names the next blocker. The iconv
+     fix is necessary and almost certainly sufficient for manifest decode.
 - On-device runtime validation (after the instantiate failure is fixed): open
   "Master Effects", confirm the 3 cards render with correct ranges and that
   toggling/sliding changes the signal.
