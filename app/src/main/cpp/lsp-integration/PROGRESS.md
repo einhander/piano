@@ -456,12 +456,14 @@ Notes on the test design:
 - `./gradlew :app:testDebugUnitTest` → BUILD SUCCESSFUL (MIDI parser suite).
 
 ### Remaining (next session)
-- **On-device load fix (top priority).** Install the diag build (`1a49a40`
+- **On-device load fix (top priority).** Install the diag build (`c3a19c5`
   CI APK), reopen the app, read the `=== native crash ===` backtrace now shown
-  in the App Log. The fault PC + `dladdr` symbol names the crashing static
-  initializer. Patch it for `__ANDROID__` (extend the relevant
-  `*-android.patch`), re-run CI, and confirm `loadLibrary(
-  "lsp-plugins-ladspa") OK` + `LSP master effects available: 3/3`.
+  in the App Log. The PAC-stripped backtrace resolves ALL frames (including
+  the LSP frame that previously showed a bogus tagged address). The
+  `lsp_prepare_marker.log` entry tells us WHICH LSP call (instantiate /
+  connect_port / activate) was in progress when the abort fired. The logcat
+  capture (if the fork succeeded) shows the abort message text from
+  linker/DEBUG/libc/AndroidRuntime tags.
 - On-device runtime validation (after the load is fixed): open "Master
   Effects", confirm the 3 cards render with correct ranges and that
   toggling/sliding changes the signal.
