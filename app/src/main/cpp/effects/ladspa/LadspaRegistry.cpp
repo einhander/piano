@@ -103,6 +103,14 @@ bool LadspaRegistry::open(const char* soPath) {
     mCount = n;
     mLoaded = true;
     LSP_LOGI("bundle loaded: %s (%lu descriptors)", soPath, n);
+    // Diagnostic: dump all descriptor labels so we can see what the bundle
+    // actually exposes vs. what we expect (kBindings[]).
+    for (unsigned long i = 0; i < n && i < 40; ++i) {
+        const LADSPA_Descriptor* d = fn(i);
+        LSP_LOGI("  descriptor[%lu] Label=\"%s\" UniqueID=%lu",
+                 i, (d && d->Label) ? d->Label : "(null)",
+                 (d) ? d->UniqueID : 0);
+    }
     return true;
 }
 

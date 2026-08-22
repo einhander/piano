@@ -1,21 +1,125 @@
+diff --git a/include/lsp-plug.in/plug-fw/wrap/ladspa/impl/wrapper.h b/include/lsp-plug.in/plug-fw/wrap/ladspa/impl/wrapper.h
+index 80ed0bcc..9a9314c8 100644
+--- a/include/lsp-plug.in/plug-fw/wrap/ladspa/impl/wrapper.h
++++ b/include/lsp-plug.in/plug-fw/wrap/ladspa/impl/wrapper.h
+@@ -27,6 +27,20 @@
+ #include <lsp-plug.in/plug-fw/wrap/ladspa/ports.h>
+ #include <lsp-plug.in/runtime/system.h>
+ 
++// --- Android diagnostic: sub-step markers for Wrapper::init() ---
++// The marker functions are defined in ladspa.cpp (non-static, in lsp::diag).
++// DIAGNOSTIC ONLY — remove for production.
++namespace lsp {
++namespace diag {
++#ifdef __ANDROID__
++void marker(const char *phase);
++void marker_rc(const char *phase, int rc);
++#else
++inline void marker(const char *) {}
++inline void marker_rc(const char *, int) {}
++#endif
++}} // namespace lsp::diag
++
+ namespace lsp
+ {
+     namespace ladspa
+@@ -58,19 +72,25 @@ namespace lsp
+             };
+         #endif /* LSP_TRACE */
+ 
++            diag::marker("WI_ENTER");
+             status_t res;
+ 
+             // Load package information
++            diag::marker("WI_MANIFEST_B");
+             io::IInStream *is = resources()->read_stream(LSP_BUILTIN_PREFIX "manifest.json");
+             if (is == NULL)
+             {
+                 lsp_error("No manifest.json found in resources");
++                diag::marker("WI_MANIFEST_NULL");
+                 return STATUS_BAD_STATE;
+             }
++            diag::marker("WI_MANIFEST_OK");
+ 
++            diag::marker("WI_MLOAD_B");
+             res = meta::load_manifest(&pPackage, is);
+             is->close();
+             delete is;
++            diag::marker_rc("WI_MLOAD_RC", int(res));
+ 
+             if (res != STATUS_OK)
+             {
+@@ -79,19 +99,25 @@ namespace lsp
+             }
+ 
+             // Create ports
++            diag::marker("WI_PORTS_B");
+             lsp_trace("Creating ports");
+             lltl::parray<plug::IPort> plugin_ports;
+             const meta::plugin_t *m = pPlugin->metadata();
+             for (const meta::port_t *port = m->ports; port->id != NULL; ++port)
+                 create_port(&plugin_ports, port);
++            diag::marker("WI_PORTS_OK");
+ 
+             // Re-order external ports according to the port revision
+             const int max_revision = meta::max_revision(m->ports);
+             if (max_revision > 0)
+             {
++                diag::marker("WI_REORDER_B");
+                 lltl::parray<ladspa::Port> ext_ports;
+                 if (!ext_ports.reserve(vExtPorts.size()))
++                {
++                    diag::marker("WI_REORDER_NOMEM");
+                     return STATUS_NO_MEM;
++                }
+ 
+                 // Iterate over all revisions and add ports to the new list
+                 for (int revision = 0; revision <= max_revision; ++revision)
+@@ -106,6 +132,7 @@ namespace lsp
+ 
+                 // Commit new list sorted by port revision
+                 vExtPorts.swap(&ext_ports);
++                diag::marker("WI_REORDER_OK");
+             }
+ 
+         #ifdef LSP_TRACE
+@@ -124,12 +151,15 @@ namespace lsp
+             sNewPosition.sampleRate = sr;
+ 
+             // Initialize plugin
++            diag::marker("WI_PINIT_B");
+             lsp_trace("Initializing plugin");
+             pPlugin->init(this, plugin_ports.array());
+             pPlugin->set_sample_rate(sr);
+             bUpdateSettings = true;
++            diag::marker("WI_PINIT_OK");
+ 
+             // Return success status
++            diag::marker("WI_OK");
+             return STATUS_OK;
+         }
+ 
 diff --git a/src/wrap/ladspa.cpp b/src/wrap/ladspa.cpp
-index 2b2e88bc..84733c34 100644
+index 2b2e88bc..401d527e 100644
 --- a/src/wrap/ladspa.cpp
 +++ b/src/wrap/ladspa.cpp
-@@ -38,6 +38,40 @@
+@@ -38,6 +38,49 @@
  #include <lsp-plug.in/plug-fw/wrap/ladspa/wrapper.h>
  #include <lsp-plug.in/plug-fw/wrap/ladspa/impl/wrapper.h>
  
 +// --- Android diagnostic: persistent sub-step markers for instantiate() ---
 +// Writes a one-line marker to a file in the app's filesDir. Survives native
 +// crashes (SIGABRT during cleanup) so the next launch can read which sub-step
-+// of instantiate() was in progress when the abort fired.
++// of instantiate() / wrapper->init() was in progress when the abort fired.
++// The functions are NON-static so wrapper.h's inline init() can call them.
 +// DIAGNOSTIC ONLY — remove for production.
 +#ifdef __ANDROID__
 +#include <fcntl.h>
 +#include <unistd.h>
 +#include <stdio.h>
-+static void lsp_diag_marker(const char *phase)
++namespace lsp {
++namespace diag {
++void marker(const char *phase)
 +{
 +    int fd = ::open("/data/data/com.piano.sequencer/files/lsp_prepare_marker.log",
 +                    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
@@ -25,7 +129,7 @@ index 2b2e88bc..84733c34 100644
 +    ::write(fd, buf, static_cast<size_t>(n));
 +    ::close(fd);
 +}
-+static void lsp_diag_marker_rc(const char *phase, int rc)
++void marker_rc(const char *phase, int rc)
 +{
 +    int fd = ::open("/data/data/com.piano.sequencer/files/lsp_prepare_marker.log",
 +                    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
@@ -35,130 +139,134 @@ index 2b2e88bc..84733c34 100644
 +    ::write(fd, buf, static_cast<size_t>(n));
 +    ::close(fd);
 +}
++} // namespace diag
++} // namespace lsp
 +#else
-+static inline void lsp_diag_marker(const char *) {}
-+static inline void lsp_diag_marker_rc(const char *, int) {}
++namespace lsp {
++namespace diag {
++inline void marker(const char *) {}
++inline void marker_rc(const char *, int) {}
++} // namespace diag
++} // namespace lsp
 +#endif
 +
  
  #define LADSPA_LOG_FILE         "lsp-ladspa.log"
  
-@@ -69,25 +103,32 @@ namespace lsp
+@@ -69,25 +112,31 @@ namespace lsp
  
          LADSPA_Handle instantiate(const LADSPA_Descriptor *descriptor, unsigned long sample_rate)
          {
-+            lsp_diag_marker("I_ENTER");
-+
++            diag::marker("I_ENTER");
              // Check sample rate
              if (sample_rate > MAX_SAMPLE_RATE)
              {
                  lsp_error("Unsupported sample rate: %ld, maximum supportes sample rate is %ld",
                          long(sample_rate), long(MAX_SAMPLE_RATE));
-+                lsp_diag_marker("I_SR_FAIL");
++                diag::marker("I_SR_FAIL");
                  return NULL;
              }
  
              // Initialize DSP
-+            lsp_diag_marker("I_DSP_B");
++            diag::marker("I_DSP_B");
              dsp::init();
-+            lsp_diag_marker("I_DSP_OK");
++            diag::marker("I_DSP_OK");
  
              ssize_t index = descriptors.index_of(descriptor);
              if (index < 0)
              {
                  lsp_error("Unknown LADSPA descriptor has been passed in the call");
-+                lsp_diag_marker("I_DESC_UNKNOWN");
++                diag::marker("I_DESC_UNKNOWN");
                  return NULL;
              }
  
              // Lookup plugin identifier among all registered plugin factories
-+            lsp_diag_marker("I_FACTORY_B");
++            diag::marker("I_FACTORY_B");
              plug::Module *plugin = NULL;
              const meta::plugin_t *meta = NULL;
  
-@@ -103,43 +144,87 @@ namespace lsp
+@@ -103,43 +152,86 @@ namespace lsp
                      if ((meta->uids.ladspa_id == descriptor->UniqueID) &&
                          (!::strcmp(meta->uids.ladspa_lbl, descriptor->Label)))
                      {
-+                        lsp_diag_marker("I_PLUGIN_B");
++                        diag::marker("I_PLUGIN_B");
                          // Instantiate the plugin and return
                          if ((plugin = f->create(meta)) == NULL)
                          {
                              lsp_error("Plugin instantiation error: %s", meta->uids.ladspa_lbl);
-+                            lsp_diag_marker("I_PLUGIN_NULL");
++                            diag::marker("I_PLUGIN_NULL");
                              return NULL;
                          }
-+                        lsp_diag_marker("I_PLUGIN_OK");
++                        diag::marker("I_PLUGIN_OK");
                      }
                  }
              }
-+            lsp_diag_marker("I_FACTORY_OK");
++            diag::marker("I_FACTORY_OK");
  
              // No plugin has been found?
              if (plugin == NULL)
              {
                  lsp_error("Unknown plugin identifier: %s", descriptor->Label);
-+                lsp_diag_marker("I_PLUGIN_NOT_FOUND");
++                diag::marker("I_PLUGIN_NOT_FOUND");
                  return NULL;
              }
  
              // Create resource loader
-+            lsp_diag_marker("I_RL_B");
++            diag::marker("I_RL_B");
              resource::ILoader *loader = core::create_resource_loader();
              if (loader != NULL)
              {
-+                lsp_diag_marker("I_RL_OK");
-+                lsp_diag_marker("I_WRAP_B");
++                diag::marker("I_RL_OK");
++                diag::marker("I_WRAP_B");
                  ladspa::Wrapper *wrapper  = new ladspa::Wrapper(plugin, loader);
                  if (wrapper != NULL)
                  {
-+                    lsp_diag_marker("I_WRAP_OK");
-+                    lsp_diag_marker("I_WINIT_B");
++                    diag::marker("I_WRAP_OK");
++                    diag::marker("I_WINIT_B");
                      status_t res = wrapper->init(sample_rate);
-+                    lsp_diag_marker_rc("I_WINIT_RC", int(res));
++                    diag::marker_rc("I_WINIT_RC", int(res));
                      if (res == STATUS_OK)
 +                    {
-+                        lsp_diag_marker("I_WINIT_OK");
-+                        lsp_diag_marker("I_OK");
++                        diag::marker("I_WINIT_OK");
++                        diag::marker("I_OK");
                          return reinterpret_cast<LADSPA_Handle>(wrapper);
 +                    }
                      lsp_error("Error initializing plugin wrapper, code: %d", int(res));
-+                    // DIAGNOSTIC ONLY: intentionally bypass destructive cleanup
-+                    // to expose the primary initialization failure. The previous
-+                    // SIGABRT fires during cleanup (delete wrapper) of a
-+                    // partially-initialized object. This leaks memory and must
-+                    // not be enabled in production.
++                    // DIAGNOSTIC ONLY: bypass destructive cleanup to expose the
++                    // primary initialization failure. The SIGABRT fires during
++                    // cleanup (delete wrapper) of a partially-initialized object.
++                    // This leaks memory — must not be enabled in production.
 +                    #ifdef LSP_ANDROID_INSTANTIATE_DIAGNOSTIC
-+                    lsp_diag_marker("I_CL_WRAP_BYPASS");
++                    diag::marker_rc("I_CL_WRAP_BYPASS", int(res));
 +                    return NULL;
 +                    #else
-+                    lsp_diag_marker("I_CL_WRAP");
++                    diag::marker("I_CL_WRAP");
                      delete wrapper;
 +                    #endif
                  }
                  else
 +                {
                      lsp_error("Error allocating plugin wrapper");
-+                    lsp_diag_marker("I_WRAP_NULL");
++                    diag::marker("I_WRAP_NULL");
 +                }
 +                #ifdef LSP_ANDROID_INSTANTIATE_DIAGNOSTIC
-+                lsp_diag_marker("I_CL_RL_BYPASS");
++                diag::marker("I_CL_RL_BYPASS");
 +                return NULL;
 +                #else
-+                lsp_diag_marker("I_CL_RL");
++                diag::marker("I_CL_RL");
                  delete loader;
 +                #endif
              }
              else
 +            {
                  lsp_error("No resource loader available");
-+                lsp_diag_marker("I_RL_NULL");
++                diag::marker("I_RL_NULL");
 +            }
 +            #ifdef LSP_ANDROID_INSTANTIATE_DIAGNOSTIC
-+            lsp_diag_marker("I_CL_PLUGIN_BYPASS");
++            diag::marker("I_CL_PLUGIN_BYPASS");
 +            return NULL;
 +            #else
-+            lsp_diag_marker("I_CL_PLUGIN");
++            diag::marker("I_CL_PLUGIN");
              delete plugin;
 +            #endif
  

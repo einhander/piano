@@ -680,13 +680,14 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Read filesDir/lsp_prepare_marker.log — the phase marker written by
-     * LadspaEffect::prepare() before each LSP call, AND by the LSP
-     * instantiate() function itself with finer-grained sub-step markers
-     * (I_ENTER, I_DSP_B, I_FACTORY_B, I_PLUGIN_B, I_RL_B, I_WRAP_B,
-     * I_WINIT_B, I_WINIT_RC_<n>, etc.). The last marker written before a
-     * crash identifies the failing sub-step. Does NOT delete the file on
-     * read if it indicates a crash (the LSP sub-step markers are the key
-     * diagnostic); cleared on next successful prepare.
+     * LadspaEffect::prepare() before each LSP call, by the LSP instantiate()
+     * function (I_* markers), AND by Wrapper::init() with finer-grained
+     * sub-step markers (WI_ENTER, WI_MANIFEST_B/OK/NULL, WI_MLOAD_B/RC,
+     * WI_PORTS_B/OK, WI_REORDER_*, WI_PINIT_B/OK, WI_OK). The last marker
+     * written before a crash identifies the failing sub-step. When
+     * LSP_ANDROID_INSTANTIATE_DIAGNOSTIC is defined, the bypass marker
+     * I_CL_WRAP_BYPASS includes the wrapper->init() return code (rc=<n>).
+     * Cleared on next successful prepare.
      */
     private fun readLspPrepareMarker(): String? {
         return try {
