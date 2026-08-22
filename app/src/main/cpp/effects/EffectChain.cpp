@@ -83,42 +83,64 @@ int EffectChain::loadBundle(const char* soPath, double sampleRate, int maxFrames
     }
 
     int available = 0;
+    // Track per-slot diagnosis: was the LADSPA Label found in the registry?
+    // available==0 can mean EITHER "label not found" (descriptor == nullptr,
+    // the original hypothesis) OR "label found but prepare()/instantiate()
+    // failed" (mDescriptor non-null but the LSP instantiate returned nullptr
+    // — the wrapper->init() cleanup-bypass path). These have completely
+    // different fixes, so we must distinguish them in the error report.
+    int labelsFound = 0;
     for (int i = 0; i < lsp::kMasterEffectCount; ++i) {
+        const lsp::LadspaBinding* b = lsp::bindingForSlot(i);
+        const LADSPA_Descriptor* d = (b) ? ladspa::LadspaRegistry::instance().findByLabel(b->label) : nullptr;
         if (mEffects[i] && mEffects[i]->isAvailable()) {
             ++available;
+        } else if (d != nullptr) {
+            ++labelsFound;
+            LSP_LOGE("loadBundle: slot %d label FOUND (\"%s\") but effect unavailable — "
+                     "prepare()/instantiate() failed (see lsp_prepare_marker.log on next launch)",
+                     i, b ? b->label : "?");
         } else {
-            const lsp::LadspaBinding* b = lsp::bindingForSlot(i);
-            LSP_LOGE("loadBundle: slot %d unavailable (label lookup failed for \"%s\")",
+            LSP_LOGE("loadBundle: slot %d label NOT FOUND (\"%s\")",
                      i, b ? b->label : "?");
         }
     }
     if (available == 0) {
-        // The bundle opened (dlopen + ladspa_descriptor resolved) but none of
-        // the 3 expected LADSPA Labels were found. The two root causes are:
-        //   (a) the descriptor table is empty (mCount==0) — the aarch64 cross
-        //       build dead-stripped the per-plugin factory registrations so
-        //       plug::Factory::root() enumerates nothing;
-        //   (b) the table is populated but the Labels don't match the URIs in
-        //       kBindings[] (a build/config drift).
-        // Append the registry's dump (count + first N labels) and the expected
-        // labels to the error so it surfaces in the in-app log — logcat is not
-        // reachable on the dev machine, so this string is the only diagnostic
-        // channel that reaches the user.
         const char* dump = ladspa::LadspaRegistry::instance().descriptorDump();
-        mLoadError = "bundle loaded but no effect descriptors matched "
-                     "(label lookup failed for all 3 slots)";
+        mLoadError = "bundle loaded but 0/3 effects available";
         mLoadError += "\nRegistry dump: ";
         mLoadError += (dump && *dump) ? dump : "(none)";
-        mLoadError += "\nExpected labels:";
+        mLoadError += "\nPer-slot diagnosis:";
         for (int i = 0; i < lsp::kMasterEffectCount; ++i) {
             const lsp::LadspaBinding* b = lsp::bindingForSlot(i);
+            const LADSPA_Descriptor* d = (b) ? ladspa::LadspaRegistry::instance().findByLabel(b->label) : nullptr;
             mLoadError += "\n  slot ";
             mLoadError += std::to_string(i);
             mLoadError += " (";
             mLoadError += b ? b->stableId : "?";
-            mLoadError += ") -> ";
+            mLoadError += ") label=\"";
             mLoadError += b ? b->label : "?";
+            mLoadError += "\" -> ";
+            if (d != nullptr) {
+                mLoadError += "FOUND (uid=";
+                mLoadError += std::to_string(d->UniqueID);
+                mLoadError += ") but prepare()/instantiate() FAILED "
+                              "(LSP wrapper->init() returned non-OK; the "
+                              "sub-step + rc are in lsp_prepare_marker.log, "
+                              "surfaced on the NEXT launch)";
+            } else {
+                mLoadError += "NOT FOUND in the descriptor table";
+            }
         }
+        mLoadError += "\nSummary: ";
+        mLoadError += std::to_string(labelsFound);
+        mLoadError += "/3 labels found, 0 prepared. ";
+        mLoadError += (labelsFound == lsp::kMasterEffectCount)
+            ? "Root cause is instantiate(), not label lookup — the LSP "
+              "wrapper fails to init on-device (likely a missing "
+              "builtin://manifest or resource the BuiltinLoader can't "
+              "resolve in the APK native-lib dir)."
+            : "Root cause is label lookup (some expected Label is absent).";
         LSP_LOGE("loadBundle: %s", mLoadError.c_str());
     } else {
         LSP_LOGI("loadBundle: %d/%d effects available", available, lsp::kMasterEffectCount);

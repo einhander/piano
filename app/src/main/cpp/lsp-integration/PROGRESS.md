@@ -146,60 +146,79 @@ Worker-prepared inactive chain + atomic swap.
    ```
    i.e. `System.loadLibrary` succeeds and `LadspaRegistry::open()` reaches the
    `dlsym(ladspa_descriptor)` + descriptor-enumeration stage without aborting.
-   **The top blocker is now the label-lookup failure (see blocker 1b).**
-1b. **Label lookup fails for all 3 effect slots (current top blocker).** The
-   bundle loads, but `EffectChain::loadBundle()` returns `available==0`:
+   **The top blocker is now the on-device instantiate failure (see blocker 1b).**
+1b. **Effects unavailable on device (current top blocker).** The bundle loads
+   and the descriptor table is **fully populated**, but `EffectChain::loadBundle()`
+   still returns `available==0`. The first diagnostic build's dump (now
+   surfaced in the App Log, see below) shows:
    ```
-   [ERROR] MainActivity: LSP master effects unavailable (chain bypassed).
-   Reason: bundle loaded but no effect descriptors matched (label lookup
-   failed for all 3 slots)
+   Registry dump: descriptors=168
+     [22] Label="http://lsp-plug.in/plugins/ladspa/compressor_stereo" UniqueID=5002091
+     ... (128 more)
    ```
-   `LspEffectFactory::create()` calls `LadspaRegistry::findByLabel()` for each
-   slot's LADSPA Label (a full URI, e.g.
-   `http://lsp-plug.in/plugins/ladspa/compressor_stereo`); all three return
-   `nullptr`, so every `LadspaEffect` is constructed with `mDescriptor=nullptr`
-   and `isAvailable()==false`.
+   i.e. **168 descriptors are present** and `compressor_stereo` carries the
+   exact URI the adapter looks up. So the earlier "empty table / dead-stripping"
+   hypothesis is **DISPROVEN** — `findByLabel()` should match. The real cause is
+   therefore one level deeper: the descriptor **is found** but the effect stays
+   `!isAvailable()`, i.e. `LadspaEffect::prepare()` returns false. That early
+   `return false` past the `mDescriptor` guard means
+   `mDescriptor->instantiate()` returned `nullptr` — the LSP `wrapper->init()`
+   failed on-device (the cleanup-bypass path returns nullptr instead of aborting,
+   exactly the `I_CL_WRAP_BYPASS rc=<n>` behaviour the prior diagnostic builds
+   instrumented).
 
-   **Confirmed correct (not the cause):** the `kBindings[]` URIs match
-   upstream exactly. `LSP_LADSPA_URI(id)` in
-   `lsp-plugins-shared/include/lsp-plug.in/shared/meta/developers.h` expands to
-   `LSP_BASE_URI "plugins/ladspa/" id` = `http://lsp-plug.in/plugins/ladspa/<id>`,
-   and the per-plugin meta (e.g. `lsp-plugins-compressor/src/main/meta/compressor.cpp`)
-   sets `uids.ladspa_lbl = LSP_LADSPA_URI("compressor_stereo")`. The LADSPA
-   wrapper (`lsp-plugin-fw/src/wrap/ladspa.cpp`, `make_descriptor()`) assigns
-   `d->Label = m->uids.ladspa_lbl`. So a present descriptor's Label **is** the
-   full URI the adapter looks up — the host x86-64 `.so` enumerates 168
-   descriptors and all three match.
+   **Confirmed correct (not the cause):**
+   - `kBindings[]` URIs match upstream exactly. `LSP_LADSPA_URI(id)` in
+     `lsp-plugins-shared/include/lsp-plug.in/shared/meta/developers.h` expands to
+     `LSP_BASE_URI "plugins/ladspa/" id` = `http://lsp-plug.in/plugins/ladspa/<id>`;
+     the per-plugin meta sets `uids.ladspa_lbl = LSP_LADSPA_URI(...)`, and
+     `make_descriptor()` assigns `d->Label = m->uids.ladspa_lbl`. The on-device
+     dump confirms `compressor_stereo`'s Label is that exact URI.
+   - The descriptor table is NOT empty (168 entries, same as the host x86-64
+     `.so`). Dead-stripping of factory registrations is ruled out.
 
-   **Leading hypothesis:** the aarch64 cross-compile produces an **empty
-   descriptor table** (`mCount==0`), i.e. `ladspa_descriptor(0)` returns
-   `nullptr` on device. Descriptors are generated lazily on first call by
-   enumerating `plug::Factory::root()` (`wrap/ladspa.cpp`); the factories are
-   registered by per-module static initializers. With `EXPORT_SYMBOLS=0` and
-   the NDK link using `--gc-sections`, the unreferenced factory-registration
-   translation units can be dead-stripped, leaving `Factory::root()` empty.
-   The host build (different link flags, no gc-sections) keeps them → 168.
+   **Refined leading hypothesis:** `wrapper->init()` fails on-device. The prior
+   sub-step-marker diag (`eda7b9d`) instrumented `Wrapper::init()` with
+   `WI_ENTER` → `WI_MANIFEST_B` → `WI_MANIFEST_OK`/`WI_MANIFEST_NULL` →
+   `WI_MLOAD_B` → `WI_MLOAD_RC=<n>` → `WI_PORTS_*` → `WI_REORDER_*` →
+   `WI_PINIT_*` → `WI_OK`, and `I_CL_WRAP_BYPASS rc=<n>` carries the numeric
+   return code. The most likely failing sub-step is `WI_MANIFEST_NULL` — the
+   `builtin://manifest.json` resource is not available on-device (the
+   BuiltinLoader has no embedded data, or the DirLoader can't find the file
+   inside the APK's native-lib dir where `extractNativeLibs=false` keeps the
+   `.so`). This is consistent with the host x86-64 `.so` working (the host
+   loader resolves the manifest from the build tree / cwd).
 
-   **Diagnosis gap fixed this session:** the descriptor dump
-   (`descriptor[i] Label="..." UniqueID=...`) was written via `LSP_LOGI` →
-   **logcat** (tag `PianoLSP`), which is unreachable on the dev machine (no
-   adb, per AGENTS.md). So the prior diagnostic build's dump never reached the
-   user. Fixed: `LadspaRegistry` now also builds a compact `descriptorDump()`
-   string (count + first 40 labels/UniqueIDs), and `EffectChain::loadBundle()`
-   appends it — plus the expected labels per slot — to `mLoadError`, which
-   flows through `NativeEngine::getMasterEffectLoadError()` → JNI
-   `nativeGetMasterEffectLoadError` → `MainActivity` App Log. So the next
-   on-device launch will show, in the **in-app log**, whether `descriptors=0`
-   (confirms the dead-strip hypothesis) or `descriptors=168` with non-matching
-   labels (a config drift). One of:
-     - `descriptors=0` → root cause is factory dead-stripping; fix is a build/
-       link change (force-keep the registration objects: a `-u` linker flag on
-       each module's factory symbol, or a single `KEEP()` in a linker script,
-       or compile the registration TUs with `-ffunction-sections` off / reference
-       them from `ladspa.cpp`). Rebuild the `.so`, repackage, retest.
-     - `descriptors=N>0` but no Label matches → dump the actual labels and
-       reconcile `kBindings[]` (config drift between 1.2.34 meta and the
-       pinned submodule versions).
+   **Diagnosis gap fixed this session (two passes):**
+   - Pass 1 — the descriptor dump was going to logcat (tag `PianoLSP`),
+     unreachable on the dev machine. Routed it into the in-app log via
+     `LadspaRegistry::descriptorDump()` + `EffectChain::loadBundle()` appending
+     it to `mLoadError` (which flows to App Log through
+     `nativeGetMasterEffectLoadError`). This is what produced the
+     `descriptors=168` line above.
+   - Pass 2 — the `available==0` error conflated "label not found" with
+     "instantiate failed". Fixed: `loadBundle()` now re-queries
+     `findByLabel()` per slot and reports, per slot, either
+     `FOUND (uid=…) but prepare()/instantiate() FAILED` or
+     `NOT FOUND in the descriptor table`, plus a `Summary: N/3 labels found`
+     line that names the actual root cause. The LSP instantiate sub-step +
+     `wrapper->init()` return code are written to `lsp_prepare_marker.log`
+     (by `LadspaEffect::prepare()` + the LSP-side marker), which
+     `MainActivity` surfaces in the App Log on the **next** launch.
+
+   Next actions:
+   1. Rebuild + install (C++ changes in `libnative-lib.so`; LSP `.so`
+      unchanged).
+   2. Launch, **Copy** the App Log → report the new `Per-slot diagnosis:` block
+      (confirms FOUND-vs-NOT-FOUND per slot) AND, on the launch **after that**,
+      the `Previous launch LSP prepare marker:` line (the `WI_*` / `I_CL_WRAP_BYPASS
+      rc=<n>` value — pinpoints the failing `wrapper->init()` sub-step).
+   3. Most probable outcome: all 3 labels FOUND but instantiate FAILED, with the
+      marker at `WI_MANIFEST_NULL` → root cause is the missing
+      `builtin://manifest.json`. Fix candidates: embed the manifest as a static
+      resource in the `.so` (LSP build option), or ship the manifest file
+      alongside the `.so` and point the DirLoader at it, or patch
+      `wrapper->init()` to tolerate a missing manifest (default empty package).
 2. **qemu on-device-style run**: the Android `.so` needs `/system/bin/linker64`
    (Bionic dynamic linker), which the NDK does not ship. Options: extract
    linker64 from an Android system image, or run the descriptor dump on a real
@@ -255,50 +274,50 @@ Worker-prepared inactive chain + atomic swap.
   `BUILD SUCCESSFUL`; `./gradlew :app:testDebugUnitTest` тЖТ pass. No CMake /
   JNI / Kotlin changes in this session.
 
-### Session update — on-device load resolved; label-lookup diagnosis surfaced
+### Session update — on-device load resolved; descriptors present, instantiate failing
 
-Triggered by the user's on-device log, which (for the first time) shows the
-bundle loading without crashing:
+The user's on-device log (this session) shows the bundle loading without
+crashing AND the descriptor dump now surfacing in the App Log:
 ```
 [INFO] NativeEngineBridge: loadLibrary("lsp-plugins-ladspa") OK
-[INFO] MainActivity: Loading LSP bundle: .../lib/arm64/liblsp-plugins-ladspa.so
 [ERROR] MainActivity: LSP master effects unavailable (chain bypassed).
         Reason: bundle loaded but no effect descriptors matched
         (label lookup failed for all 3 slots)
+Registry dump: descriptors=168
+  [22] Label="http://lsp-plug.in/plugins/ladspa/compressor_stereo" UniqueID=5002091
+  ... (128 more)
 ```
 
 Findings:
-- **The on-device crash blocker is RESOLVED.** `System.loadLibrary` succeeds
-  and `LadspaRegistry::open()` reaches descriptor enumeration. The
-  cleanup-bypass + sub-step-marker diagnostic builds did their job; no further
-  crash work is needed.
-- **New top blocker: label lookup fails for all 3 slots.** Confirmed the
-  `kBindings[]` URIs are correct by tracing upstream:
-  `LSP_LADSPA_URI(id)` (`lsp-plugins-shared/.../developers.h`) →
-  `uids.ladspa_lbl` (per-plugin `meta/*.cpp`) → `d->Label`
-  (`lsp-plugin-fw/src/wrap/ladspa.cpp`, `make_descriptor()`). The host x86-64
-  `.so` enumerates 168 descriptors and all three match, so a present
-  descriptor's Label is exactly the URI the adapter looks up.
-- **Diagnosis gap found & fixed.** The prior descriptor dump (`eda7b9d`)
-  wrote via `LSP_LOGI` → logcat (tag `PianoLSP`), unreachable on the dev
-  machine (no adb). So the dump never reached the user — the `Reason:` string
-  was the only on-device signal, and it cannot distinguish "empty descriptor
-  table" from "labels don't match". Fixed this session:
-  - `LadspaRegistry`: new `mDescriptorDump` (count + first 40 labels/UniqueIDs)
-    built in `open()`, exposed via `descriptorDump()`; cleared on re-open.
-  - `EffectChain::loadBundle()`: when `available==0`, appends the registry
-    dump + the per-slot expected labels to `mLoadError`. This already flows to
-    the App Log via `nativeGetMasterEffectLoadError`, so no new JNI/Kotlin
-    plumbing was needed.
-  - DSP/audio path untouched (diagnostic-only); host `g++` compile of all
-    touched TUs + the `effect_chain_test` binary succeeds.
+- **On-device crash blocker — RESOLVED.** `System.loadLibrary` succeeds and
+  `LadspaRegistry::open()` enumerates descriptors without aborting.
+- **Dead-stripping hypothesis — DISPROVEN.** `descriptors=168` (same as the
+  host x86-64 `.so`); the table is fully populated and `compressor_stereo`
+  carries the exact URI the adapter looks up. So `findByLabel()` matches; the
+  problem is NOT label lookup.
+- **Refined root cause:** the descriptor is found, but
+  `LadspaEffect::prepare()` returns false because
+  `mDescriptor->instantiate()` returns `nullptr` on-device — i.e. the LSP
+  `wrapper->init()` fails (the cleanup-bypass returns nullptr instead of
+  aborting). The original `available==0` message ("label lookup failed") was
+  **misleading**: it conflated "label not found" with "instantiate failed".
 
-Leading hypothesis (to confirm with the next on-device dump): the aarch64
-cross-compile dead-strips the per-module factory registrations, so
-`plug::Factory::root()` is empty and `ladspa_descriptor()` generates 0
-descriptors (`descriptors=0` in the new dump). Fix would be at the build/link
-layer (force-keep the registration objects), not in the app code.
+Diagnostic fix this session (Pass 2):
+- `EffectChain::loadBundle()`: re-queries `findByLabel()` per slot in the
+  `available==0` branch and reports, per slot, either
+  `FOUND (uid=…) but prepare()/instantiate() FAILED` or
+  `NOT FOUND in the descriptor table`, plus a `Summary: N/3 labels found`
+  line that names the real root cause. The LSP-side instantiate sub-step +
+  `wrapper->init()` return code are already written to
+  `lsp_prepare_marker.log` (by the prior `eda7b9d` diag + the
+  `LSP_ANDROID_INSTANTIATE_DIAGNOSTIC` build flag), which `MainActivity`
+  surfaces on the **next** launch.
+- DSP/audio path untouched (diagnostic-only); host `g++` compiles clean
+  (`-Wall -Wextra`, exit 0).
 
+Most probable next-launch outcome: all 3 labels FOUND, instantiate FAILED,
+prepare marker at `WI_MANIFEST_NULL` → root cause is the missing
+`builtin://manifest.json` resource on-device.
 ---
 
 ## On-device load тАФ diagnosis (current session)
@@ -522,38 +541,44 @@ Notes on the test design:
   reaches the descriptor-enumeration stage without aborting. No further
   crash-diagnosis work needed on this front.
 
-- **Label-lookup diagnosis (top priority).** The bundle loads but
-  `EffectChain::loadBundle()` reports `available==0` (label lookup failed for
-  all 3 slots). The prior diagnostic build (`eda7b9d`) added a
-  `descriptor[i] Label="..."` dump, but it routes through `LSP_LOGI` → logcat
-  (tag `PianoLSP`), which is unreachable on the dev machine, so it never
-  reached the user. **This session fixed that gap:** `LadspaRegistry` now also
-  builds a `descriptorDump()` string (count + first 40 labels/UniqueIDs), and
-  `EffectChain::loadBundle()` appends it + the per-slot expected labels to
-  `mLoadError`, which already flows to the App Log via
-  `nativeGetMasterEffectLoadError`. So the **next** on-device launch's App Log
-  `Reason:` block will contain, for the first time, what the bundle actually
-  exports on the target arch.
+- **On-device instantiate failure (top priority).** The descriptor dump
+  (`descriptors=168`) DISPROVED the dead-stripping hypothesis — the table is
+  fully populated and `compressor_stereo` carries the exact URI the adapter
+  looks up, so `findByLabel()` matches. The real failure is one level deeper:
+  the descriptor is found but `LadspaEffect::prepare()` returns false because
+  `mDescriptor->instantiate()` returns `nullptr` on-device (the LSP
+  `wrapper->init()` fails; the cleanup-bypass returns nullptr instead of
+  aborting). The prior `available==0` message ("label lookup failed") was
+  misleading — it conflated "label not found" with "instantiate failed".
+
+  **This session fixed the diagnosis:** `EffectChain::loadBundle()` now
+  re-queries `findByLabel()` per slot and reports `FOUND (uid=…) but
+  prepare()/instantiate() FAILED` vs `NOT FOUND`, plus a
+  `Summary: N/3 labels found` line naming the real root cause. The LSP-side
+  instantiate sub-step + `wrapper->init()` return code are already written to
+  `lsp_prepare_marker.log` (prior `eda7b9d` diag +
+  `LSP_ANDROID_INSTANTIATE_DIAGNOSTIC`), surfaced by `MainActivity` on the
+  **next** launch.
 
   Next actions:
-  1. Rebuild the APK (the C++ changes are in `libnative-lib.so`; the LSP
-     `.so` itself is unchanged) and install.
-  2. Launch, then **Copy** the App Log. Report the `Reason:` block under
-     `LSP master effects unavailable (chain bypassed).` — specifically the
-     `Registry dump: descriptors=<N>` line and the first few `Label="..."`
-     entries.
-  3. Interpret:
-     - `descriptors=0` → confirms the leading hypothesis: the aarch64
-       cross-compile dead-strips the per-module factory registrations, so
-       `plug::Factory::root()` is empty and `ladspa_descriptor()` generates
-       nothing. Fix at the **build/link** layer: force-keep the registration
-       objects (e.g. a `-Wl,-u,<factory-symbol>` per module, or a linker
-       script `KEEP()`, or reference them from `wrap/ladspa.cpp`). Rebuild the
-       `.so` via `build-lsp-ladspa-android.sh`, repackage, retest.
-     - `descriptors=N>0` but no Label matches → reconcile `kBindings[]`
-       against the dumped labels (config drift between the 1.2.34 meta and
-       the pinned submodule versions).
-- On-device runtime validation (after the label lookup is fixed): open
+  1. Rebuild the APK (C++ changes in `libnative-lib.so`; LSP `.so` unchanged)
+     and install.
+  2. Launch, **Copy** the App Log. Report the new `Per-slot diagnosis:` block
+     (expected: all 3 FOUND but prepare FAILED → confirms instantiate is the
+     culprit).
+  3. Launch **again** and report the `Previous launch LSP prepare marker:`
+     line — the `WI_*` / `I_CL_WRAP_BYPASS rc=<n>` value pinpoints the exact
+     failing `wrapper->init()` sub-step.
+  4. Most probable: marker at `WI_MANIFEST_NULL` → the
+     `builtin://manifest.json` resource is unavailable on-device (the
+     BuiltinLoader has no embedded data, or the DirLoader can't find the file
+     in the APK native-lib dir under `extractNativeLibs=false`). Fix
+     candidates: embed the manifest as a static resource in the `.so` (LSP
+     build option), ship the manifest file alongside the `.so` and point the
+     DirLoader at it, or patch `wrapper->init()` to tolerate a missing
+     manifest (default empty package). This is a **build/patch** fix in the
+     LSP layer, not an app-code change.
+- On-device runtime validation (after the instantiate failure is fixed): open
   "Master Effects", confirm the 3 cards render with correct ranges and that
   toggling/sliding changes the signal.
 - Project persistence (Milestone 8): bump project format 1 → 2; migrate the
