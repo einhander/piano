@@ -54,9 +54,9 @@ Goal: `ladspa_descriptor()` тЖТ instantiate тЖТ connect тЖТ run тЖТ 
 | Instantiate compressor/limiter/EQ | тЬЕ | all three instantiate at 48 kHz without error |
 | connect + run on 1 kHz sine | тЬЕ | all three run; output finite (no NaN/Inf) |
 | Numerical stability (silence) | тЬЕ | finite, no blow-up |
-| Measurable PCM change | тЬЕ | limiter shows change (ratio 0.9991); compressor/EQ at unity = passthrough (ratio 1.0000, expected). Verified by running `ladspa_offline_test.cpp` against the host x86-64 `.so`. |
+| Measurable PCM change | тЬЕ | limiter shows change (ratio 0.9823); compressor **now reduces gain** (ratio 0.0853 with threshold 0.05 / ratio 10:1). The earlier "compressor at unity = passthrough (ratio 1.0000)" was NOT expected behavior — it was a port-map bug (see the “Compressor passthrough root cause” note below). Verified by `compressor_test.cpp` + `effect_chain_test.cpp` against the host x86-64 `.so`. |
 | Run under qemu-aarch64 on Android .so | тмЬ | qemu-user-static installed; blocked on missing `/system/bin/linker64` (not in NDK). Host x86-64 `.so` (same patched sources) used instead as feasibility proxy. On-device dump remains TODO. |
-| Port map (per effect) | ЁЯЯб | compressor ports enumerated (Bypass=8, Input gain=9, Output gain=10, Attack threshold=29, Ratio=34, Makeup=38). Limiter/EQ port dump pending. |
+| Port map (per effect) | ✅ | compressor port map **complete and verified** (15 control ports incl. the load-bearing Dry/Wet=41 and Sidechain preamp=23). See `compressor_test.cpp` port dump. Limiter/EQ port dump pending. |
 
 ### Selected descriptors (LADSPA UniqueID, stable)
 
@@ -277,13 +277,7 @@ Worker-prepared inactive chain + atomic swap.
    patched sources is used as the feasibility proxy (same DSP code paths).
    The host `.so` is produced by `make config FEATURES='ladspa'` (no
    `crosscompile`) + `make`; the offline test then runs natively via `dlopen`.
-3. **Compressor gain-reduction measurement**: at unity input/output gain with
-   threshold 0.01 amp and ratio 10, the stereo compressor passes the signal
-   through unchanged (ratio 1.0000). Likely a control-port mapping issue
-   (e.g. "Compression mode" / sidechain source left at 0). To resolve in a
-   later milestone by dumping all control port names + defaults. This does not
-   block Milestones 1–2 (instantiation + finite run + limiter PCM change are
-   proven).
+3. **Compressor gain-reduction measurement — RESOLVED.** At unity input/output gain with threshold 0.01 amp and ratio 10, the stereo compressor passed the signal through unchanged (ratio 1.0000). Root cause: two load-bearing control ports (Dry/Wet balance=41, Sidechain preamp=23) were unmapped and stayed at 0, zeroing the wet mix and the detector. Fixed by mapping them (+ sc_mode=18, sc_reactivity=22) with LADSPA-matching defaults; ratio is now 0.0853 under the same drive. See the "Compressor passthrough root cause" session note for the full analysis.
 4. **Production build integration (Plan Phase 26)** — RESOLVED. The LSP bundle
    is now built from the pinned submodule in CI: `.github/workflows/build-apk.yml`
    runs `build-lsp-ladspa-android.sh` and copies the `.so` into
@@ -299,6 +293,33 @@ Worker-prepared inactive chain + atomic swap.
    started here.
 
 ## Session notes (this update)
+
+- **Compressor passthrough root cause found & fixed.** The long-standing
+  note "compressor at unity = passthrough (ratio 1.0000, expected)" was
+  *not* expected behavior — it was a port-map bug. Two load-bearing
+  control ports were unmapped, so they stayed at 0 (the storage is zeroed
+  in LadspaEffect::prepare() and only mapped ports get their default):
+    1. **Dry/Wet balance (port 41)** — LADSPA default 100. With it at 0,
+       the LSP mix stage (compressor.cpp lines 692-697) computes
+       drywet = pDryWet*0.01 = 0, so fWetGain = wet_gain * 0 = 0 and
+       fDryGain = 1 - drywet = 1. dsp::mix2(out, in, 0, 1) then emits a
+       **bit-identical copy** of the input — ratio exactly 1.0000,
+       regardless of the gain-reduction envelope. This was the dominant
+       cause.
+    2. **Sidechain preamp (port 23)** — LADSPA default 1.0. The detector
+       multiplies the sidechain signal by this gain (Sidechain.cpp line 566,
+       compressor.cpp line 636). At 0 the detector sees silence, so no
+       gain-reduction envelope is ever produced.
+  Fix: added 4 compressor ports to LspEffectIds — kParamCompDryWet
+  (port 41, def 100), kParamCompScPreamp (port 23, def 1.0),
+  kParamCompScMode (port 18, def 1 = RMS), kParamCompScReactMs (port 22,
+  def 0.0629) — and corrected four wrong defaults to match the LADSPA
+  hints (threshold 1.0->0.178, ratio 1.0->3.16, knee 0->0.50, release
+  300->100). Verified with the new tests/compressor_test.cpp: amp 0.8 /
+  threshold 0.05 / ratio 10:1 now yields **ratio 0.0853** (was 1.0000);
+  effect_chain_test.cpp still passes (limiter ratio 0.9823 unchanged).
+  The Kotlin UI auto-discovers the new params from the native descriptor
+  table, so no UI changes needed.
 
 - **ON-DEVICE EFFECTS WORK (commit 5557233).** After rebuilding the LSP
   .so with the real iconv shim, the user confirmed the master effects

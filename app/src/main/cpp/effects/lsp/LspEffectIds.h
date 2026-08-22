@@ -77,6 +77,10 @@ enum ParamId : uint32_t {
     kParamCompKnee        = 15,
     kParamCompMakeup      = 16,
     kParamCompWet         = 17,
+    kParamCompDryWet      = 18,   // Dry/Wet balance (%) — port 41; MUST default to 100
+    kParamCompScPreamp    = 19,   // Sidechain preamp (gain) — port 23; MUST default to 1
+    kParamCompScMode      = 110,  // Sidechain mode (0=Peak,1=RMS,2=LPF,3=Uniform) — port 18
+    kParamCompScReactMs   = 111,  // Sidechain reactivity (ms) — port 22
 
     // Limiter.
     kParamLimThreshold    = 20,
