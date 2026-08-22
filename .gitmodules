@@ -4,3 +4,6 @@
 [submodule "app/src/main/cpp/third_party/oboe"]
 	path = app/src/main/cpp/third_party/oboe
 	url = https://github.com/google/oboe.git
+[submodule "app/src/main/cpp/third_party/lsp"]
+	path = app/src/main/cpp/third_party/lsp
+	url = https://github.com/lsp-plugins/lsp-plugins.git

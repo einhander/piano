@@ -6,185 +6,25 @@ object NativeEngineBridge {
     }
 
     /**
-     * Pre-load the LSP LADSPA bundle so the Android linker resolves its NEEDED
-     * deps (libc++_shared.so, already mapped via native-lib) and registers the
-     * soname in the app namespace. A later dlopen() by LadspaRegistry::open()
-     * then finds it. Must run on a worker thread (it can throw on failure);
-     * call from MainActivity during engine init so the result is logged.
+     * Pre-load the LSP LADSPA bundle via System.loadLibrary so the Android
+     * linker resolves its NEEDED deps and registers the soname in the app
+     * namespace; the native LadspaRegistry::open() then resolves it via its
+     * soname fallback. The bundle is built from the pinned LSP submodule by CI
+     * and packaged as a normal jniLib (same flow as libnative-lib, which loads
+     * the same way). Must run on a worker thread (it can throw on failure).
      *
-     * Returns true on success; on failure logs the exact reason to AppLogger
-     * and logcat and returns false.
+     * Returns null on success (path not needed — native dlopen uses soname),
+     * or null on failure after logging the reason. Always logs to AppLogger.
      */
     fun preloadLspBundle(context: android.content.Context): String? {
-        val libDir = context.applicationInfo.nativeLibraryDir
-        // 1) Load by library name (preferred; uses the linker search path).
         try {
             System.loadLibrary("lsp-plugins-ladspa")
             AppLogger.info("NativeEngineBridge", "loadLibrary(\"lsp-plugins-ladspa\") OK")
-            // Loaded by soname; the native dlopen-by-soname fallback resolves it.
-            return null
         } catch (e: Throwable) {
             AppLogger.error(
                 "NativeEngineBridge",
                 "loadLibrary(\"lsp-plugins-ladspa\") failed: ${e.javaClass.simpleName}: ${e.message}"
             )
-        }
-        // 2) Fallback: load by absolute path from nativeLibraryDir. Captures a
-        //    different (often more specific) error than the name-based load.
-        val soPath = "$libDir/liblsp-plugins-ladspa.so"
-        val exists = java.io.File(soPath).exists()
-        AppLogger.info("NativeEngineBridge", "fallback System.load(\"$soPath\") exists=$exists")
-        if (exists) {
-            try {
-                System.load(soPath)
-                AppLogger.info("NativeEngineBridge", "System.load(\"$soPath\") OK")
-                return null
-            } catch (e: Throwable) {
-                AppLogger.error(
-                    "NativeEngineBridge",
-                    "System.load(\"$soPath\") failed: ${e.javaClass.simpleName}: ${e.message}"
-                )
-            }
-        } else {
-            AppLogger.warn(
-                "NativeEngineBridge",
-                "liblsp-plugins-ladspa.so NOT on disk at $soPath " +
-                    "(extractNativeLibs=false on this device)"
-            )
-        }
-        // 3) Definitive fallback: extract the .so straight out of the installed
-        //    APK into the executable codeCacheDir and System.load it there.
-        //    On Android 11+/sdk 30+ (notably sdk 36) the platform does not
-        //    extract prebuilt jniLibs to nativeLibraryDir nor register them in
-        //    the loadable namespace, so neither System.loadLibrary nor dlopen
-        //    by path/soname can find them. Reading the entry from our own APK
-        //    and writing it to a location we control bypasses all of that.
-        //    Returns the absolute path the native dlopen should use.
-        return extractAndLoadFromApk(context)
-    }
-
-    /**
-     * Copy lib/<abi>/liblsp-plugins-ladspa.so from the installed APK (sourceDir)
-     * into getCodeCacheDir() and System.load it. Picks the first ABI whose entry
-     * exists in the APK (the prebuilt is arm64-v8a only in v1).
-     */
-    private fun extractAndLoadFromApk(context: android.content.Context): String? {
-        val apkPath = context.applicationInfo.sourceDir
-        val outDir = context.codeCacheDir
-        val soname = "liblsp-plugins-ladspa.so"
-        val outFile = java.io.File(outDir, soname)
-        AppLogger.info("NativeEngineBridge", "extracting $soname from APK ($apkPath) → $outFile")
-        try {
-            val zip = java.util.zip.ZipFile(apkPath)
-            zip.use { z ->
-                // Enumerate every entry whose path ends with the soname (case-
-                // insensitive). This survives split-APK repackaging and ABI-dir
-                // naming differences that a fixed "lib/<abi>/$soname" lookup
-                // would miss. Prefer an arm64-v8a entry if several match.
-                val matching = z.entries()
-                    .asSequence()
-                    .filter { e -> !e.isDirectory && e.name.endsWith(soname, ignoreCase = true) }
-                    .map { it.name }
-                    .toList()
-                // Also log all lib/ entries for diagnosis.
-                val libEntries = z.entries()
-                    .asSequence()
-                    .filter { e -> !e.isDirectory && e.name.startsWith("lib/") }
-                    .map { it.name }
-                    .toList()
-                AppLogger.info(
-                    "NativeEngineBridge",
-                    "APK lib/ entries (${libEntries.size}): ${libEntries.joinToString()}"
-                )
-                if (matching.isEmpty()) {
-                    AppLogger.error(
-                        "NativeEngineBridge",
-                        "no entry ending with $soname found in base.apk; " +
-                            "native libs may be in a split APK (lib_split/*.apk) or stripped on install"
-                    )
-                    // Try sibling split APKs (base.apk dir): split_config.arm64_v8a.apk etc.
-                    val fromSplit = loadFromSplitApks(context, soname, outFile)
-                    if (fromSplit != null) return fromSplit
-                    return null
-                }
-                // Prefer arm64-v8a, else first match.
-                val entryName = matching.firstOrNull { it.contains("arm64-v8a") }
-                    ?: matching.first()
-                AppLogger.info("NativeEngineBridge", "APK entry: $entryName")
-                z.getInputStream(z.getEntry(entryName)).use { input ->
-                    java.io.FileOutputStream(outFile).use { out ->
-                        input.copyTo(out)
-                    }
-                }
-            }
-            // codeCacheDir is on a filesystem that permits exec; ensure perms.
-            outFile.setExecutable(true, true)
-            AppLogger.info(
-                "NativeEngineBridge",
-                "extracted ${outFile.length()} bytes, exec=${outFile.canExecute()}"
-            )
-            System.load(outFile.absolutePath)
-            AppLogger.info("NativeEngineBridge", "System.load(\"${outFile.absolutePath}\") OK")
-            return outFile.absolutePath
-        } catch (e: Throwable) {
-            AppLogger.error(
-                "NativeEngineBridge",
-                "extractAndLoadFromApk failed: ${e.javaClass.simpleName}: ${e.message}"
-            )
-            return null
-        }
-    }
-
-    /**
-     * Look for the soname in sibling split APKs next to base.apk (e.g. the
-     * Play-style split_config.<abi>.apk) and extract+load from there.
-     */
-    private fun loadFromSplitApks(
-        context: android.content.Context,
-        soname: String,
-        outFile: java.io.File
-    ): String? {
-        val baseApk = java.io.File(context.applicationInfo.sourceDir)
-        val dir = baseApk.parentFile ?: return null
-        val splits = dir.listFiles { f ->
-            f.isFile && f.name.endsWith(".apk") && f.name != baseApk.name
-        }?.sortedByDescending { it.length() } ?: emptyList()
-        AppLogger.info(
-            "NativeEngineBridge",
-            "scanning ${splits.size} sibling APK(s) in $dir: ${splits.map { it.name }.joinToString()}"
-        )
-        for (split in splits) {
-            try {
-                java.util.zip.ZipFile(split).use { z ->
-                    val entry = z.entries()
-                        .asSequence()
-                        .firstOrNull { e ->
-                            !e.isDirectory && e.name.endsWith(soname, ignoreCase = true)
-                        }
-                    if (entry != null) {
-                        AppLogger.info(
-                            "NativeEngineBridge",
-                            "found $soname in split ${split.name}: ${entry.name}"
-                        )
-                        z.getInputStream(entry).use { input ->
-                            java.io.FileOutputStream(outFile).use { out -> input.copyTo(out) }
-                        }
-                        outFile.setExecutable(true, true)
-                        AppLogger.info(
-                            "NativeEngineBridge",
-                            "extracted ${outFile.length()} bytes from split, exec=${outFile.canExecute()}"
-                        )
-                        System.load(outFile.absolutePath)
-                        AppLogger.info("NativeEngineBridge", "System.load(\"${outFile.absolutePath}\") OK (from split)")
-                        return outFile.absolutePath
-                    }
-                }
-            } catch (e: Throwable) {
-                AppLogger.warn(
-                    "NativeEngineBridge",
-                    "scan of split ${split.name} failed: ${e.javaClass.simpleName}: ${e.message}"
-                )
-            }
         }
         return null
     }
