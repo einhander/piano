@@ -234,9 +234,13 @@ class MainActivity : AppCompatActivity() {
                 //
                 // First pre-load the bundle via System.loadLibrary so the linker
                 // resolves its NEEDED deps and registers the soname; the native
-                // dlopen then finds it. The result is logged to AppLogger.
-                NativeEngineBridge.preloadLspBundle(this@MainActivity)
-                loadMasterEffectBundle(svc)
+                // dlopen then finds it. On devices that don't extract prebuilt
+                // jniLibs (sdk 36), this falls back to extracting the .so from
+                // the APK into codeCacheDir and returns that path for dlopen.
+                // Returns null when the lib is loadable by soname (path not
+                // needed), or an absolute path to the extracted .so.
+                val extractedPath = NativeEngineBridge.preloadLspBundle(this@MainActivity)
+                loadMasterEffectBundle(svc, extractedPath)
 
                 // Restore persisted state (SF2, polyphony, master gain, channel programs)
                 restorePersistedState(svc)
@@ -600,16 +604,18 @@ class MainActivity : AppCompatActivity() {
      * packaged as a jniLib and extracted to nativeLibraryDir at install time.
      * Effects are loaded DISABLED (bypassed); the UI enables them on opt-in.
      */
-    private fun loadMasterEffectBundle(svc: PlaybackService) {
+    private fun loadMasterEffectBundle(svc: PlaybackService, extractedPath: String?) {
+        // Prefer the runtime-extracted path (codeCacheDir) when the platform
+        // did not materialize the .so in nativeLibraryDir; otherwise fall back
+        // to the standard nativeLibraryDir path. The native dlopen also has a
+        // soname fallback, but passing the known-good path is deterministic.
         val libDir = applicationInfo.nativeLibraryDir
-        val soPath = "$libDir/liblsp-plugins-ladspa.so"
-        AppLogger.info("MainActivity", "Loading LSP bundle: $soPath")
-        // The bundle must be pre-loaded via System.loadLibrary (done in
-        // NativeEngineBridge init) so the linker resolves its NEEDED deps; if
-        // that preload failed it is logged there. Surface any file-existence
-        // issue here too.
+        val defaultPath = "$libDir/liblsp-plugins-ladspa.so"
+        val soPath = extractedPath ?: defaultPath
+        AppLogger.info("MainActivity", "Loading LSP bundle: $soPath" +
+            (if (extractedPath != null) " (extracted)" else ""))
         if (!java.io.File(soPath).exists()) {
-            AppLogger.error("MainActivity", "LSP bundle NOT FOUND at $soPath — was it packaged for this ABI?")
+            AppLogger.error("MainActivity", "LSP bundle NOT FOUND at $soPath")
         }
         val available = try {
             svc.loadMasterEffectBundle(soPath)

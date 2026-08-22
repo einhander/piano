@@ -15,13 +15,14 @@ object NativeEngineBridge {
      * Returns true on success; on failure logs the exact reason to AppLogger
      * and logcat and returns false.
      */
-    fun preloadLspBundle(context: android.content.Context): Boolean {
+    fun preloadLspBundle(context: android.content.Context): String? {
         val libDir = context.applicationInfo.nativeLibraryDir
         // 1) Load by library name (preferred; uses the linker search path).
         try {
             System.loadLibrary("lsp-plugins-ladspa")
             AppLogger.info("NativeEngineBridge", "loadLibrary(\"lsp-plugins-ladspa\") OK")
-            return true
+            // Loaded by soname; the native dlopen-by-soname fallback resolves it.
+            return null
         } catch (e: Throwable) {
             AppLogger.error(
                 "NativeEngineBridge",
@@ -37,7 +38,7 @@ object NativeEngineBridge {
             try {
                 System.load(soPath)
                 AppLogger.info("NativeEngineBridge", "System.load(\"$soPath\") OK")
-                return true
+                return null
             } catch (e: Throwable) {
                 AppLogger.error(
                     "NativeEngineBridge",
@@ -45,13 +46,72 @@ object NativeEngineBridge {
                 )
             }
         } else {
-            AppLogger.error(
+            AppLogger.warn(
                 "NativeEngineBridge",
                 "liblsp-plugins-ladspa.so NOT on disk at $soPath " +
-                    "(extractNativeLibs=false on this device) — relying on dlopen soname fallback"
+                    "(extractNativeLibs=false on this device)"
             )
         }
-        return false
+        // 3) Definitive fallback: extract the .so straight out of the installed
+        //    APK into the executable codeCacheDir and System.load it there.
+        //    On Android 11+/sdk 30+ (notably sdk 36) the platform does not
+        //    extract prebuilt jniLibs to nativeLibraryDir nor register them in
+        //    the loadable namespace, so neither System.loadLibrary nor dlopen
+        //    by path/soname can find them. Reading the entry from our own APK
+        //    and writing it to a location we control bypasses all of that.
+        //    Returns the absolute path the native dlopen should use.
+        return extractAndLoadFromApk(context)
+    }
+
+    /**
+     * Copy lib/<abi>/liblsp-plugins-ladspa.so from the installed APK (sourceDir)
+     * into getCodeCacheDir() and System.load it. Picks the first ABI whose entry
+     * exists in the APK (the prebuilt is arm64-v8a only in v1).
+     */
+    private fun extractAndLoadFromApk(context: android.content.Context): String? {
+        val apkPath = context.applicationInfo.sourceDir
+        val outDir = context.codeCacheDir
+        val soname = "liblsp-plugins-ladspa.so"
+        val outFile = java.io.File(outDir, soname)
+        AppLogger.info("NativeEngineBridge", "extracting $soname from APK ($apkPath) → $outFile")
+        try {
+            val zip = java.util.zip.ZipFile(apkPath)
+            zip.use { z ->
+                // Find the first supported ABI whose lib entry exists in the APK.
+                val entryName = android.os.Build.SUPPORTED_ABIS
+                    .map { "lib/$it/$soname" }
+                    .firstOrNull { z.getEntry(it) != null }
+                if (entryName == null) {
+                    AppLogger.error(
+                        "NativeEngineBridge",
+                        "no lib/<abi>/$soname entry found in APK for any of " +
+                            android.os.Build.SUPPORTED_ABIS.joinToString()
+                    )
+                    return null
+                }
+                AppLogger.info("NativeEngineBridge", "APK entry: $entryName")
+                z.getInputStream(z.getEntry(entryName)).use { input ->
+                    java.io.FileOutputStream(outFile).use { out ->
+                        input.copyTo(out)
+                    }
+                }
+            }
+            // codeCacheDir is on a filesystem that permits exec; ensure perms.
+            outFile.setExecutable(true, true)
+            AppLogger.info(
+                "NativeEngineBridge",
+                "extracted ${outFile.length()} bytes, exec=${outFile.canExecute()}"
+            )
+            System.load(outFile.absolutePath)
+            AppLogger.info("NativeEngineBridge", "System.load(\"${outFile.absolutePath}\") OK")
+            return outFile.absolutePath
+        } catch (e: Throwable) {
+            AppLogger.error(
+                "NativeEngineBridge",
+                "extractAndLoadFromApk failed: ${e.javaClass.simpleName}: ${e.message}"
+            )
+            return null
+        }
     }
 
     external fun nativeInit(): Boolean
