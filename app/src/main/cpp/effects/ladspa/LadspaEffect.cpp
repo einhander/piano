@@ -2,9 +2,26 @@
 
 #include <cmath>
 #include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
+#include <string>
 
 namespace piano {
 namespace ladspa {
+
+// Write a one-line marker to <filesDir>/lsp_prepare_marker.log so that when
+// the LSP instantiate/connect_port/activate call aborts the process, the
+// crash handler (or next launch) can read which call was in progress. The
+// file is opened/flushed synchronously (worker thread, not audio thread).
+static void writePrepareMarker(const char* slot, const char* phase) {
+    int fd = ::open("/data/data/com.piano.sequencer/files/lsp_prepare_marker.log",
+                    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) return;
+    char buf[128];
+    int len = snprintf(buf, sizeof(buf), "slot=%s phase=%s\n", slot, phase);
+    ::write(fd, buf, static_cast<size_t>(len));
+    ::close(fd);
+}
 
 LadspaEffect::LadspaEffect(int slot, const LADSPA_Descriptor* descriptor)
     : mSlot(slot), mDescriptor(descriptor), mBinding(lsp::bindingForSlot(slot)) {
@@ -53,6 +70,11 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
     std::memset(mPortValues.get(), 0, mPortCount * sizeof(float));
 
     // Instantiate at the actual sample rate.
+    {
+        char slotStr[16];
+        snprintf(slotStr, sizeof(slotStr), "%d", mSlot);
+        writePrepareMarker(slotStr, "instantiate");
+    }
     mHandle = mDescriptor->instantiate(mDescriptor, static_cast<unsigned long>(sampleRate));
     if (!mHandle) {
         return false;
@@ -74,6 +96,11 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
     // buffers; the control ports stay pointing at mPortValues, which is what
     // applyParameters() writes and the plugin reads in run(). Without this,
     // control ports are unconnected and the plugin reads garbage.
+    {
+        char slotStr[16];
+        snprintf(slotStr, sizeof(slotStr), "%d", mSlot);
+        writePrepareMarker(slotStr, "connect_port");
+    }
     for (unsigned long p = 0; p < mPortCount; ++p) {
         mDescriptor->connect_port(mHandle, p, &mPortValues[p]);
     }
@@ -101,11 +128,18 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
 
     // Activate (if supported). LADSPA activate() is non-realtime; called once
     // before the first run().
+    {
+        char slotStr[16];
+        snprintf(slotStr, sizeof(slotStr), "%d", mSlot);
+        writePrepareMarker(slotStr, "activate");
+    }
     if (mDescriptor->activate) {
         mDescriptor->activate(mHandle);
         mActivated = true;
     }
 
+    // Clear the marker — if we reach here, prepare() succeeded.
+    writePrepareMarker("", "done");
     mLatencyPort = mBinding->latencyPort;
     mLatencyFrames = 0;
 

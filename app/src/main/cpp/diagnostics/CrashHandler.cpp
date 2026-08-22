@@ -28,6 +28,26 @@ static const char* sigName(int sig) {
     return "?";
 }
 
+#ifdef __aarch64__
+// Strip Pointer Authentication Code (PAC) from a return address. Android
+// arm64 with PAC enabled tags return addresses stored on the stack; without
+// stripping, dladdr fails (the tagged address falls outside mapped segments).
+// xpaclri strips PAC from x30 (LR) — a hint instruction, always safe.
+static unsigned long stripPac(unsigned long addr) {
+    unsigned long result;
+    __asm__ volatile(
+        "mov x30, %0\n"
+        "xpaclri\n"
+        "mov %0, x30\n"
+        : "=r"(result)
+        : "0"(addr)
+        : "x30");
+    return result;
+}
+#else
+static unsigned long stripPac(unsigned long addr) { return addr; }
+#endif
+
 static void writeAll(int fd, const char* s) {
     if (fd < 0 || !s) return;
     ::write(fd, s, strlen(s));
@@ -85,8 +105,7 @@ static void crashHandler(int sig, siginfo_t* si, void* uc) {
         if (si) {
             writeAll(fd, "si_code: ");
             writeInt(fd, static_cast<unsigned long>(si->si_code));
-            writeAll(fd, "\nsi_addr: ");
-            writeHex(fd, reinterpret_cast<unsigned long>(si->si_addr));
+                        writeHex(fd, reinterpret_cast<unsigned long>(si->si_addr));
             writeAll(fd, "\n");
         }
         if (uc) {
@@ -161,6 +180,8 @@ static void crashHandler(int sig, siginfo_t* si, void* uc) {
                 std::memcpy(&nextFp, reinterpret_cast<void*>(fp), sizeof(nextFp));
                 std::memcpy(&retAddr, reinterpret_cast<void*>(fp + 8), sizeof(retAddr));
                 if (retAddr == 0) break;
+                // Strip PAC so dladdr can resolve the real address.
+                retAddr = stripPac(retAddr);
                 writeAll(fd, "  #");
                 writeInt(fd, static_cast<unsigned long>(n));
                 writeAll(fd, " ");

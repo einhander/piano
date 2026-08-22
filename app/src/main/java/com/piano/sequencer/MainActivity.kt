@@ -146,6 +146,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // SAF "save as" picker: writes the current App Log to the chosen file.
+    private val saveLogLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        val entries = AppLogger.getAll()
+        if (entries.isEmpty()) {
+            Toast.makeText(this, "Log is empty", Toast.LENGTH_SHORT).show()
+            return@registerForActivityResult
+        }
+        val text = entries.joinToString("\n")
+        try {
+            contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
+            Toast.makeText(this, "Log saved", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
     // SAF file picker for MIDI import
     private val midiImportLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
@@ -222,6 +241,13 @@ class MainActivity : AppCompatActivity() {
                 val prevLogcat = readLspLoadLogcat()
                 if (prevLogcat != null) {
                     AppLogger.error("MainActivity", "Previous launch logcat (LSP load):\n$prevLogcat")
+                }
+                // The prepare-phase marker tells us WHICH LSP call (instantiate
+                // / connect_port / activate) was in progress when the abort
+                // fired — the backtrace alone can't distinguish them.
+                val prevMarker = readLspPrepareMarker()
+                if (prevMarker != null) {
+                    AppLogger.error("MainActivity", "Previous launch LSP prepare marker:\n$prevMarker")
                 }
                 if (!NativeEngineBridge.nativeInit()) {
                     AppLogger.error("MainActivity", "nativeInit() failed")
@@ -643,6 +669,25 @@ class MainActivity : AppCompatActivity() {
     private fun readLspLoadLogcat(): String? {
         return try {
             val f = java.io.File(filesDir, "lsp_load_logcat.log")
+            if (!f.exists()) return null
+            val text = f.readText()
+            f.delete()
+            if (text.isBlank()) null else text
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Read filesDir/lsp_prepare_marker.log — the phase marker written by
+     * LadspaEffect::prepare() before each LSP call (instantiate /
+     * connect_port / activate). If the process aborted during prepare(), this
+     * shows which call was in progress. Does NOT delete the file (the crash
+     * handler may not have run); cleared on next successful prepare.
+     */
+    private fun readLspPrepareMarker(): String? {
+        return try {
+            val f = java.io.File(filesDir, "lsp_prepare_marker.log")
             if (!f.exists()) return null
             val text = f.readText()
             f.delete()
@@ -1112,11 +1157,14 @@ class MainActivity : AppCompatActivity() {
             textSize = 12f
             setPadding(0, 0, 8, 0)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            // Clicking the folder label opens the SAF picker to choose where
+            // crash.log is written (was the "Choose" button's job).
+            setOnClickListener { logFolderLauncher.launch(null) }
         }
         logFolderRow.addView(tvLogFolder)
         logFolderRow.addView(Button(this).apply {
-            text = "Choose"
-            setOnClickListener { logFolderLauncher.launch(null) }
+            text = "Save"
+            setOnClickListener { saveLogLauncher.launch("piano_log.txt") }
         })
         card.addView(logFolderRow)
         updateLogFolderLabel()
