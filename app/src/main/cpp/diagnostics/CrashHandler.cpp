@@ -32,17 +32,10 @@ static const char* sigName(int sig) {
 // Strip Pointer Authentication Code (PAC) from a return address. Android
 // arm64 with PAC enabled tags return addresses stored on the stack; without
 // stripping, dladdr fails (the tagged address falls outside mapped segments).
-// xpaclri strips PAC from x30 (LR) — a hint instruction, always safe.
+// xpaci strips PAC from a general-purpose register — a hint, always safe.
 static unsigned long stripPac(unsigned long addr) {
-    unsigned long result;
-    __asm__ volatile(
-        "mov x30, %0\n"
-        "xpaclri\n"
-        "mov %0, x30\n"
-        : "=r"(result)
-        : "0"(addr)
-        : "x30");
-    return result;
+    __asm__ volatile("xpaci %0" : "+r"(addr));
+    return addr;
 }
 #else
 static unsigned long stripPac(unsigned long addr) { return addr; }
