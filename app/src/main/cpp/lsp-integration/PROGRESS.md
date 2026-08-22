@@ -456,23 +456,36 @@ Notes on the test design:
 - `./gradlew :app:testDebugUnitTest` → BUILD SUCCESSFUL (MIDI parser suite).
 
 ### Remaining (next session)
-- **On-device load fix (top priority).** Install the diag build (`959e4cc`
-  CI run `32576112937`, artifact `app-debug-apk`), reopen the app, read the
-  App Log. The `lsp_prepare_marker.log` now shows the **exact sub-step** of
-  `instantiate()` that was in progress when the abort fired:
-  - `I_RL_NULL` → resource loader unavailable (primary cause);
-  - `I_WINIT_RC=<n>` → `wrapper->init()` returned a non-OK status code
-    (primary cause; `n` is the numeric status_t value);
-  - `I_WINIT_OK` then a later crash → the failure is after init, in
-    connect_port/activate;
-  - a marker earlier than `I_PLUGIN_OK` → the failure is in factory/plugin
-    creation.
-  With `LSP_ANDROID_INSTANTIATE_DIAGNOSTIC` defined, destructive cleanup
-  (`delete wrapper/loader/plugin`) after a failed init is bypassed, so the
-  SIGABRT (which previously fired during cleanup of a partially-initialized
-  object) should NOT occur. If the app no longer crashes but `instantiate()`
-  returns nullptr, the primary failure is confirmed and the secondary
-  cleanup crash is confirmed.
+- **On-device load fix (top priority).** The first diagnostic build (`959e4cc`)
+  confirmed: cleanup bypass works — **no more SIGABRT**. The marker was
+  `I_CL_WRAP_BYPASS`, meaning `wrapper->init()` returned a non-OK status and
+  the bypass returned nullptr instead of crashing during cleanup. This
+  confirms Variant B: the primary failure is inside `wrapper->init()`, and
+  the SIGABRT was secondary (cleanup of a partially-initialized object).
+
+  The second diagnostic build (`eda7b9d`, CI run `32578284537`, artifact
+  `app-debug-apk`) adds:
+  1. **Sub-step markers inside `Wrapper::init()`** (wrapper.h): `WI_ENTER` →
+     `WI_MANIFEST_B` → `WI_MANIFEST_OK`/`WI_MANIFEST_NULL` → `WI_MLOAD_B` →
+     `WI_MLOAD_RC=<n>` → `WI_PORTS_B`/`WI_PORTS_OK` → `WI_REORDER_*` →
+     `WI_PINIT_B`/`WI_PINIT_OK` → `WI_OK`. The last `WI_*` marker before the
+     bypass identifies the exact failing sub-step. Most likely candidate:
+     `WI_MANIFEST_NULL` (the `builtin://manifest.json` resource is not
+     available — the BuiltinLoader has no data, or the DirLoader can't find
+     the file in the APK's native lib dir).
+  2. **`I_CL_WRAP_BYPASS` now includes `rc=<n>`** — the numeric `status_t`
+     return code from `wrapper->init()`.
+  3. **Descriptor label dump** — `LadspaRegistry::open()` logs all
+     `descriptor[i] Label="..." UniqueID=...` to the App Log. This diagnoses
+     the "label lookup failed for all 3 slots" issue seen on the non-crashing
+     launch (the bundle loads but none of the Labels match the expected
+     `kBindings[]` URIs).
+
+  Install the build, launch the app, use the **Save** button to export the
+  log. Report:
+  - The `Previous launch LSP prepare marker:` line (will show `WI_*` or
+    `I_CL_WRAP_BYPASS rc=<n>`)
+  - The `descriptor[0] Label="..."` lines (what the bundle actually exposes)
 - On-device runtime validation (after the load is fixed): open "Master
   Effects", confirm the 3 cards render with correct ranges and that
   toggling/sliding changes the signal.
