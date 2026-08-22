@@ -231,6 +231,11 @@ class MainActivity : AppCompatActivity() {
                 // the chain stays a passthrough (the engine keeps running).
                 // Effects are loaded DISABLED (bypassed) by default; the UI
                 // toggles them on after the user opts in.
+                //
+                // First pre-load the bundle via System.loadLibrary so the linker
+                // resolves its NEEDED deps and registers the soname; the native
+                // dlopen then finds it. The result is logged to AppLogger.
+                NativeEngineBridge.preloadLspBundle(this@MainActivity)
                 loadMasterEffectBundle(svc)
 
                 // Restore persisted state (SF2, polyphony, master gain, channel programs)

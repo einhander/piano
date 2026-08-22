@@ -3,14 +3,55 @@ package com.piano.sequencer
 object NativeEngineBridge {
     init {
         System.loadLibrary("native-lib")
-        // Pre-load the LSP LADSPA bundle so the Android linker resolves its
-        // NEEDED deps (libc++_shared.so, already mapped above) and registers
-        // the soname in the app namespace. A later dlopen() by absolute path
-        // in LadspaRegistry::open() then succeeds; without this, API 24+
-        // namespace rules block dlopen of a bundled .so with unresolved deps
-        // and the effect chain stays bypassed.
-        runCatching { System.loadLibrary("lsp-plugins-ladspa") }
-            .onFailure { android.util.Log.e("NativeEngineBridge", "loadLibrary(lsp-plugins-ladspa) failed", it) }
+    }
+
+    /**
+     * Pre-load the LSP LADSPA bundle so the Android linker resolves its NEEDED
+     * deps (libc++_shared.so, already mapped via native-lib) and registers the
+     * soname in the app namespace. A later dlopen() by LadspaRegistry::open()
+     * then finds it. Must run on a worker thread (it can throw on failure);
+     * call from MainActivity during engine init so the result is logged.
+     *
+     * Returns true on success; on failure logs the exact reason to AppLogger
+     * and logcat and returns false.
+     */
+    fun preloadLspBundle(context: android.content.Context): Boolean {
+        val libDir = context.applicationInfo.nativeLibraryDir
+        // 1) Load by library name (preferred; uses the linker search path).
+        try {
+            System.loadLibrary("lsp-plugins-ladspa")
+            AppLogger.info("NativeEngineBridge", "loadLibrary(\"lsp-plugins-ladspa\") OK")
+            return true
+        } catch (e: Throwable) {
+            AppLogger.error(
+                "NativeEngineBridge",
+                "loadLibrary(\"lsp-plugins-ladspa\") failed: ${e.javaClass.simpleName}: ${e.message}"
+            )
+        }
+        // 2) Fallback: load by absolute path from nativeLibraryDir. Captures a
+        //    different (often more specific) error than the name-based load.
+        val soPath = "$libDir/liblsp-plugins-ladspa.so"
+        val exists = java.io.File(soPath).exists()
+        AppLogger.info("NativeEngineBridge", "fallback System.load(\"$soPath\") exists=$exists")
+        if (exists) {
+            try {
+                System.load(soPath)
+                AppLogger.info("NativeEngineBridge", "System.load(\"$soPath\") OK")
+                return true
+            } catch (e: Throwable) {
+                AppLogger.error(
+                    "NativeEngineBridge",
+                    "System.load(\"$soPath\") failed: ${e.javaClass.simpleName}: ${e.message}"
+                )
+            }
+        } else {
+            AppLogger.error(
+                "NativeEngineBridge",
+                "liblsp-plugins-ladspa.so NOT on disk at $soPath " +
+                    "(extractNativeLibs=false on this device) — relying on dlopen soname fallback"
+            )
+        }
+        return false
     }
 
     external fun nativeInit(): Boolean
