@@ -19,7 +19,7 @@ Goal: LSP 1.2.34 → LADSPA only → Android NDK 26.1 → arm64-v8a.
 | Item | Status | Notes |
 |------|--------|-------|
 | NDK 26.1.10909125 toolchain | ✅ | `$ANDROID_SDK_ROOT/ndk/26.1.10909125` |
-| LSP meta pinned to tag 1.2.34 | ✅ | vendored under `third_party/lsp` (gitignored, fetched on demand) |
+| LSP meta pinned to tag 1.2.34 | ✅ | `third_party/lsp` is now a **git submodule** pinned to tag 1.2.34 (was gitignored + fetched on demand); nested module repos are still fetched by `make fetch` at build time |
 | LADSPA-only build, no UI/LV2/CLAP/VST | ✅ | `FEATURES='crosscompile ladspa'` |
 | Android compatibility patches | ✅ | 13 patches, documented in `patches/ANDROID_PATCHES.md` |
 | Reproducible build script | ✅ | `build-lsp-ladspa-android.sh` (reset → apply → build verified) |
@@ -133,27 +133,44 @@ Worker-prepared inactive chain + atomic swap.
 
 ## Open questions / blockers
 
-1. **qemu on-device-style run**: the Android `.so` needs `/system/bin/linker64`
+1. **On-device load crashes the app (native SIGSEGV, no log)** — the current
+   top blocker. The `.so` builds and links cleanly (valid AArch64 ELF,
+   `ladspa_descriptor` exported, NEEDED = libdl/libc++_shared/libm/libc) and
+   the host x86-64 `.so` of the same sources passes the offline DSP test, but
+   `System.loadLibrary("lsp-plugins-ladspa")` crashes the app on launch on the
+   target device. The process dies before the in-memory `AppLogger` flushes and
+   before the Java `UncaughtExceptionHandler` runs (it only catches Java
+   throwables), so there was no trace. The LADSPA plugin registration is lazy
+   (`lsp_singletone_init` in `ladspa.cpp`), so the crash is in a **static
+   constructor of the linked runtime/common/DSP code**, not in the LADSPA entry.
+   **Diag build committed (`1a49a40`):** a native signal handler
+   (`diagnostics/CrashHandler`) writes the fault PC + an `_Unwind_Backtrace`/
+   `dladdr` backtrace to `<filesDir>/native_crash.log`, which `MainActivity`
+   surfaces in the App Log on the next launch and then skips the bundle load
+   so the app stays up to read it. Next: get that backtrace, identify the
+   crashing static initializer, and patch it (likely a desktop-only ctor the
+   13 Android patches don't cover). See "On-device load — diagnosis" below.
+2. **qemu on-device-style run**: the Android `.so` needs `/system/bin/linker64`
    (Bionic dynamic linker), which the NDK does not ship. Options: extract
    linker64 from an Android system image, or run the descriptor dump on a real
    device via a tiny test APK. Until then, the host x86-64 build of the same
    patched sources is used as the feasibility proxy (same DSP code paths).
    The host `.so` is produced by `make config FEATURES='ladspa'` (no
    `crosscompile`) + `make`; the offline test then runs natively via `dlopen`.
-2. **Compressor gain-reduction measurement**: at unity input/output gain with
+3. **Compressor gain-reduction measurement**: at unity input/output gain with
    threshold 0.01 amp and ratio 10, the stereo compressor passes the signal
    through unchanged (ratio 1.0000). Likely a control-port mapping issue
    (e.g. "Compression mode" / sidechain source left at 0). To resolve in a
    later milestone by dumping all control port names + defaults. This does not
    block Milestones 1–2 (instantiation + finite run + limiter PCM change are
    proven).
-3. **Production build integration (Plan Phase 26)**: the LSP build is currently
-   a standalone script. Folding it into `./build.sh` / CMake (Option A/B/C) is
-   Milestone-4+ work; for now the integration layer is committed and the LSP
-   source tree is gitignored + fetched on demand. The built `.so` is also
-   copied to `lsp-integration/prebuilt/arm64-v8a/` for the upcoming CMake
-   integration.
-4. **Plan Phase 36 says "stop after this milestone"** for the first coding
+4. **Production build integration (Plan Phase 26)** — RESOLVED. The LSP bundle
+   is now built from the pinned submodule in CI: `.github/workflows/build-apk.yml`
+   runs `build-lsp-ladspa-android.sh` and copies the `.so` into
+   `prebuilt/arm64-v8a/` before `assembleDebug`. The `.so` stays gitignored
+   (CI reproduces it every run); committing the binary was tried and reverted
+   (it crashed on-device — see blocker 1).
+5. **Plan Phase 36 says "stop after this milestone"** for the first coding
    assignment. Milestones 1–2 are now complete and verified. Proceeding into
    Milestones 3–6 (effect API + audio-callback insertion) crosses that
    boundary and touches the realtime audio callback — confirm before
@@ -187,6 +204,78 @@ Worker-prepared inactive chain + atomic swap.
 - Baseline Piano build + unit tests remain green: `./build.sh debug` →
   `BUILD SUCCESSFUL`; `./gradlew :app:testDebugUnitTest` → pass. No CMake /
   JNI / Kotlin changes in this session.
+
+---
+
+## On-device load — diagnosis (current session)
+
+### What broke
+The committed prebuilt `.so` (and the CI-built-from-submodule `.so`) crash the
+app **on launch**. `MainActivity` boots the engine on a worker thread and
+calls `NativeEngineBridge.preloadLspBundle()` → `System.loadLibrary(
+"lsp-plugins-ladspa")`, which runs the bundle's static constructors; one of
+them SIGSEGVs and kills the process. Because `AppLogger` is in-memory and the
+Java `UncaughtExceptionHandler` only catches Java throwables, **nothing** was
+logged. The LADSPA plugin registration itself is lazy
+(`lsp_singletone_init` in `wrap/ladspa.cpp`), so the fault is in a static
+constructor of the linked runtime/common/DSP code, not in the LADSPA entry.
+
+### Root-cause investigation log (this session)
+1. **Initial hypothesis — .so missing from the CI-built APK.** The prebuilt
+   `.so` was gitignored, so CI clones never had it; the APK the user installed
+   contained only the CMake-built libs (no `liblsp-plugins-ladspa.so`). Every
+   load path (System.loadLibrary, dlopen by path/soname, extract-from-APK into
+   codeCacheDir, scan sibling split APKs) reported the binary absent.
+   Fixes 1–5 (useLegacyPackaging, soname fallback, surfaced preload errors,
+   APK-extract, split-APK scan) were all correct but moot without the binary.
+2. **Fix attempt — commit the prebuilt .so** (`360b76e`, then reverted). This
+   got the binary into the APK (verified: 8 758 616 bytes,
+   `lib/arm64-v8a/liblsp-plugins-ladspa.so`), but the app **crashed on
+   launch**. User: "пребилд крашит приложение при открытии".
+3. **Fix attempt — build from a pinned submodule in CI** (`c36139b`).
+   `third_party/lsp` is now a git submodule @ tag 1.2.34; the CI workflow runs
+   `build-lsp-ladspa-android.sh` + copies the `.so` into `prebuilt/arm64-v8a/`
+   before `assembleDebug`. Verified: CI APK contains the submodule-built `.so`
+   (AArch64 ELF, `ladspa_descriptor` exported). **Still crashes on launch** —
+   same source ⇒ same crashing static ctor. So the load mechanism (the earlier
+   codeCache/APK-extraction machinery) was removed and the load simplified back
+   to plain `System.loadLibrary` (same path as `libnative-lib`, which loads
+   fine); the crash is in the binary, not the loader.
+4. **Diag build (`1a49a40`).** Added `diagnostics/CrashHandler` (a
+   SIGSEGV/SIGABRT/SIGBUS/SIGILL/SIGFPE/SIGPIPE handler on an alternate stack)
+   that writes the fault PC + an `_Unwind_Backtrace`/`dladdr` backtrace to
+   `<filesDir>/native_crash.log`, then re-raises the default disposition so a
+   tombstone still forms. `nativeInitCrashHandler(path)` installs it from the
+   engine-boot thread **before** any native library load. On each launch
+   `MainActivity` reads `native_crash.log`, surfaces it in the App Log, and
+   **skips** the bundle load for that launch so the app stays up and the
+   backtrace is readable (instead of re-crashing on the same ctor).
+
+### State of the on-device binary (verified)
+- AArch64 ELF, `e_machine=183`, little-endian.
+- Exports `ladspa_descriptor` (GLOBAL FUNC).
+- NEEDED = `libdl.so`, `libc++_shared.so`, `libm.so`, `libc.so` — only
+  Android/NDK runtime libs (no pthread/rt/sndfile/X11/jack/pipewire).
+- 198 plugins validated by the host validator (warnings=0, errors=0).
+- Host x86-64 `.so` of the same patched sources passes the offline DSP test
+  (instantiate + run finite + limiter PCM change). So the DSP code is sound;
+  the crash is an init-time Android incompatibility, not a DSP bug.
+
+### Next steps
+1. Ship the diag build; on the next launch read the App Log backtrace
+   (`=== native crash ===` … `backtrace:` …). The fault PC + `dladdr` symbol
+   names the crashing ctor.
+2. Patch that ctor for `__ANDROID__` (add to
+   `patches/lsp-runtime-lib-android.patch` / `lsp-plugin-fw-android.patch` /
+   `lsp-common-lib-android.patch` as appropriate) and update
+   `ANDROID_PATCHES.md`.
+3. Re-run CI → install → confirm `loadLibrary("lsp-plugins-ladspa") OK` +
+   `LSP master effects available: 3/3` in the App Log.
+
+### CI status (this session)
+- `c36139b` (submodule + CI build) — `success` (run `32559428994`, 8m42s); CI
+  APK verified to contain the submodule-built `.so`.
+- `1a49a40` (crash diagnostics) — CI run `32560496489` started.
 
 ---
 
@@ -306,13 +395,21 @@ Notes on the test design:
 ### Build verification
 - `./build.sh debug` → BUILD SUCCESSFUL (arm64-v8a + armeabi-v7a).
 - APK packages `lib/arm64-v8a/liblsp-plugins-ladspa.so` (8.7 MB) +
-  `libc++_shared.so` + `libnative-lib.so`.
+  `libc++_shared.so` + `libnative-lib.so`. (Locally the `.so` is produced by
+  `build-lsp-ladspa-android.sh` into `prebuilt/`; in CI the workflow builds it
+  from the submodule and copies it there before `assembleDebug`.)
 - `./gradlew :app:testDebugUnitTest` → BUILD SUCCESSFUL (MIDI parser suite).
 
 ### Remaining (next session)
-- On-device runtime validation: install APK, open "Master Effects", confirm the
-  3 cards render with correct ranges and that toggling/sliding changes the
-  signal (check the in-app log for "LSP master effects available: 3/3").
+- **On-device load fix (top priority).** Install the diag build (`1a49a40`
+  CI APK), reopen the app, read the `=== native crash ===` backtrace now shown
+  in the App Log. The fault PC + `dladdr` symbol names the crashing static
+  initializer. Patch it for `__ANDROID__` (extend the relevant
+  `*-android.patch`), re-run CI, and confirm `loadLibrary(
+  "lsp-plugins-ladspa") OK` + `LSP master effects available: 3/3`.
+- On-device runtime validation (after the load is fixed): open "Master
+  Effects", confirm the 3 cards render with correct ranges and that
+  toggling/sliding changes the signal.
 - Project persistence (Milestone 8): bump project format 1 → 2; migrate the
   `piano_prefs`-based effect state into the project (or keep both).
 - Sample-rate rebuild (Milestone 9): worker-prepared inactive chain + atomic
