@@ -158,7 +158,7 @@ Worker-prepared inactive chain + atomic swap.
    soname/dependency conflict, unsatisfied versioned symbol, or bad ELF).
    Bionic writes the *reason* to **logcat and stderr (fd 2) *before* abort()**;
    the backtrace alone can't name the culprit, and we have no logcat/adb.
-   **Stderr-capture diag (`<this commit>`):** `CrashHandler` now also
+   **Stderr-capture diag (`3712e04`):** `CrashHandler` now also
    (a) dumps `/proc/self/maps` at crash time (async-signal-safe `open`/`read`;
    `dl_iterate_phdr` would deadlock on the linker's `g_dl_mutex` held during a
    dlopen abort) — the map shows whether the LSP `.so` was mapped before the
@@ -166,8 +166,25 @@ Worker-prepared inactive chain + atomic swap.
    during mapping), and (b) redirects fd 2 to `<filesDir>/lsp_load_stderr.log`
    around `System.loadLibrary` (`crash::beginStderrCapture`/`endStderrCapture`
    via `dup`/`dup2`), so the linker's fatal message is captured. Both files are
-   surfaced in the App Log on the next launch. Next: read the linker stderr +
-   maps and identify the exact abort reason. See "On-device load — diagnosis" below.
+   surfaced in the App Log on the next launch.
+   **Second on-device capture (from `3712e04`):** the crash is still a
+   **SIGABRT**, and `/proc/self/maps` shows **`liblsp-plugins-ladspa.so` IS
+   mapped** (all 4 PT_LOAD segments: r--p / r-xp / r--p / rw-p + `.bss`).
+   → The linker **successfully loaded and mapped** the library; the abort is
+   AFTER mapping, during relocation or `.init_array` (static constructor).
+   **The stderr capture is EMPTY** — on this device (sdk=36 / Android 16)
+   Bionic's `async_safe_fatal` wrote the abort reason to **logd (logcat) only**,
+   NOT to fd 2. So fd-2 capture can't name the culprit here.
+   **This commit (logcat + FP backtrace):** adds (c) a `fork`+`exec` of
+   `/system/bin/logcat --pid=<us>` writing to `<filesDir>/lsp_load_logcat.log`
+   around the load (filtered to tags `linker/DEBUG/libc/art/AndroidRuntime`),
+   so the abort message text is captured without adb; and (d) an aarch64
+   **frame-pointer-chain backtrace** (walk x29: `[fp]=next fp`, `[fp+8]=return
+   addr`) in the crash handler — `_Unwind_Backtrace` stops at the libc abort
+   trampoline (no unwind info), but NDK clang keeps frame pointers on aarch64,
+   so the manual walk reaches the LSP static-ctor frames above `abort()`.
+   Next: read the logcat abort message + FP backtrace to identify the exact
+   crashing ctor / abort reason. See "On-device load — diagnosis" below.
 2. **qemu on-device-style run**: the Android `.so` needs `/system/bin/linker64`
    (Bionic dynamic linker), which the NDK does not ship. Options: extract
    linker64 from an Android system image, or run the descriptor dump on a real
@@ -285,18 +302,20 @@ constructor of the linked runtime/common/DSP code, not in the LADSPA entry.
    machinery) — i.e. the Android linker itself calls `abort()` during
    `System.loadLibrary`. The fault PC + `dladdr` backtrace alone do NOT name
    the culprit because the LSP frames above `abort()` are lost.
-2. **Read the linker's fatal message.** Bionic writes the abort reason to
-   stderr (fd 2) *before* `abort()`. The stderr-capture diag (this commit)
-   redirects fd 2 → `<filesDir>/lsp_load_stderr.log` around the load and
-   also dumps `/proc/self/maps` at crash time; both surface in the App Log on
-   the next launch under `Previous launch linker stderr (LSP load):` and the
-   `mapped files (from /proc/self/maps):` block. The maps line tells us
-   whether `liblsp-plugins-ladspa.so` was mapped before the abort.
-3. Patch the root cause for `__ANDROID__` (add to
+2. ✅ DONE (commit `3712e04`): stderr-capture + `/proc/self/maps`. The maps
+   show the `.so` **IS mapped** (4 PT_LOAD segments) → the abort is AFTER
+   mapping (relocation / `.init_array`). The stderr capture is EMPTY → on
+   sdk=36 Bionic writes the reason to **logd only**, not fd 2.
+3. **Read the logcat abort message + FP backtrace** (this commit). The
+   logcat capture (`lsp_load_logcat.log`) filters to this pid + tags
+   `linker/DEBUG/libc/art/AndroidRuntime`; the FP-chain backtrace walks x29
+   past the libc abort trampoline into the LSP static-ctor frames. Both
+   surface in the App Log on the next launch.
+4. Patch the root cause for `__ANDROID__` (add to
    `patches/lsp-runtime-lib-android.patch` / `lsp-plugin-fw-android.patch` /
    `lsp-common-lib-android.patch` as appropriate) and update
    `ANDROID_PATCHES.md`.
-4. Re-run CI → install → confirm `loadLibrary("lsp-plugins-ladspa") OK` +
+5. Re-run CI → install → confirm `loadLibrary("lsp-plugins-ladspa") OK` +
    `LSP master effects available: 3/3` in the App Log.
 
 ### CI status (this session)
@@ -307,7 +326,11 @@ constructor of the linked runtime/common/DSP code, not in the LADSPA entry.
   verified to contain the `.so` (8 758 616 bytes) + the crash handler in
   `libnative-lib.so` (`nativeInitCrashHandler`, `crash::install`).
 - **First on-device backtrace captured from `460b677`:** SIGABRT, libc-only
-  frames. → triggered this commit's stderr-capture diag.
+  frames. → triggered the `3712e04` stderr-capture diag.
+- `3712e04` (stderr + maps diag) — `success` (run `32569154127`, ~9m); APK
+  verified to contain `nativeBeginStderrCapture`/`crash::beginStderrCapture`.
+- **Second on-device capture from `3712e04`:** `.so` IS mapped; stderr capture
+  EMPTY. → triggered this commit's logcat + FP-backtrace diag.
 
 ---
 

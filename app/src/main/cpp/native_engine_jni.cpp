@@ -1,7 +1,13 @@
 #include <jni.h>
 #include <cstdio>
+#include <cstring>
+#include <cerrno>
 #include <string>
 #include <vector>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <signal.h>
 #include "audio/OboeOutput.h"
 #include "engine/NativeEngine.h"
 #include "model/TransportState.h"
@@ -47,6 +53,77 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeBeginStderrCapture(JNIEnv* env
 JNIEXPORT void JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeEndStderrCapture(JNIEnv*, jclass) {
     crash::endStderrCapture();
+}
+
+// Start a background logcat reader that writes this process's logs to
+// <path>/lsp_load_logcat.log, returning a handle (>0) or 0 on failure. On
+// sdk>=30 Bionic's load-time abort writes the reason to logd (NOT fd 2), so
+// the stderr capture is empty and logcat is the only way to get the abort
+// message text without adb. We filter by pid and tag linker/DEBUG/libc so the
+// file stays small. The handle is passed to nativeStopLogcatCapture() to kill
+// the child. Caller runs this on a worker thread.
+JNIEXPORT jlong JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeStartLogcatCapture(JNIEnv* env, jclass, jstring path) {
+    const char* p = path ? env->GetStringUTFChars(path, nullptr) : nullptr;
+    std::string full;
+    if (p) {
+        full = p;
+        if (!full.empty() && full.back() != '/') full += '/';
+        full += "lsp_load_logcat.log";
+        env->ReleaseStringUTFChars(path, p);
+    }
+    if (full.empty()) return 0;
+    // Fork a child that execs logcat. The child inherits no libc++ state we
+    // care about; logcat is a standalone binary. We use vfork-less fork().
+    int outfd = ::open(full.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (outfd < 0) return 0;
+    pid_t pid = fork();
+    if (pid < 0) { ::close(outfd); return 0; }
+    if (pid == 0) {
+        // Child: redirect stdout/stderr to the capture file, then exec logcat.
+        dup2(outfd, STDOUT_FILENO);
+        dup2(outfd, STDERR_FILENO);
+        close(outfd);
+        // --pid=<us> filters to this process. *:S silences default tags;
+        // then enable the tags the linker/Bionic use for fatal messages.
+        char pidArg[32];
+        snprintf(pidArg, sizeof(pidArg), "--pid=%d", static_cast<int>(getpid()));
+        // /system/bin/logcat is the canonical location on Android.
+        execl("/system/bin/logcat", "logcat", "-v", "brief", pidArg,
+               "linker:V", "DEBUG:V", "libc:V", "art:V", "AndroidRuntime:V", "*:S",
+               (char*)nullptr);
+        // exec failed — write a marker and exit.
+        const char* msg = "logcat: exec failed\n";
+        ::write(STDOUT_FILENO, msg, strlen(msg));
+        _exit(127);
+    }
+    // Parent
+    ::close(outfd);
+    return static_cast<jlong>(pid);
+}
+
+// Stop a logcat reader started by nativeStartLogcatCapture. Returns 0 on
+// success, nonzero if kill/wait failed. Safe to call with handle 0 (no-op).
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeStopLogcatCapture(JNIEnv*, jclass, jlong handle) {
+    pid_t pid = static_cast<pid_t>(handle);
+    if (pid <= 0) return 0;
+    if (kill(pid, SIGTERM) < 0) {
+        // Already gone?
+        if (errno != ESRCH) return -1;
+    }
+    int status = 0;
+    // Reap, but don't block forever.
+    for (int i = 0; i < 50; i++) {
+        pid_t r = waitpid(pid, &status, WNOHANG);
+        if (r == pid || (r < 0 && errno == ECHILD)) return 0;
+        if (r < 0) return -1;
+        usleep(20000);  // 20ms
+    }
+    // Force.
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+    return 0;
 }
 
 // Create the singleton instances. Must be called once before any other JNI function.

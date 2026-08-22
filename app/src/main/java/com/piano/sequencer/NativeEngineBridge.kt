@@ -23,11 +23,21 @@ object NativeEngineBridge {
      * or null on failure after logging the reason. Always logs to AppLogger.
      */
     fun preloadLspBundle(context: android.content.Context): String? {
-        val capturePath = java.io.File(context.filesDir, "lsp_load_stderr.log").absolutePath
+        val filesDir = context.filesDir
+        val capturePath = java.io.File(filesDir, "lsp_load_stderr.log").absolutePath
+        val logcatPath = filesDir.absolutePath
+        var logcatHandle = 0L
         try {
             NativeEngineBridge.nativeBeginStderrCapture(capturePath)
         } catch (e: Throwable) {
             AppLogger.warn("NativeEngineBridge", "stderr capture begin failed: ${e.message}")
+        }
+        try {
+            // logcat is the primary capture: on sdk>=30 the linker/Bionic abort
+            // reason goes to logd, not fd 2 (the stderr capture is a fallback).
+            logcatHandle = NativeEngineBridge.nativeStartLogcatCapture(logcatPath)
+        } catch (e: Throwable) {
+            AppLogger.warn("NativeEngineBridge", "logcat capture start failed: ${e.message}")
         }
         try {
             System.loadLibrary("lsp-plugins-ladspa")
@@ -41,6 +51,15 @@ object NativeEngineBridge {
             // exception is raised in Java, so the capture usually has the reason).
             dumpStderrCapture(context, capturePath)
         } finally {
+            // Stop logcat first so its buffer is flushed before we read it.
+            try {
+                if (logcatHandle != 0L) NativeEngineBridge.nativeStopLogcatCapture(logcatHandle)
+            } catch (e: Throwable) {
+                AppLogger.warn("NativeEngineBridge", "logcat capture stop failed: ${e.message}")
+            }
+            // The abort kills the process before we reach here on a SIGABRT, so
+            // the logcat file is read on the next launch (MainActivity).
+            dumpLogcatCapture(context)
             try {
                 NativeEngineBridge.nativeEndStderrCapture()
             } catch (e: Throwable) {
@@ -64,6 +83,20 @@ object NativeEngineBridge {
         }
     }
 
+    /** Surface the logcat capture (if non-empty) in the in-app log. */
+    private fun dumpLogcatCapture(context: android.content.Context) {
+        try {
+            val f = java.io.File(context.filesDir, "lsp_load_logcat.log")
+            if (!f.exists()) return
+            val text = f.readText()
+            if (text.isNotBlank()) {
+                AppLogger.error("NativeEngineBridge", "logcat (during load):\n$text")
+            }
+        } catch (_: Throwable) {
+            // Best-effort
+        }
+    }
+
     external fun nativeInit(): Boolean
     external fun nativeShutdown()
     external fun nativeGetVersion(): String
@@ -74,6 +107,14 @@ object NativeEngineBridge {
     // <filesDir>/lsp_load_stderr.log (read on next launch). Worker thread.
     external fun nativeBeginStderrCapture(path: String)
     external fun nativeEndStderrCapture()
+    // Start/stop a background logcat reader writing this process's logs to
+    // <path>/lsp_load_logcat.log. On sdk>=30 Bionic's load-time abort writes
+    // the reason to logd (NOT fd 2), so the stderr capture is empty and
+    // logcat is the only source of the abort message text without adb.
+    // nativeStartLogcatCapture returns a pid handle (>0) or 0 on failure;
+    // pass it to nativeStopLogcatCapture(). Worker thread.
+    external fun nativeStartLogcatCapture(path: String): Long
+    external fun nativeStopLogcatCapture(handle: Long): Int
     external fun nativeStartAudio(): Int
     external fun nativeStopAudio(): Int
     external fun nativeIsAudioPlaying(): Boolean

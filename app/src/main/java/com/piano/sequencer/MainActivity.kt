@@ -215,6 +215,14 @@ class MainActivity : AppCompatActivity() {
                 if (prevStderr != null) {
                     AppLogger.error("MainActivity", "Previous launch linker stderr (LSP load):\n$prevStderr")
                 }
+                // On sdk>=30 the abort reason goes to logd, not fd 2, so the
+                // stderr capture is often empty — the logcat capture (filtered
+                // to this pid, tags linker/DEBUG/libc/AndroidRuntime) is the
+                // authoritative source of the abort message text.
+                val prevLogcat = readLspLoadLogcat()
+                if (prevLogcat != null) {
+                    AppLogger.error("MainActivity", "Previous launch logcat (LSP load):\n$prevLogcat")
+                }
                 if (!NativeEngineBridge.nativeInit()) {
                     AppLogger.error("MainActivity", "nativeInit() failed")
                     runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this@MainActivity, "Native init failed", Toast.LENGTH_LONG).show() }
@@ -618,6 +626,23 @@ class MainActivity : AppCompatActivity() {
     private fun readLspLoadStderr(): String? {
         return try {
             val f = java.io.File(filesDir, "lsp_load_stderr.log")
+            if (!f.exists()) return null
+            val text = f.readText()
+            f.delete()
+            if (text.isBlank()) null else text
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Read filesDir/lsp_load_logcat.log (the logcat captured around the LSP
+     * bundle load on a previous launch). Returns the contents and DELETES the
+     * file; returns null if absent or empty.
+     */
+    private fun readLspLoadLogcat(): String? {
+        return try {
+            val f = java.io.File(filesDir, "lsp_load_logcat.log")
             if (!f.exists()) return null
             val text = f.readText()
             f.delete()
