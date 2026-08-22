@@ -108,6 +108,25 @@ static void crashHandler(int sig, siginfo_t* si, void* uc) {
         writeAll(fd, "backtrace:\n");
         BtCtx b{fd, 0, 64};
         _Unwind_Backtrace(unwindCb, &b);
+        // _Unwind_Backtrace stops where unwind info ends (often the libc abort
+        // trampoline), so the LSP static-ctor frames above abort() are lost.
+        // Dump /proc/self/maps instead of dl_iterate_phdr: the latter takes
+        // the linker's g_dl_mutex, which is likely already held during a
+        // dlopen-time abort (→ deadlock, nothing flushes). open()/read() are
+        // async-signal-safe; the map shows whether the LSP .so was mapped
+        // before the abort (mapped → fault in a static ctor; not mapped → the
+        // linker aborted during mapping, e.g. soname/dependency conflict).
+        writeAll(fd, "mapped files (from /proc/self/maps):\n");
+        int mfd = ::open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+        if (mfd >= 0) {
+            char mbuf[1024];
+            for (;;) {
+                ssize_t n = ::read(mfd, mbuf, sizeof(mbuf));
+                if (n <= 0) break;
+                ::write(fd, mbuf, static_cast<size_t>(n));
+            }
+            ::close(mfd);
+        }
         writeAll(fd, "=== end ===\n");
         ::fsync(fd);
         ::close(fd);
@@ -143,6 +162,36 @@ void install(const char* logFilePath) {
     sigemptyset(&sa.sa_mask);
     const int sigs[] = { SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE, SIGPIPE };
     for (int s : sigs) sigaction(s, &sa, nullptr);
+}
+
+// --- Scoped stderr (fd 2) capture -------------------------------------------------
+// The Android dynamic linker and Bionic's __libc_fatal / async_safe write the
+// reason for a load-time abort (soname conflict, unsatisfied symbol version,
+// bad ELF, …) to fd 2 *before* calling abort(). The signal handler only sees
+// the abort frames, so without this capture the reason is lost. begin/end
+// redirect fd 2 to a file for the duration of a risky dlopen/loadLibrary.
+static int g_savedStderr = -1;
+
+void beginStderrCapture(const char* capturePath) {
+    if (!capturePath || capturePath[0] == '\0') return;
+    // Only save the original once; a nested begin keeps capturing into the
+    // same file (the outer end restores the real fd).
+    if (g_savedStderr < 0) {
+        g_savedStderr = dup(STDERR_FILENO);
+    }
+    int fd = ::open(capturePath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd >= 0) {
+        dup2(fd, STDERR_FILENO);
+        close(fd);
+    }
+}
+
+void endStderrCapture() {
+    if (g_savedStderr >= 0) {
+        dup2(g_savedStderr, STDERR_FILENO);
+        close(g_savedStderr);
+        g_savedStderr = -1;
+    }
 }
 
 }  // namespace crash

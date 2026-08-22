@@ -208,6 +208,13 @@ class MainActivity : AppCompatActivity() {
                 if (prevCrash != null) {
                     AppLogger.error("MainActivity", "Previous launch native crash:\n$prevCrash")
                 }
+                // Surface the linker stderr captured on a previous launch (the
+                // reason for a load-time SIGABRT — the Bionic/linker fatal
+                // message, which the backtrace alone does not show).
+                val prevStderr = readLspLoadStderr()
+                if (prevStderr != null) {
+                    AppLogger.error("MainActivity", "Previous launch linker stderr (LSP load):\n$prevStderr")
+                }
                 if (!NativeEngineBridge.nativeInit()) {
                     AppLogger.error("MainActivity", "nativeInit() failed")
                     runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this@MainActivity, "Native init failed", Toast.LENGTH_LONG).show() }
@@ -598,6 +605,23 @@ class MainActivity : AppCompatActivity() {
             val text = f.readText()
             f.delete()
             text
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Read filesDir/lsp_load_stderr.log (the linker/Bionic stderr captured
+     * around the LSP bundle load on a previous launch). Returns the contents
+     * and DELETES the file; returns null if absent or empty.
+     */
+    private fun readLspLoadStderr(): String? {
+        return try {
+            val f = java.io.File(filesDir, "lsp_load_stderr.log")
+            if (!f.exists()) return null
+            val text = f.readText()
+            f.delete()
+            if (text.isBlank()) null else text
         } catch (e: Throwable) {
             null
         }

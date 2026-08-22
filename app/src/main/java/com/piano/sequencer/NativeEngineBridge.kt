@@ -13,10 +13,22 @@ object NativeEngineBridge {
      * and packaged as a normal jniLib (same flow as libnative-lib, which loads
      * the same way). Must run on a worker thread (it can throw on failure).
      *
+     * stderr (fd 2) is redirected to <filesDir>/lsp_load_stderr.log around the
+     * load: if the linker aborts (soname/dependency/version conflict), Bionic
+     * writes the reason to fd 2 *before* abort(), and we have no logcat/adb.
+     * The capture is read on the next launch (see MainActivity) and surfaced in
+     * the App Log alongside the native backtrace.
+     *
      * Returns null on success (path not needed — native dlopen uses soname),
      * or null on failure after logging the reason. Always logs to AppLogger.
      */
     fun preloadLspBundle(context: android.content.Context): String? {
+        val capturePath = java.io.File(context.filesDir, "lsp_load_stderr.log").absolutePath
+        try {
+            NativeEngineBridge.nativeBeginStderrCapture(capturePath)
+        } catch (e: Throwable) {
+            AppLogger.warn("NativeEngineBridge", "stderr capture begin failed: ${e.message}")
+        }
         try {
             System.loadLibrary("lsp-plugins-ladspa")
             AppLogger.info("NativeEngineBridge", "loadLibrary(\"lsp-plugins-ladspa\") OK")
@@ -25,14 +37,43 @@ object NativeEngineBridge {
                 "NativeEngineBridge",
                 "loadLibrary(\"lsp-plugins-ladspa\") failed: ${e.javaClass.simpleName}: ${e.message}"
             )
+            // Dump whatever the linker wrote to stderr (it aborts before the
+            // exception is raised in Java, so the capture usually has the reason).
+            dumpStderrCapture(context, capturePath)
+        } finally {
+            try {
+                NativeEngineBridge.nativeEndStderrCapture()
+            } catch (e: Throwable) {
+                AppLogger.warn("NativeEngineBridge", "stderr capture end failed: ${e.message}")
+            }
         }
         return null
+    }
+
+    /** Surface the linker's stderr capture (if non-empty) in the in-app log. */
+    private fun dumpStderrCapture(context: android.content.Context, path: String) {
+        try {
+            val f = java.io.File(path)
+            if (!f.exists()) return
+            val text = f.readText()
+            if (text.isNotBlank()) {
+                AppLogger.error("NativeEngineBridge", "linker stderr:\n$text")
+            }
+        } catch (_: Throwable) {
+            // Best-effort
+        }
     }
 
     external fun nativeInit(): Boolean
     external fun nativeShutdown()
     external fun nativeGetVersion(): String
     external fun nativeInitCrashHandler(path: String)
+    // Scoped stderr (fd 2) capture around a risky native load: the Android
+    // linker / Bionic write the abort reason to fd 2 before abort(). Pair
+    // begin/end around System.loadLibrary so the reason lands in
+    // <filesDir>/lsp_load_stderr.log (read on next launch). Worker thread.
+    external fun nativeBeginStderrCapture(path: String)
+    external fun nativeEndStderrCapture()
     external fun nativeStartAudio(): Int
     external fun nativeStopAudio(): Int
     external fun nativeIsAudioPlaying(): Boolean

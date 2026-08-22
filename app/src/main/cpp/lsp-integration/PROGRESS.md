@@ -147,9 +147,27 @@ Worker-prepared inactive chain + atomic swap.
    (`diagnostics/CrashHandler`) writes the fault PC + an `_Unwind_Backtrace`/
    `dladdr` backtrace to `<filesDir>/native_crash.log`, which `MainActivity`
    surfaces in the App Log on the next launch and then skips the bundle load
-   so the app stays up to read it. Next: get that backtrace, identify the
-   crashing static initializer, and patch it (likely a desktop-only ctor the
-   13 Android patches don't cover). See "On-device load — diagnosis" below.
+   so the app stays up to read it.
+   **First backtrace captured (commit `460b677`, on-device):** the crash is a
+   **SIGABRT (signal 6)**, not a SIGSEGV, and the backtrace is **entirely in
+   `libc.so`** (`abort +0xa0` → anonymous libc frames). The LSP bundle's frames
+   do not appear because `_Unwind_Backtrace` stops where unwind info ends (the
+   libc abort trampoline). The LADSPA plugin registration is lazy, so the abort
+   is triggered during `System.loadLibrary` — i.e. the Android dynamic linker
+   calls `abort()` itself (the classic signature of a load-time failure:
+   soname/dependency conflict, unsatisfied versioned symbol, or bad ELF).
+   Bionic writes the *reason* to **logcat and stderr (fd 2) *before* abort()**;
+   the backtrace alone can't name the culprit, and we have no logcat/adb.
+   **Stderr-capture diag (`<this commit>`):** `CrashHandler` now also
+   (a) dumps `/proc/self/maps` at crash time (async-signal-safe `open`/`read`;
+   `dl_iterate_phdr` would deadlock on the linker's `g_dl_mutex` held during a
+   dlopen abort) — the map shows whether the LSP `.so` was mapped before the
+   abort (mapped ⇒ fault in a static ctor; not mapped ⇒ the linker aborted
+   during mapping), and (b) redirects fd 2 to `<filesDir>/lsp_load_stderr.log`
+   around `System.loadLibrary` (`crash::beginStderrCapture`/`endStderrCapture`
+   via `dup`/`dup2`), so the linker's fatal message is captured. Both files are
+   surfaced in the App Log on the next launch. Next: read the linker stderr +
+   maps and identify the exact abort reason. See "On-device load — diagnosis" below.
 2. **qemu on-device-style run**: the Android `.so` needs `/system/bin/linker64`
    (Bionic dynamic linker), which the NDK does not ship. Options: extract
    linker64 from an Android system image, or run the descriptor dump on a real
@@ -262,20 +280,34 @@ constructor of the linked runtime/common/DSP code, not in the LADSPA entry.
   the crash is an init-time Android incompatibility, not a DSP bug.
 
 ### Next steps
-1. Ship the diag build; on the next launch read the App Log backtrace
-   (`=== native crash ===` … `backtrace:` …). The fault PC + `dladdr` symbol
-   names the crashing ctor.
-2. Patch that ctor for `__ANDROID__` (add to
+1. ✅ DONE (commit `460b677`): shipped the backtrace diag build; the App Log
+   shows the crash is a **SIGABRT** with a **libc-only backtrace** (`abort`
+   machinery) — i.e. the Android linker itself calls `abort()` during
+   `System.loadLibrary`. The fault PC + `dladdr` backtrace alone do NOT name
+   the culprit because the LSP frames above `abort()` are lost.
+2. **Read the linker's fatal message.** Bionic writes the abort reason to
+   stderr (fd 2) *before* `abort()`. The stderr-capture diag (this commit)
+   redirects fd 2 → `<filesDir>/lsp_load_stderr.log` around the load and
+   also dumps `/proc/self/maps` at crash time; both surface in the App Log on
+   the next launch under `Previous launch linker stderr (LSP load):` and the
+   `mapped files (from /proc/self/maps):` block. The maps line tells us
+   whether `liblsp-plugins-ladspa.so` was mapped before the abort.
+3. Patch the root cause for `__ANDROID__` (add to
    `patches/lsp-runtime-lib-android.patch` / `lsp-plugin-fw-android.patch` /
    `lsp-common-lib-android.patch` as appropriate) and update
    `ANDROID_PATCHES.md`.
-3. Re-run CI → install → confirm `loadLibrary("lsp-plugins-ladspa") OK` +
+4. Re-run CI → install → confirm `loadLibrary("lsp-plugins-ladspa") OK` +
    `LSP master effects available: 3/3` in the App Log.
 
 ### CI status (this session)
 - `c36139b` (submodule + CI build) — `success` (run `32559428994`, 8m42s); CI
   APK verified to contain the submodule-built `.so`.
 - `1a49a40` (crash diagnostics) — CI run `32560496489` started.
+- `460b677` (PROGRESS update) — `success` (run `32564653795`, 10m15s); APK
+  verified to contain the `.so` (8 758 616 bytes) + the crash handler in
+  `libnative-lib.so` (`nativeInitCrashHandler`, `crash::install`).
+- **First on-device backtrace captured from `460b677`:** SIGABRT, libc-only
+  frames. → triggered this commit's stderr-capture diag.
 
 ---
 

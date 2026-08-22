@@ -27,6 +27,28 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeInitCrashHandler(JNIEnv* env, 
     crash::install(full.c_str());
 }
 
+// Redirect fd 2 (stderr) to <path>/lsp_load_stderr.log around a risky native
+// load, so the dynamic linker's abort reason (written before abort()) is
+// captured on device without logcat/adb. Pair with nativeEndStderrCapture().
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeBeginStderrCapture(JNIEnv* env, jclass, jstring path) {
+    const char* p = path ? env->GetStringUTFChars(path, nullptr) : nullptr;
+    std::string full;
+    if (p) {
+        full = p;
+        if (!full.empty() && full.back() != '/') full += '/';
+        full += "lsp_load_stderr.log";
+        env->ReleaseStringUTFChars(path, p);
+    }
+    crash::beginStderrCapture(full.c_str());
+}
+
+// Restore stderr saved by nativeBeginStderrCapture.
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeEndStderrCapture(JNIEnv*, jclass) {
+    crash::endStderrCapture();
+}
+
 // Create the singleton instances. Must be called once before any other JNI function.
 JNIEXPORT jboolean JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeInit(JNIEnv* env, jclass) {
