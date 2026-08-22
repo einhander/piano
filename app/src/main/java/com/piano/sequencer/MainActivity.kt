@@ -195,6 +195,19 @@ class MainActivity : AppCompatActivity() {
             // Move engine boot OFF the main thread
             Thread({
                 val svc = playbackService ?: return@Thread
+                // Install the native crash handler FIRST so a native crash
+                // (e.g. while loading the LSP bundle) leaves a backtrace in
+                // filesDir/native_crash.log that we surface on the next launch.
+                try {
+                    NativeEngineBridge.nativeInitCrashHandler(filesDir.absolutePath)
+                } catch (e: Throwable) {
+                    AppLogger.warn("MainActivity", "crash handler install failed: ${e.message}")
+                }
+                // Surface any native crash captured on a previous launch.
+                val prevCrash = readNativeCrashLog()
+                if (prevCrash != null) {
+                    AppLogger.error("MainActivity", "Previous launch native crash:\n$prevCrash")
+                }
                 if (!NativeEngineBridge.nativeInit()) {
                     AppLogger.error("MainActivity", "nativeInit() failed")
                     runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this@MainActivity, "Native init failed", Toast.LENGTH_LONG).show() }
@@ -237,8 +250,19 @@ class MainActivity : AppCompatActivity() {
                 // dlopen then finds it by soname fallback. The bundle is built
                 // from the pinned LSP submodule by CI and packaged as a jniLib.
                 // Result is logged to AppLogger.
-                NativeEngineBridge.preloadLspBundle(this@MainActivity)
-                loadMasterEffectBundle(svc)
+                //
+                // If the previous launch crashed while loading the bundle (a
+                // native_crash.log is present), do NOT retry the load this
+                // launch — leave the chain as a passthrough so the user can
+                // read the captured backtrace and report it. The crash log is
+                // cleared below so a subsequent (manual) reload attempt is
+                // allowed to proceed.
+                if (prevCrash != null) {
+                    AppLogger.warn("MainActivity", "Skipping LSP bundle load: previous launch crashed (see native crash above). Chain stays passthrough.")
+                } else {
+                    NativeEngineBridge.preloadLspBundle(this@MainActivity)
+                    loadMasterEffectBundle(svc)
+                }
 
                 // Restore persisted state (SF2, polyphony, master gain, channel programs)
                 restorePersistedState(svc)
@@ -560,6 +584,23 @@ class MainActivity : AppCompatActivity() {
         val tv = tvLog ?: return
         val entries = AppLogger.getAll()
         tv.text = if (entries.isEmpty()) "No log entries" else entries.joinToString("\n")
+    }
+
+    /**
+     * Read filesDir/native_crash.log (written by the native crash handler on a
+     * previous launch). Returns the contents and DELETES the file so a
+     * subsequent manual reload is allowed; returns null if absent.
+     */
+    private fun readNativeCrashLog(): String? {
+        return try {
+            val f = java.io.File(filesDir, "native_crash.log")
+            if (!f.exists()) return null
+            val text = f.readText()
+            f.delete()
+            text
+        } catch (e: Throwable) {
+            null
+        }
     }
 
     private fun copyLogToClipboard() {

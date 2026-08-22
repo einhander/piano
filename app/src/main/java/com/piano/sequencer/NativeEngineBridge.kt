@@ -32,6 +32,7 @@ object NativeEngineBridge {
     external fun nativeInit(): Boolean
     external fun nativeShutdown()
     external fun nativeGetVersion(): String
+    external fun nativeInitCrashHandler(path: String)
     external fun nativeStartAudio(): Int
     external fun nativeStopAudio(): Int
     external fun nativeIsAudioPlaying(): Boolean

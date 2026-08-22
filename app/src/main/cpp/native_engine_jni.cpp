@@ -7,8 +7,25 @@
 #include "model/TransportState.h"
 #include "engine/MidiRecorder.h"
 #include "synth/FluidSynthEngine.h"
+#include "diagnostics/CrashHandler.h"
 
 extern "C" {
+
+// Install the native crash handler (writes a backtrace to <path>/native_crash.log).
+// Called from Kotlin before any risky native library load so a crash there is
+// captured even though the in-memory AppLogger is lost on process death.
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeInitCrashHandler(JNIEnv* env, jclass, jstring path) {
+    const char* p = path ? env->GetStringUTFChars(path, nullptr) : nullptr;
+    std::string full;
+    if (p) {
+        full = p;
+        if (!full.empty() && full.back() != '/') full += '/';
+        full += "native_crash.log";
+        env->ReleaseStringUTFChars(path, p);
+    }
+    crash::install(full.c_str());
+}
 
 // Create the singleton instances. Must be called once before any other JNI function.
 JNIEXPORT jboolean JNICALL

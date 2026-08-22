@@ -57,6 +57,7 @@ add_library(native-lib SHARED
     effects/ladspa/LadspaRegistry.cpp
     effects/lsp/LspEffectFactory.cpp
     effects/lsp/LspEffectIds.cpp
+    diagnostics/CrashHandler.cpp
 )
 
 # Include directories
