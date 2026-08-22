@@ -189,36 +189,47 @@ Worker-prepared inactive chain + atomic swap.
    `.so`). This is consistent with the host x86-64 `.so` working (the host
    loader resolves the manifest from the build tree / cwd).
 
-   **Diagnosis gap fixed this session (two passes):**
+   **Diagnosis gap fixed this session (three passes):**
    - Pass 1 — the descriptor dump was going to logcat (tag `PianoLSP`),
      unreachable on the dev machine. Routed it into the in-app log via
      `LadspaRegistry::descriptorDump()` + `EffectChain::loadBundle()` appending
      it to `mLoadError` (which flows to App Log through
-     `nativeGetMasterEffectLoadError`). This is what produced the
-     `descriptors=168` line above.
+     `nativeGetMasterEffectLoadError`). This produced the `descriptors=168`
+     line in the on-device log.
    - Pass 2 — the `available==0` error conflated "label not found" with
      "instantiate failed". Fixed: `loadBundle()` now re-queries
      `findByLabel()` per slot and reports, per slot, either
      `FOUND (uid=…) but prepare()/instantiate() FAILED` or
      `NOT FOUND in the descriptor table`, plus a `Summary: N/3 labels found`
-     line that names the actual root cause. The LSP instantiate sub-step +
-     `wrapper->init()` return code are written to `lsp_prepare_marker.log`
-     (by `LadspaEffect::prepare()` + the LSP-side marker), which
-     `MainActivity` surfaces in the App Log on the **next** launch.
+     line that names the actual root cause. The on-device log confirmed:
+     `Summary: 3/3 labels found, 0 prepared` → root cause IS instantiate().
+   - Pass 3 — the `WI_*` sub-step markers were written to
+     `lsp_prepare_marker.log` and read by `MainActivity` on the **next**
+     launch. But CI reinstalls the APK each iteration, which **wipes
+     `filesDir`**, so the marker from the prior launch never survives to be
+     read → the `Previous launch LSP prepare marker:` line was absent from
+     every on-device log. Fixed: `loadBundle()` now reads the marker file
+     **in-process, on the same launch** that wrote it (after `prepare()`
+     returned nullptr) and appends it to `mLoadError` as
+     `Last LSP prepare marker (this launch): <WI_*>`. This pinpoints the
+     exact failing `Wrapper::init()` sub-step in THIS launch's App Log,
+     surviving reinstalls.
 
    Next actions:
    1. Rebuild + install (C++ changes in `libnative-lib.so`; LSP `.so`
       unchanged).
-   2. Launch, **Copy** the App Log → report the new `Per-slot diagnosis:` block
-      (confirms FOUND-vs-NOT-FOUND per slot) AND, on the launch **after that**,
-      the `Previous launch LSP prepare marker:` line (the `WI_*` / `I_CL_WRAP_BYPASS
-      rc=<n>` value — pinpoints the failing `wrapper->init()` sub-step).
-   3. Most probable outcome: all 3 labels FOUND but instantiate FAILED, with the
-      marker at `WI_MANIFEST_NULL` → root cause is the missing
-      `builtin://manifest.json`. Fix candidates: embed the manifest as a static
-      resource in the `.so` (LSP build option), or ship the manifest file
-      alongside the `.so` and point the DirLoader at it, or patch
-      `wrapper->init()` to tolerate a missing manifest (default empty package).
+   2. Launch, **Copy** the App Log → report the `Last LSP prepare marker
+      (this launch): <WI_*>` line at the end of the `Reason:` block. This is
+      the exact failing `Wrapper::init()` sub-step, now visible in the SAME
+      launch (Pass 3 fix — no next-launch/reinstall survival needed).
+   3. Most probable outcome: marker at `WI_MANIFEST_NULL` → the
+      `builtin://manifest.json` resource is unavailable on-device. Fix
+      candidates: embed the manifest as a static resource in the `.so` (LSP
+      build option), ship the manifest file alongside the `.so` and point the
+      DirLoader at it, or patch `wrapper->init()` to tolerate a missing
+      manifest (default empty package). This is a **build/patch** fix in the
+      LSP layer, not an app-code change.
+
 2. **qemu on-device-style run**: the Android `.so` needs `/system/bin/linker64`
    (Bionic dynamic linker), which the NDK does not ship. Options: extract
    linker64 from an Android system image, or run the descriptor dump on a real
@@ -302,22 +313,31 @@ Findings:
   aborting). The original `available==0` message ("label lookup failed") was
   **misleading**: it conflated "label not found" with "instantiate failed".
 
-Diagnostic fix this session (Pass 2):
-- `EffectChain::loadBundle()`: re-queries `findByLabel()` per slot in the
-  `available==0` branch and reports, per slot, either
+Diagnostic fix this session (Pass 2 + Pass 3):
+- Pass 2 — `EffectChain::loadBundle()` re-queries `findByLabel()` per slot
+  in the `available==0` branch and reports, per slot, either
   `FOUND (uid=…) but prepare()/instantiate() FAILED` or
   `NOT FOUND in the descriptor table`, plus a `Summary: N/3 labels found`
-  line that names the real root cause. The LSP-side instantiate sub-step +
-  `wrapper->init()` return code are already written to
-  `lsp_prepare_marker.log` (by the prior `eda7b9d` diag + the
-  `LSP_ANDROID_INSTANTIATE_DIAGNOSTIC` build flag), which `MainActivity`
-  surfaces on the **next** launch.
+  line naming the real root cause. The on-device log confirmed:
+  `Summary: 3/3 labels found, 0 prepared` → instantiate() is the culprit.
+- Pass 3 — the `WI_*` sub-step markers are written to
+  `lsp_prepare_marker.log` (by the prior `eda7b9d` diag +
+  `LSP_ANDROID_INSTANTIATE_DIAGNOSTIC`), but were read by `MainActivity` on the
+  **next** launch. CI reinstalls wipe `filesDir` each iteration, so that marker
+  never survived → the `Previous launch LSP prepare marker:` line was absent
+  from every on-device log. Fixed: `loadBundle()` now reads the marker file
+  **in-process, same launch** (after prepare() returned nullptr) and appends it
+  as `Last LSP prepare marker (this launch): <WI_*>` to `mLoadError`. This
+  pinpoints the exact failing `Wrapper::init()` sub-step in THIS launch's App
+  Log, surviving reinstalls.
 - DSP/audio path untouched (diagnostic-only); host `g++` compiles clean
   (`-Wall -Wextra`, exit 0).
 
-Most probable next-launch outcome: all 3 labels FOUND, instantiate FAILED,
-prepare marker at `WI_MANIFEST_NULL` → root cause is the missing
+Most probable outcome (to confirm with the next on-device log's
+`Last LSP prepare marker` line): all 3 labels FOUND, instantiate FAILED,
+marker at `WI_MANIFEST_NULL` → root cause is the missing
 `builtin://manifest.json` resource on-device.
+
 ---
 
 ## On-device load тАФ diagnosis (current session)
@@ -563,13 +583,12 @@ Notes on the test design:
   Next actions:
   1. Rebuild the APK (C++ changes in `libnative-lib.so`; LSP `.so` unchanged)
      and install.
-  2. Launch, **Copy** the App Log. Report the new `Per-slot diagnosis:` block
-     (expected: all 3 FOUND but prepare FAILED → confirms instantiate is the
-     culprit).
-  3. Launch **again** and report the `Previous launch LSP prepare marker:`
-     line — the `WI_*` / `I_CL_WRAP_BYPASS rc=<n>` value pinpoints the exact
-     failing `wrapper->init()` sub-step.
-  4. Most probable: marker at `WI_MANIFEST_NULL` → the
+  2. Launch, **Copy** the App Log. Report the new `Last LSP prepare marker
+     (this launch): <WI_*>` line at the end of the `Reason:` block — the
+     exact failing `Wrapper::init()` sub-step, now visible in the SAME launch
+     (Pass 3: the marker is read in-process, so it survives CI reinstalls that
+     wipe `filesDir`). No second launch needed.
+  3. Most probable: marker at `WI_MANIFEST_NULL` → the
      `builtin://manifest.json` resource is unavailable on-device (the
      BuiltinLoader has no embedded data, or the DirLoader can't find the file
      in the APK native-lib dir under `extractNativeLibs=false`). Fix

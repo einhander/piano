@@ -6,9 +6,32 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
 #include <string>
 
 namespace piano {
+
+// Read the LSP prepare-marker file (written by LadspaEffect::prepare() and the
+// LSP-side marker() functions, O_TRUNC each write so the LAST sub-step before
+// instantiate() returned NULL wins). This is read in-process on the SAME
+// launch that wrote it, because CI reinstalls wipe filesDir between launches —
+// the "previous launch" read in MainActivity never survives a reinstall. The
+// last marker identifies the failing Wrapper::init() sub-step (WI_MANIFEST_NULL,
+// I_CL_WRAP_BYPASS rc=<n>, etc.).
+static std::string readPrepareMarkerFile() {
+    int fd = ::open("/data/data/com.piano.sequencer/files/lsp_prepare_marker.log",
+                    O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return "(marker file not readable)";
+    char buf[512];
+    ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
+    ::close(fd);
+    if (n <= 0) return "(marker file empty)";
+    buf[n] = '\0';
+    // Strip trailing newline for a cleaner single-line append.
+    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = '\0';
+    return std::string(buf);
+}
 
 EffectChain::EffectChain() = default;
 
@@ -141,6 +164,13 @@ int EffectChain::loadBundle(const char* soPath, double sampleRate, int maxFrames
               "builtin://manifest or resource the BuiltinLoader can't "
               "resolve in the APK native-lib dir)."
             : "Root cause is label lookup (some expected Label is absent).";
+        // Read the LAST prepare marker written during this launch's prepare()
+        // calls (O_TRUNC per write → last slot's failing sub-step wins). This
+        // pinpoints the exact Wrapper::init() sub-step that failed, in THIS
+        // launch's log — no next-launch needed (CI reinstalls wipe filesDir).
+        std::string marker = readPrepareMarkerFile();
+        mLoadError += "\nLast LSP prepare marker (this launch): ";
+        mLoadError += marker;
         LSP_LOGE("loadBundle: %s", mLoadError.c_str());
     } else {
         LSP_LOGI("loadBundle: %d/%d effects available", available, lsp::kMasterEffectCount);
