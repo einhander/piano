@@ -456,14 +456,23 @@ Notes on the test design:
 - `./gradlew :app:testDebugUnitTest` → BUILD SUCCESSFUL (MIDI parser suite).
 
 ### Remaining (next session)
-- **On-device load fix (top priority).** Install the diag build (`c3a19c5`
-  CI APK), reopen the app, read the `=== native crash ===` backtrace now shown
-  in the App Log. The PAC-stripped backtrace resolves ALL frames (including
-  the LSP frame that previously showed a bogus tagged address). The
-  `lsp_prepare_marker.log` entry tells us WHICH LSP call (instantiate /
-  connect_port / activate) was in progress when the abort fired. The logcat
-  capture (if the fork succeeded) shows the abort message text from
-  linker/DEBUG/libc/AndroidRuntime tags.
+- **On-device load fix (top priority).** Install the diag build (`959e4cc`
+  CI run `32576112937`, artifact `app-debug-apk`), reopen the app, read the
+  App Log. The `lsp_prepare_marker.log` now shows the **exact sub-step** of
+  `instantiate()` that was in progress when the abort fired:
+  - `I_RL_NULL` → resource loader unavailable (primary cause);
+  - `I_WINIT_RC=<n>` → `wrapper->init()` returned a non-OK status code
+    (primary cause; `n` is the numeric status_t value);
+  - `I_WINIT_OK` then a later crash → the failure is after init, in
+    connect_port/activate;
+  - a marker earlier than `I_PLUGIN_OK` → the failure is in factory/plugin
+    creation.
+  With `LSP_ANDROID_INSTANTIATE_DIAGNOSTIC` defined, destructive cleanup
+  (`delete wrapper/loader/plugin`) after a failed init is bypassed, so the
+  SIGABRT (which previously fired during cleanup of a partially-initialized
+  object) should NOT occur. If the app no longer crashes but `instantiate()`
+  returns nullptr, the primary failure is confirmed and the secondary
+  cleanup crash is confirmed.
 - On-device runtime validation (after the load is fixed): open "Master
   Effects", confirm the 3 cards render with correct ranges and that
   toggling/sliding changes the signal.
