@@ -72,8 +72,8 @@ chain delay compensation. Hint bits decoded: `0x4`=logarithmic, `0x20`=toggled,
 | Piano stable name | Port | Range        | Hint      | Notes |
 |-------------------|------|--------------|-----------|-------|
 | `bypass`          | 8    | 0..1         | tog       | plugin bypass |
-| `input_gain`      | 9    | 0..1000      | log,sr    | input trim (G) |
-| `output_gain`     | 10   | 0..1000      | log,sr    | output trim (G) |
+| `input_gain`      | 9    | 0..1000      | log,sr    | input trim (G); app clamps to 0..10 |
+| `output_gain`     | 10   | 0..1000      | log,sr    | output trim (G); app clamps to 0..10 |
 | `compression_mode`| 28   | 0..2         | int       | 0=classic; set ≠0 for active comp |
 | `threshold`       | 29   | 0.001..1     | sr        | attack threshold (G) |
 | `attack_ms`       | 30   | 0..2000      | sr        | attack time |
@@ -89,8 +89,8 @@ chain delay compensation. Hint bits decoded: `0x4`=logarithmic, `0x20`=toggled,
 | Piano stable name | Port | Range          | Hint   | Notes |
 |-------------------|------|----------------|--------|-------|
 | `bypass`          | 8    | 0..1           | tog    | plugin bypass |
-| `input_gain`      | 9    | 0..1000        | log,sr | input trim (G) |
-| `output_gain`     | 10   | 0..1000        | log,sr | output trim (G) |
+| `input_gain`      | 9    | 0..1000        | log,sr | input trim (G); app clamps to 0..10 |
+| `output_gain`     | 10   | 0..1000        | log,sr | output trim (G); app clamps to 0..10 |
 | `threshold`       | 16   | 0.00398..1     | log,sr | ceiling threshold (G) |
 | `lookahead_ms`    | 19   | 0.1..20        | sr     | lookahead |
 | `attack_ms`       | 20   | 0.25..20       | sr     | attack time |

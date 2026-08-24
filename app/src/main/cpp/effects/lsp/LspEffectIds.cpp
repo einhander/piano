@@ -30,8 +30,8 @@ static const ParamPort kEqPorts[] = {
 // Without these two mapped, the compressor is a silent passthrough at unity.
 static const ParamPort kCompPorts[] = {
     {kParamBypass,          8,   0.0f,    1.0f,       0.0f, false, false, true},
-    {kParamInputGain,       9,   0.0f,    1000.0f,    1.0f, true,  false, false},
-    {kParamOutputGain,      10,  0.0f,    1000.0f,    1.0f, true,  false, false},
+    {kParamInputGain,       9,   0.0f,    10.0f,      1.0f, true,  false, false},
+    {kParamOutputGain,      10,  0.0f,    10.0f,      1.0f, true,  false, false},
     {kParamCompMode,        28,  0.0f,    2.0f,       0.0f, false, true,  false},
     {kParamCompThreshold,   29,  0.001f,  1.0f,       0.177828f, false, false, false},
     {kParamCompAttackMs,    30,  0.0f,    2000.0f,    20.0f, false, false, false},
@@ -49,8 +49,8 @@ static const ParamPort kCompPorts[] = {
 // ── Limiter ──
 static const ParamPort kLimPorts[] = {
     {kParamBypass,          8,   0.0f,    1.0f,       0.0f, false, false, true},
-    {kParamInputGain,       9,   0.0f,    1000.0f,    1.0f, true,  false, false},
-    {kParamOutputGain,      10,  0.0f,    1000.0f,    1.0f, true,  false, false},
+    {kParamInputGain,       9,   0.0f,    10.0f,      1.0f, true,  false, false},
+    {kParamOutputGain,      10,  0.0f,    10.0f,      1.0f, true,  false, false},
     {kParamLimThreshold,    16,  0.00398107f, 1.0f,   1.0f, true,  false, false},
     {kParamLimLookaheadMs,  19,  0.1f,    20.0f,      3.0f, false, false, false},
     {kParamLimAttackMs,     20,  0.25f,   20.0f,      10.0f, false, false, false},
@@ -105,8 +105,8 @@ static const EffectParameterDescriptor kEqDescriptors[] = {
 
 static const EffectParameterDescriptor kCompDescriptors[] = {
     {kParamBypass,        "bypass",      "Bypass",            0.0f,    1.0f,       0.0f, false, false, true},
-    {kParamInputGain,     "input_gain",  "Input gain",        0.0f,    1000.0f,    1.0f, true,  false, false},
-    {kParamOutputGain,    "output_gain", "Output gain",       0.0f,    1000.0f,    1.0f, true,  false, false},
+    {kParamInputGain,     "input_gain",  "Input gain",        0.0f,    10.0f,      1.0f, true,  false, false},
+    {kParamOutputGain,    "output_gain", "Output gain",       0.0f,    10.0f,      1.0f, true,  false, false},
     {kParamCompMode,      "mode",        "Mode",              0.0f,    2.0f,       0.0f, false, true,  false},
     {kParamCompThreshold, "threshold",   "Threshold",         0.001f,  1.0f,       0.177828f, false, false, false},
     {kParamCompAttackMs,  "attack",      "Attack (ms)",       0.0f,    2000.0f,    20.0f, false, false, false},
@@ -123,8 +123,8 @@ static const EffectParameterDescriptor kCompDescriptors[] = {
 
 static const EffectParameterDescriptor kLimDescriptors[] = {
     {kParamBypass,         "bypass",      "Bypass",        0.0f,    1.0f,       0.0f, false, false, true},
-    {kParamInputGain,      "input_gain",  "Input gain",    0.0f,    1000.0f,    1.0f, true,  false, false},
-    {kParamOutputGain,     "output_gain", "Output gain",  0.0f,    1000.0f,    1.0f, true,  false, false},
+    {kParamInputGain,      "input_gain",  "Input gain",    0.0f,    10.0f,      1.0f, true,  false, false},
+    {kParamOutputGain,     "output_gain", "Output gain",  0.0f,    10.0f,      1.0f, true,  false, false},
     {kParamLimThreshold,   "threshold",   "Threshold",    0.00398107f, 1.0f,   1.0f, true,  false, false},
     {kParamLimLookaheadMs, "lookahead",   "Lookahead (ms)", 0.1f, 20.0f,    3.0f, false, false, false},
     {kParamLimAttackMs,    "attack",      "Attack (ms)",   0.25f,   20.0f,     10.0f, false, false, false},

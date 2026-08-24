@@ -682,3 +682,37 @@ Notes on the test design:
   swap when the device rate differs from the chain's prepared rate.
 - ARMv7 fallback (Milestone 10): the LSP `.so` is arm64-v8a only; on ARMv7
   devices `loadMasterEffectBundle()` returns 0 and the chain stays bypassed.
+
+---
+
+## Session update -- compressor/limiter gain range clamped 0..10
+
+### What changed
+The `input_gain` / `output_gain` parameters (ports 9/10) for the
+**compressor** and **limiter** were exposed to the UI with a range of
+`0..1000` (matching the upstream LADSPA `PortRangeHint`). A 0..1000 linear
+trim is far too coarse for a UI slider -- the useful range is 0..1 with a
+little headroom -- so the app now clamps these to **`0..10`** (10x = +20 dB
+headroom), matching the parametric EQ which already used `0..10`.
+
+- `effects/lsp/LspEffectIds.cpp`: updated both the runtime `ParamPort`
+  tables (`kCompPorts`, `kLimPorts`) and the UI-facing
+  `EffectParameterDescriptor` tables (`kCompDescriptors`, `kLimDescriptors`)
+  -- four tables, eight range values `1000.0f -> 10.0f`. Defaults (1.0f) and
+  the `logarithmic`/`sr` flags are unchanged. The parametric EQ tables were
+  already `0..10` and are untouched.
+- `lsp-integration/patches/LADSPA_DESCRIPTORS.md`: noted the app clamp on
+  the compressor and limiter `input_gain`/`output_gain` rows (the doc still
+  records the native LADSPA range `0..1000` for port-reference purposes).
+
+### Verification
+- `./build.sh debug` -> `BUILD SUCCESSFUL`.
+- `./gradlew :app:testDebugUnitTest` -> all unit tests pass.
+- The DSP path is unaffected: the clamp only changes the UI/parameter
+  envelope, not the LADSPA plugin's native port range.
+
+### Note
+The `makeup` gain (compressor, `0.001..1000`) is a separate parameter and
+was intentionally left at its native range -- only the input/output trim
+gains were clamped per the request.
+
