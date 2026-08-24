@@ -59,6 +59,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var aboutButton: Button
     private lateinit var settingsButton: Button
     private lateinit var instrumentsButton: Button
+    private lateinit var effectsButton: Button
     private lateinit var midiStatusText: TextView
     private lateinit var midiDeviceButton: Button
 
@@ -145,6 +146,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // SAF "save as" picker: writes the current App Log to the chosen file.
+    private val saveLogLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        val entries = AppLogger.getAll()
+        if (entries.isEmpty()) {
+            Toast.makeText(this, "Log is empty", Toast.LENGTH_SHORT).show()
+            return@registerForActivityResult
+        }
+        val text = entries.joinToString("\n")
+        try {
+            contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
+            Toast.makeText(this, "Log saved", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
     // SAF file picker for MIDI import
     private val midiImportLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
@@ -194,6 +214,41 @@ class MainActivity : AppCompatActivity() {
             // Move engine boot OFF the main thread
             Thread({
                 val svc = playbackService ?: return@Thread
+                // Install the native crash handler FIRST so a native crash
+                // (e.g. while loading the LSP bundle) leaves a backtrace in
+                // filesDir/native_crash.log that we surface on the next launch.
+                try {
+                    NativeEngineBridge.nativeInitCrashHandler(filesDir.absolutePath)
+                } catch (e: Throwable) {
+                    AppLogger.warn("MainActivity", "crash handler install failed: ${e.message}")
+                }
+                // Surface any native crash captured on a previous launch.
+                val prevCrash = readNativeCrashLog()
+                if (prevCrash != null) {
+                    AppLogger.error("MainActivity", "Previous launch native crash:\n$prevCrash")
+                }
+                // Surface the linker stderr captured on a previous launch (the
+                // reason for a load-time SIGABRT — the Bionic/linker fatal
+                // message, which the backtrace alone does not show).
+                val prevStderr = readLspLoadStderr()
+                if (prevStderr != null) {
+                    AppLogger.error("MainActivity", "Previous launch linker stderr (LSP load):\n$prevStderr")
+                }
+                // On sdk>=30 the abort reason goes to logd, not fd 2, so the
+                // stderr capture is often empty — the logcat capture (filtered
+                // to this pid, tags linker/DEBUG/libc/AndroidRuntime) is the
+                // authoritative source of the abort message text.
+                val prevLogcat = readLspLoadLogcat()
+                if (prevLogcat != null) {
+                    AppLogger.error("MainActivity", "Previous launch logcat (LSP load):\n$prevLogcat")
+                }
+                // The prepare-phase marker tells us WHICH LSP call (instantiate
+                // / connect_port / activate) was in progress when the abort
+                // fired — the backtrace alone can't distinguish them.
+                val prevMarker = readLspPrepareMarker()
+                if (prevMarker != null) {
+                    AppLogger.error("MainActivity", "Previous launch LSP prepare marker:\n$prevMarker")
+                }
                 if (!NativeEngineBridge.nativeInit()) {
                     AppLogger.error("MainActivity", "nativeInit() failed")
                     runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this@MainActivity, "Native init failed", Toast.LENGTH_LONG).show() }
@@ -222,6 +277,33 @@ class MainActivity : AppCompatActivity() {
                     return@Thread
                 }
                 AppLogger.info("MainActivity", "Engine initialized (${actualRate}Hz, 512 buffer)")
+
+                // Load the prebuilt LSP LADSPA bundle (master effect chain: EQ →
+                // Compressor → Limiter). Extracted into nativeLibraryDir at
+                // install time by the jniLibs sourceSet. Best-effort: if it is
+                // missing/incompatible, loadMasterEffectBundle() returns 0 and
+                // the chain stays a passthrough (the engine keeps running).
+                // Effects are loaded DISABLED (bypassed) by default; the UI
+                // toggles them on after the user opts in.
+                //
+                // Pre-load the bundle via System.loadLibrary so the linker
+                // resolves its NEEDED deps and registers the soname; the native
+                // dlopen then finds it by soname fallback. The bundle is built
+                // from the pinned LSP submodule by CI and packaged as a jniLib.
+                // Result is logged to AppLogger.
+                //
+                // If the previous launch crashed while loading the bundle (a
+                // native_crash.log is present), do NOT retry the load this
+                // launch — leave the chain as a passthrough so the user can
+                // read the captured backtrace and report it. The crash log is
+                // cleared below so a subsequent (manual) reload attempt is
+                // allowed to proceed.
+                if (prevCrash != null) {
+                    AppLogger.warn("MainActivity", "Skipping LSP bundle load: previous launch crashed (see native crash above). Chain stays passthrough.")
+                } else {
+                    NativeEngineBridge.preloadLspBundle(this@MainActivity)
+                    loadMasterEffectBundle(svc)
+                }
 
                 // Restore persisted state (SF2, polyphony, master gain, channel programs)
                 restorePersistedState(svc)
@@ -361,9 +443,15 @@ class MainActivity : AppCompatActivity() {
             }
         }
         instrumentsButton = Button(this).apply {
-            text = "Instruments"
+            text = getString(R.string.instruments_title)
             setOnClickListener {
                 startActivity(Intent(this@MainActivity, InstrumentActivity::class.java))
+            }
+        }
+        effectsButton = Button(this).apply {
+            text = getString(R.string.master_effects_title)
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, EffectsActivity::class.java))
             }
         }
         layout.addView(statusText)
@@ -384,9 +472,10 @@ class MainActivity : AppCompatActivity() {
         layout.addView(projectsButton)
         layout.addView(aboutButton)
         layout.addView(instrumentsButton)
+        layout.addView(effectsButton)
         layout.addView(settingsButton)
         layout.addView(Button(this).apply {
-            text = "Sequencer"
+            text = getString(R.string.sequencer_title)
             setOnClickListener {
                 startActivity(Intent(this@MainActivity, SequencerActivity::class.java))
             }
@@ -538,6 +627,80 @@ class MainActivity : AppCompatActivity() {
         tv.text = if (entries.isEmpty()) "No log entries" else entries.joinToString("\n")
     }
 
+    /**
+     * Read filesDir/native_crash.log (written by the native crash handler on a
+     * previous launch). Returns the contents and DELETES the file so a
+     * subsequent manual reload is allowed; returns null if absent.
+     */
+    private fun readNativeCrashLog(): String? {
+        return try {
+            val f = java.io.File(filesDir, "native_crash.log")
+            if (!f.exists()) return null
+            val text = f.readText()
+            f.delete()
+            text
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Read filesDir/lsp_load_stderr.log (the linker/Bionic stderr captured
+     * around the LSP bundle load on a previous launch). Returns the contents
+     * and DELETES the file; returns null if absent or empty.
+     */
+    private fun readLspLoadStderr(): String? {
+        return try {
+            val f = java.io.File(filesDir, "lsp_load_stderr.log")
+            if (!f.exists()) return null
+            val text = f.readText()
+            f.delete()
+            if (text.isBlank()) null else text
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Read filesDir/lsp_load_logcat.log (the logcat captured around the LSP
+     * bundle load on a previous launch). Returns the contents and DELETES the
+     * file; returns null if absent or empty.
+     */
+    private fun readLspLoadLogcat(): String? {
+        return try {
+            val f = java.io.File(filesDir, "lsp_load_logcat.log")
+            if (!f.exists()) return null
+            val text = f.readText()
+            f.delete()
+            if (text.isBlank()) null else text
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Read filesDir/lsp_prepare_marker.log — the phase marker written by
+     * LadspaEffect::prepare() before each LSP call, by the LSP instantiate()
+     * function (I_* markers), AND by Wrapper::init() with finer-grained
+     * sub-step markers (WI_ENTER, WI_MANIFEST_B/OK/NULL, WI_MLOAD_B/RC,
+     * WI_PORTS_B/OK, WI_REORDER_*, WI_PINIT_B/OK, WI_OK). The last marker
+     * written before a crash identifies the failing sub-step. When
+     * LSP_ANDROID_INSTANTIATE_DIAGNOSTIC is defined, the bypass marker
+     * I_CL_WRAP_BYPASS includes the wrapper->init() return code (rc=<n>).
+     * Cleared on next successful prepare.
+     */
+    private fun readLspPrepareMarker(): String? {
+        return try {
+            val f = java.io.File(filesDir, "lsp_prepare_marker.log")
+            if (!f.exists()) return null
+            val text = f.readText()
+            f.delete()
+            if (text.isBlank()) null else text
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
     private fun copyLogToClipboard() {
         val entries = AppLogger.getAll()
         if (entries.isEmpty()) {
@@ -572,6 +735,67 @@ class MainActivity : AppCompatActivity() {
     // (SF2, polyphony, master gain, channel programs) is reset to defaults.
     // If the engine survived (activity recreation) its state is intact — the
     // sfcount guard skips the restore.
+    /**
+     * Load the prebuilt LSP LADSPA bundle into the master effect chain. Called
+     * on the worker thread after the engine is initialized. The bundle is
+     * packaged as a jniLib and extracted to nativeLibraryDir at install time.
+     * Effects are loaded DISABLED (bypassed); the UI enables them on opt-in.
+     */
+    private fun loadMasterEffectBundle(svc: PlaybackService) {
+        // The bundle is packaged as a jniLib (lib/arm64-v8a/liblsp-plugins-ladspa.so).
+        // It is pre-loaded via System.loadLibrary above so the linker registers its
+        // soname; the native dlopen then resolves it by soname fallback even if the
+        // file is not materialized in nativeLibraryDir (extractNativeLibs=false).
+        val libDir = applicationInfo.nativeLibraryDir
+        val soPath = "$libDir/liblsp-plugins-ladspa.so"
+        AppLogger.info("MainActivity", "Loading LSP bundle: $soPath")
+        if (!java.io.File(soPath).exists()) {
+            AppLogger.info("MainActivity", "LSP bundle not on disk at $soPath (extractNativeLibs=false) — relying on soname fallback")
+        }
+        val available = try {
+            svc.loadMasterEffectBundle(soPath)
+        } catch (e: UnsatisfiedLinkError) {
+            AppLogger.error("MainActivity", "LSP bundle load threw UnsatisfiedLinkError: ${e.message}")
+            0
+        } catch (e: Exception) {
+            AppLogger.error("MainActivity", "LSP bundle load threw ${e.javaClass.simpleName}: ${e.message}")
+            0
+        }
+        if (available > 0) {
+            AppLogger.info("MainActivity", "LSP master effects available: $available/${svc.getMasterEffectCount()}")
+            restorePersistedEffectState(svc, available)
+        } else {
+            val reason = runCatching { svc.getMasterEffectLoadError() }.getOrDefault("")
+            AppLogger.error(
+                "MainActivity",
+                "LSP master effects unavailable (chain bypassed). Reason: ${reason.ifEmpty { "none reported" }}"
+            )
+        }
+    }
+
+    /**
+     * Re-apply persisted master-effect enable flags and parameter values after
+     * the bundle is (re)loaded. Effects default to bypassed; this restores the
+     * user's last choices across process death. Worker thread only (direct JNI).
+     */
+    private fun restorePersistedEffectState(svc: PlaybackService, effectCount: Int) {
+        val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+        for (slot in 0 until effectCount) {
+            val paramCount = try { svc.getMasterEffectParamCount(slot) } catch (e: Exception) { continue }
+            for (index in 0 until paramCount) {
+                val info = svc.getMasterEffectParamInfo(slot, index) ?: continue
+                if (info.size < 1) continue
+                val paramId = info[0].toInt()
+                if (prefs.contains("fx_param_${slot}_$paramId")) {
+                    val v = prefs.getFloat("fx_param_${slot}_$paramId", info[3])
+                    try { svc.setMasterEffectParameter(slot, paramId, v) } catch (e: Exception) { }
+                }
+            }
+            val enabled = prefs.getBoolean("fx_enabled_$slot", false)
+            try { svc.setMasterEffectEnabled(slot, enabled) } catch (e: Exception) { }
+        }
+    }
+
     private fun restorePersistedState(svc: PlaybackService) {
         // A fresh engine always starts with no SoundFonts, so sfcount > 0
         // means the engine survived (activity recreation) — state intact.
@@ -937,11 +1161,14 @@ class MainActivity : AppCompatActivity() {
             textSize = 12f
             setPadding(0, 0, 8, 0)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            // Clicking the folder label opens the SAF picker to choose where
+            // crash.log is written (was the "Choose" button's job).
+            setOnClickListener { logFolderLauncher.launch(null) }
         }
         logFolderRow.addView(tvLogFolder)
         logFolderRow.addView(Button(this).apply {
-            text = "Choose"
-            setOnClickListener { logFolderLauncher.launch(null) }
+            text = "Save"
+            setOnClickListener { saveLogLauncher.launch("piano_log.txt") }
         })
         card.addView(logFolderRow)
         updateLogFolderLabel()

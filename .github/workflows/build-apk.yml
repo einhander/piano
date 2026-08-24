@@ -13,10 +13,16 @@ name: Build APK
 #
 # GitHub Releases: pushing a tag v* (e.g. v0.1.0) runs the build, then a
 # second `release` job creates a GitHub Release with the signed APK attached.
+#
+# Versioning: app/build.gradle.kts derives versionName from git. Tag-triggered
+# builds (HEAD == a tag) ship the bare version ("0.0.5"); every other build
+# (branch/PR/local) appends the short commit hash ("0.0.5~abc1234") so the
+# exact source of an APK is identifiable. No CI-specific wiring is needed —
+# the gradle script auto-detects the tag via `git describe --exact-match`.
 
 on:
   push:
-    branches: [master, gh-wf]
+    branches: [master, feature/lsp-plugins-integration]
     tags: ['v*']
   pull_request:
     branches: [master]
@@ -116,6 +122,19 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
+
+      - name: Build LSP LADSPA bundle from the submodule
+        # Cross-compile liblsp-plugins-ladspa.so (arm64-v8a) from the pinned LSP
+        # submodule (third_party/lsp @ 1.2.34) and copy it into the jniLibs
+        # prebuilt dir before assembling the APK, so the APK ships the bundle.
+        # The .so is gitignored; it must be (re)produced here every CI run.
+        run: |
+          set -e
+          bash app/src/main/cpp/lsp-integration/build-lsp-ladspa-android.sh
+          mkdir -p app/src/main/cpp/lsp-integration/prebuilt/arm64-v8a
+          cp app/src/main/cpp/third_party/lsp/.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so \
+             app/src/main/cpp/lsp-integration/prebuilt/arm64-v8a/liblsp-plugins-ladspa.so
+          ls -lh app/src/main/cpp/lsp-integration/prebuilt/arm64-v8a/liblsp-plugins-ladspa.so
 
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon --warning-mode none

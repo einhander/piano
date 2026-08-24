@@ -5,9 +5,116 @@ object NativeEngineBridge {
         System.loadLibrary("native-lib")
     }
 
+    /**
+     * Pre-load the LSP LADSPA bundle via System.loadLibrary so the Android
+     * linker resolves its NEEDED deps and registers the soname in the app
+     * namespace; the native LadspaRegistry::open() then resolves it via its
+     * soname fallback. The bundle is built from the pinned LSP submodule by CI
+     * and packaged as a normal jniLib (same flow as libnative-lib, which loads
+     * the same way). Must run on a worker thread (it can throw on failure).
+     *
+     * stderr (fd 2) is redirected to <filesDir>/lsp_load_stderr.log around the
+     * load: if the linker aborts (soname/dependency/version conflict), Bionic
+     * writes the reason to fd 2 *before* abort(), and we have no logcat/adb.
+     * The capture is read on the next launch (see MainActivity) and surfaced in
+     * the App Log alongside the native backtrace.
+     *
+     * Returns null on success (path not needed — native dlopen uses soname),
+     * or null on failure after logging the reason. Always logs to AppLogger.
+     */
+    fun preloadLspBundle(context: android.content.Context): String? {
+        val filesDir = context.filesDir
+        val capturePath = java.io.File(filesDir, "lsp_load_stderr.log").absolutePath
+        val logcatPath = filesDir.absolutePath
+        var logcatHandle = 0L
+        try {
+            NativeEngineBridge.nativeBeginStderrCapture(capturePath)
+        } catch (e: Throwable) {
+            AppLogger.warn("NativeEngineBridge", "stderr capture begin failed: ${e.message}")
+        }
+        try {
+            // logcat is the primary capture: on sdk>=30 the linker/Bionic abort
+            // reason goes to logd, not fd 2 (the stderr capture is a fallback).
+            logcatHandle = NativeEngineBridge.nativeStartLogcatCapture(logcatPath)
+        } catch (e: Throwable) {
+            AppLogger.warn("NativeEngineBridge", "logcat capture start failed: ${e.message}")
+        }
+        try {
+            System.loadLibrary("lsp-plugins-ladspa")
+            AppLogger.info("NativeEngineBridge", "loadLibrary(\"lsp-plugins-ladspa\") OK")
+        } catch (e: Throwable) {
+            AppLogger.error(
+                "NativeEngineBridge",
+                "loadLibrary(\"lsp-plugins-ladspa\") failed: ${e.javaClass.simpleName}: ${e.message}"
+            )
+            // Dump whatever the linker wrote to stderr (it aborts before the
+            // exception is raised in Java, so the capture usually has the reason).
+            dumpStderrCapture(context, capturePath)
+        } finally {
+            // Stop logcat first so its buffer is flushed before we read it.
+            try {
+                if (logcatHandle != 0L) NativeEngineBridge.nativeStopLogcatCapture(logcatHandle)
+            } catch (e: Throwable) {
+                AppLogger.warn("NativeEngineBridge", "logcat capture stop failed: ${e.message}")
+            }
+            // The abort kills the process before we reach here on a SIGABRT, so
+            // the logcat file is read on the next launch (MainActivity).
+            dumpLogcatCapture(context)
+            try {
+                NativeEngineBridge.nativeEndStderrCapture()
+            } catch (e: Throwable) {
+                AppLogger.warn("NativeEngineBridge", "stderr capture end failed: ${e.message}")
+            }
+        }
+        return null
+    }
+
+    /** Surface the linker's stderr capture (if non-empty) in the in-app log. */
+    private fun dumpStderrCapture(context: android.content.Context, path: String) {
+        try {
+            val f = java.io.File(path)
+            if (!f.exists()) return
+            val text = f.readText()
+            if (text.isNotBlank()) {
+                AppLogger.error("NativeEngineBridge", "linker stderr:\n$text")
+            }
+        } catch (_: Throwable) {
+            // Best-effort
+        }
+    }
+
+    /** Surface the logcat capture (if non-empty) in the in-app log. */
+    private fun dumpLogcatCapture(context: android.content.Context) {
+        try {
+            val f = java.io.File(context.filesDir, "lsp_load_logcat.log")
+            if (!f.exists()) return
+            val text = f.readText()
+            if (text.isNotBlank()) {
+                AppLogger.error("NativeEngineBridge", "logcat (during load):\n$text")
+            }
+        } catch (_: Throwable) {
+            // Best-effort
+        }
+    }
+
     external fun nativeInit(): Boolean
     external fun nativeShutdown()
     external fun nativeGetVersion(): String
+    external fun nativeInitCrashHandler(path: String)
+    // Scoped stderr (fd 2) capture around a risky native load: the Android
+    // linker / Bionic write the abort reason to fd 2 before abort(). Pair
+    // begin/end around System.loadLibrary so the reason lands in
+    // <filesDir>/lsp_load_stderr.log (read on next launch). Worker thread.
+    external fun nativeBeginStderrCapture(path: String)
+    external fun nativeEndStderrCapture()
+    // Start/stop a background logcat reader writing this process's logs to
+    // <path>/lsp_load_logcat.log. On sdk>=30 Bionic's load-time abort writes
+    // the reason to logd (NOT fd 2), so the stderr capture is empty and
+    // logcat is the only source of the abort message text without adb.
+    // nativeStartLogcatCapture returns a pid handle (>0) or 0 on failure;
+    // pass it to nativeStopLogcatCapture(). Worker thread.
+    external fun nativeStartLogcatCapture(path: String): Long
+    external fun nativeStopLogcatCapture(handle: Long): Int
     external fun nativeStartAudio(): Int
     external fun nativeStopAudio(): Int
     external fun nativeIsAudioPlaying(): Boolean
@@ -125,6 +232,30 @@ object NativeEngineBridge {
     // Master bus controls
     external fun nativeSetMasterVolume(volume: Float)
     external fun nativeGetMasterPeakMeter(): Float
+
+    // ── Master effect chain (LSP) — worker thread only ──
+    // Loads the LSP LADSPA bundle and prepares the fixed 3-effect chain
+    // (EQ → Compressor → Limiter). Returns the number of effects available
+    // (0..3). If the bundle cannot be opened, returns 0 and the chain stays
+    // bypassed (the engine keeps running). Call from a worker thread.
+    external fun nativeLoadMasterEffectBundle(soPath: String): Int
+    external fun nativeIsMasterEffectChainAvailable(): Boolean
+    external fun nativeGetMasterEffectCount(): Int
+    external fun nativeSetMasterEffectEnabled(slot: Int, enabled: Boolean)
+    external fun nativeIsMasterEffectEnabled(slot: Int): Boolean
+    external fun nativeSetMasterEffectParameter(slot: Int, parameterId: Int, value: Float)
+    external fun nativeGetMasterEffectParameter(slot: Int, parameterId: Int): Float
+    external fun nativeGetMasterEffectStableId(slot: Int): String
+    // Human-readable reason for the last loadMasterEffectBundle failure
+    // (empty on success). Safe from any thread.
+    external fun nativeGetMasterEffectLoadError(): String
+    // Static parameter metadata for the UI (safe from any thread).
+    // nativeGetMasterEffectParamInfo returns null for an out-of-range index,
+    // else a FloatArray of 7: [paramId, min, max, def, log, integer, toggled]
+    // (the last three are 0.0/1.0 flags).
+    external fun nativeGetMasterEffectParamCount(slot: Int): Int
+    external fun nativeGetMasterEffectParamInfo(slot: Int, index: Int): FloatArray?
+    external fun nativeGetMasterEffectParamName(slot: Int, index: Int): String
 
     // Count-in metronome
     external fun nativeStartCountIn(beats: Int): Long

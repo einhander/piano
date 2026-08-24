@@ -38,6 +38,15 @@ app/src/main/cpp/3rdparty/fluidsynth/libfluidsynth.pc
 app/src/main/cpp/3rdparty/fluidsynth/include/fluidsynth/
 
 # Oboe build artifacts
+
+# LSP Plugins integration (Phase 1). third_party/lsp is a git submodule
+# pinned to upstream tag 1.2.34 (lsp-plugins/lsp-plugins). CI builds the
+# LADSPA bundle from it via build-lsp-ladspa-android.sh and copies the .so
+# into prebuilt/ before assembling the APK. The .so itself stays gitignored.
+# The nested module repos under modules/ are fetched by `make fetch` at build
+# time (not part of the submodule tree).
+app/src/main/cpp/lsp-integration/prebuilt/**/*.so
+
 app/src/main/cpp/3rdparty/oboe/build/
 
 # Project files

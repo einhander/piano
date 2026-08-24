@@ -1,0 +1,239 @@
+diff --git a/dependencies.mk b/dependencies.mk
+index a79cb79..e49e8be 100644
+--- a/dependencies.mk
++++ b/dependencies.mk
+@@ -119,3 +119,10 @@ ALL_DEPENDENCIES = \
+   $(MACOS_TEST_DEPENDENCIES) \
+   $(HAIKU_TEST_DEPENDENCIES)
+ 
++# --- Android cross-compile: libsndfile is not available on bionic and the
++# LADSPA DSP path does not load audio files from disk, so drop it from the
++# build dependency list (and thus the -DUSE_LIBSNDFILE define / link flags).
++ifeq ($(ANDROID_TARGET),1)
++  DEPENDENCIES := $(filter-out LIBSNDFILE,$(DEPENDENCIES))
++  TEST_DEPENDENCIES := $(filter-out LIBSNDFILE,$(TEST_DEPENDENCIES))
++endif
+diff --git a/include/lsp-plug.in/io/charset.h b/include/lsp-plug.in/io/charset.h
+index aee5274..75a4666 100644
+--- a/include/lsp-plug.in/io/charset.h
++++ b/include/lsp-plug.in/io/charset.h
+@@ -30,6 +30,17 @@
+ #else
+     #include <iconv.h>
+     #include <locale.h>
++    #if defined(__ANDROID__)
++        // Bionic ships <iconv.h> with the iconv_t typedef but does NOT declare
++        // the iconv/iconv_open/iconv_close functions. Provide declarations that
++        // resolve to a no-op shim linked in for the Android LADSPA build.
++        extern "C" {
++            iconv_t iconv_open(const char *tocode, const char *fromcode);
++            size_t  iconv(iconv_t cd, char **inbuf, size_t *inbytesleft,
++                          char **outbuf, size_t *outbytesleft);
++            int     iconv_close(iconv_t cd);
++        }
++    #endif /* __ANDROID__ */
+ #endif /* PLATFORM_WINDOWS */
+ 
+ #define LSP_UTF32_EOF       lsp_utf32_t(-1)
+diff --git a/include/lsp-plug.in/ipc/SharedMutex.h b/include/lsp-plug.in/ipc/SharedMutex.h
+index 30f3488..5d9beaa 100644
+--- a/include/lsp-plug.in/ipc/SharedMutex.h
++++ b/include/lsp-plug.in/ipc/SharedMutex.h
+@@ -35,7 +35,10 @@ namespace lsp
+ {
+     namespace ipc
+     {
+-    #if defined(PLATFORM_LINUX) || defined(PLATFORM_FREEBSD)
++    #if (defined(PLATFORM_LINUX) || defined(PLATFORM_FREEBSD)) && !defined(__ANDROID__)
++        // Bionic does not implement robust pthread mutexes
++        // (PTHREAD_MUTEX_ROBUST / pthread_mutex_consistent); fall back to the
++        // file-based (flock) shared mutex implementation on Android.
+         #define LSP_ROBUST_MUTEX_SUPPORTED
+     #endif /* PLATFORM_LINUX, PLATFORM_FREEBSD */
+ 
+diff --git a/include/lsp-plug.in/mm/InAudioFileStream.h b/include/lsp-plug.in/mm/InAudioFileStream.h
+index 702b85e..f2acc4b 100644
+--- a/include/lsp-plug.in/mm/InAudioFileStream.h
++++ b/include/lsp-plug.in/mm/InAudioFileStream.h
+@@ -29,8 +29,18 @@
+ #include <lsp-plug.in/mm/IInAudioStream.h>
+ #include <lsp-plug.in/runtime/LSPString.h>
+ 
+-#ifdef USE_LIBSNDFILE
++#if defined(__ANDROID__)
++    // On Android (Bionic) libsndfile is not available and the LADSPA DSP path
++    // never loads audio files from disk; always use the vendored stub here,
++    // even if USE_LIBSNDFILE is still set by the per-module dependency list.
++    #include <lsp-plug.in/3rdparty/sndfile_stub.h>
++#elif defined(USE_LIBSNDFILE)
+     #include <sndfile.h>
++#else
++    // libsndfile is not linked. Pull in the vendored stub which declares the
++    // libsndfile types/enums/functions; the sf_* call sites resolve to no-op
++    // stubs that report failure.
++    #include <lsp-plug.in/3rdparty/sndfile_stub.h>
+ #endif /* USE_LIBSNDFILE */
+ 
+ namespace lsp
+diff --git a/include/lsp-plug.in/mm/OutAudioFileStream.h b/include/lsp-plug.in/mm/OutAudioFileStream.h
+index d8db88d..aecb007 100644
+--- a/include/lsp-plug.in/mm/OutAudioFileStream.h
++++ b/include/lsp-plug.in/mm/OutAudioFileStream.h
+@@ -29,8 +29,18 @@
+ #include <lsp-plug.in/mm/IOutAudioStream.h>
+ #include <lsp-plug.in/runtime/LSPString.h>
+ 
+-#ifdef USE_LIBSNDFILE
++#if defined(__ANDROID__)
++    // On Android (Bionic) libsndfile is not available and the LADSPA DSP path
++    // never loads audio files from disk; always use the vendored stub here,
++    // even if USE_LIBSNDFILE is still set by the per-module dependency list.
++    #include <lsp-plug.in/3rdparty/sndfile_stub.h>
++#elif defined(USE_LIBSNDFILE)
+     #include <sndfile.h>
++#else
++    // libsndfile is not linked. Pull in the vendored stub which declares the
++    // libsndfile types/enums/functions; the sf_* call sites resolve to no-op
++    // stubs that report failure.
++    #include <lsp-plug.in/3rdparty/sndfile_stub.h>
+ #endif /* USE_LIBSNDFILE */
+ 
+ namespace lsp
+diff --git a/src/main/ipc/Library.cpp b/src/main/ipc/Library.cpp
+index e66c7df..08eb924 100644
+--- a/src/main/ipc/Library.cpp
++++ b/src/main/ipc/Library.cpp
+@@ -73,13 +73,17 @@ namespace lsp
+                 if (str == NULL)
+                     return STATUS_NO_MEM;
+ 
+-            #ifdef _GNU_SOURCE
++            #if defined(__ANDROID__)
++                // Bionic has no dlmopen/LM_ID_NEWLM; always load into the
++                // current namespace. The new_namespace flag is ignored.
++                void * const handle    = ::dlopen(str, RTLD_NOW);
++            #elif defined(_GNU_SOURCE)
+                 void * const handle    = (new_namespace) ?
+                     ::dlmopen(LM_ID_NEWLM, str, RTLD_NOW) :
+                     ::dlopen(str, RTLD_NOW);
+             #else
+                 void * const handle    = ::dlopen(str, RTLD_NOW);
+-            #endif /* _GNU_SOURCE */
++            #endif /* __ANDROID__ */
+                 if (handle == NULL)
+                 {
+                     lsp_warn("Error loading module %s: %s", path->get_native(), ::dlerror());
+diff --git a/src/main/ipc/Process.cpp b/src/main/ipc/Process.cpp
+index eada2b3..8f623ae 100644
+--- a/src/main/ipc/Process.cpp
++++ b/src/main/ipc/Process.cpp
+@@ -1169,6 +1169,13 @@ namespace lsp
+         {
+             lsp_trace("Creating child process using posix_spawn...");
+ 
++        #if defined(__ANDROID__)
++            // Bionic does not provide posix_spawn; process spawning is not needed
++            // for the LADSPA DSP build, so report it as unsupported.
++            (void)cmd; (void)argv; (void)envp;
++            return STATUS_NOT_SUPPORTED;
++        #else
++
+             // Initialize spawn routines
+             posix_spawnattr_t attr;
+             if (::posix_spawnattr_init(&attr))
+@@ -1260,6 +1267,7 @@ namespace lsp
+             ::posix_spawnattr_destroy(&attr);
+ 
+             return res;
++        #endif /* __ANDROID__ */
+         }
+ 
+         void Process::execvpe_process(const char *cmd, char * const *argv, char * const *envp, bool soft_exit)
+diff --git a/src/main/ipc/SharedMem.cpp b/src/main/ipc/SharedMem.cpp
+index ab76a40..7576656 100644
+--- a/src/main/ipc/SharedMem.cpp
++++ b/src/main/ipc/SharedMem.cpp
+@@ -47,6 +47,13 @@
+     #include <sys/stat.h>
+     #include <sys/types.h>
+     #include <unistd.h>
++    #if defined(__ANDROID__)
++        // Bionic does not provide POSIX shared memory (shm_open/shm_unlink);
++        // the Android LADSPA build does not use cross-process shared memory, so
++        // these resolve to no-op stubs that always fail.
++        extern "C" int    shm_open(const char *name, int oflag, mode_t mode);
++        extern "C" int    shm_unlink(const char *name);
++    #endif /* __ANDROID__ */
+ #endif /* PLATFORM_WINDOWS */
+ 
+ namespace lsp
+diff --git a/src/main/ipc/Thread.cpp b/src/main/ipc/Thread.cpp
+index d00bb59..3802f8b 100644
+--- a/src/main/ipc/Thread.cpp
++++ b/src/main/ipc/Thread.cpp
+@@ -242,8 +242,12 @@ namespace lsp
+             pThis           = _this;
+ 
+             // Cleanup cancellation state
+-            pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+-            pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
++            #if !defined(__ANDROID__)
++                // Bionic has no thread cancellation API; the calls are a no-op
++                // safety measure and can be skipped on Android.
++                pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
++                pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
++            #endif /* __ANDROID__ */
+ 
+             // Wait until we are ready to launch
+             while (!atomic_cas(&_this->enState, TS_PENDING, TS_RUNNING)) {}
+diff --git a/src/main/runtime/system.cpp b/src/main/runtime/system.cpp
+index c80790e..72d3d4e 100644
+--- a/src/main/runtime/system.cpp
++++ b/src/main/runtime/system.cpp
+@@ -118,7 +118,7 @@ namespace lsp
+             if (nname == NULL)
+                 return STATUS_NO_MEM;
+ 
+-		#if defined(_GNU_SOURCE) && !defined(PLATFORM_HAIKU)
++		#if defined(_GNU_SOURCE) && !defined(PLATFORM_HAIKU) && !defined(__ANDROID__)
+             char *var = secure_getenv(nname);
+ 		#else
+             char *var = getenv(nname);
+@@ -644,6 +644,7 @@ namespace lsp
+                 buf             = new_buf;
+             }
+ 
++            #if !defined(__ANDROID__)
+             while (true)
+             {
+                 error = getlogin_r(buf, capacity);
+@@ -673,6 +674,11 @@ namespace lsp
+                     return STATUS_NO_MEM;
+                 buf             = new_buf;
+             }
++            #else
++                // Bionic only provides getlogin_r() from API 28; the LADSPA
++                // DSP path never needs a user login, so report not found.
++                return STATUS_NOT_FOUND;
++            #endif /* __ANDROID__ */
+         }
+ 
+         status_t get_system_temporary_dir(LSPString *path)
+@@ -1736,7 +1742,7 @@ namespace lsp
+                 ::exit(STATUS_UNKNOWN_ERR);
+         }
+ 
+-    #ifdef POSIX_SPAWN_SETSID
++    #if defined(POSIX_SPAWN_SETSID) && !defined(__ANDROID__)
+         static status_t spawn_process(const char *cmd, char * const *argv, char * const *envp)
+         {
+             lsp_trace("Creating child process using posix_spawn...");
+@@ -1859,7 +1865,7 @@ namespace lsp
+             status_t res = STATUS_UNKNOWN_ERR;
+ 
+             // Different behaviour, depending on POSIX_SPAWN_USEVFORK presence
+-            #ifdef POSIX_SPAWN_SETSID
++            #if defined(POSIX_SPAWN_SETSID) && !defined(__ANDROID__)
+                 if (res != STATUS_OK)
+                     res    = spawn_process(program, argv, environ);
+             #endif /* POSIX_SPAWN_SETSID */
