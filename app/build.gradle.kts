@@ -22,6 +22,50 @@ val localProps = Properties().apply {
 fun signingProp(name: String): String? =
     (localProps.getProperty(name) ?: project.findProperty(name) as String?)
 
+// ── Versioning ──
+//
+// Release builds (a git tag is checked out, e.g. v0.0.4) ship the bare
+// version number: "0.0.4". Every other build (CI branch/PR builds, local
+// dev) appends the short commit hash so the exact source of an APK is
+// identifiable at a glance: "0.0.4~abc1234".
+//
+// "Release" is detected by `git describe --tags --exact-match HEAD` — it
+// only succeeds when HEAD is exactly a tagged commit, which is the case for
+// tag-triggered CI runs (actions/checkout checks out the tag in detached
+// HEAD). Branch/PR runs are never on a tag, so they get the hash suffix.
+// All git calls are defensive: if git is unavailable they fall back to the
+// bare version so the build never fails on a missing tool.
+val baseVersion = "0.0.4"
+
+fun runGit(vararg args: String): String? {
+    return try {
+        val p = ProcessBuilder("git", *args)
+            .directory(rootProject.projectDir)
+            .redirectErrorStream(true)
+            .start()
+        val out = p.inputStream.bufferedReader().readText().trim()
+        if (p.waitFor() == 0 && out.isNotEmpty()) out else null
+    } catch (_: Exception) {
+        null
+    }
+}
+
+val gitShortHash: String? by lazy { runGit("rev-parse", "--short=7", "HEAD") }
+val gitIsRelease: Boolean by lazy {
+    // Succeeds (exit 0) only when HEAD is exactly a tag.
+    runGit("describe", "--tags", "--exact-match", "HEAD") != null
+}
+
+val resolvedVersionName: String by lazy {
+    if (gitIsRelease) {
+        baseVersion
+    } else if (gitShortHash != null) {
+        "$baseVersion~$gitShortHash"
+    } else {
+        baseVersion
+    }
+}
+
 android {
     namespace = "com.piano.sequencer"
     compileSdk = 34
@@ -54,7 +98,7 @@ android {
         minSdk = 26
         targetSdk = 29
         versionCode = 4
-        versionName = "0.0.4"
+        versionName = resolvedVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

@@ -13,6 +13,12 @@ name: Build APK
 #
 # GitHub Releases: pushing a tag v* (e.g. v0.1.0) runs the build, then a
 # second `release` job creates a GitHub Release with the signed APK attached.
+#
+# Versioning: app/build.gradle.kts derives versionName from git. Tag-triggered
+# builds (HEAD == a tag) ship the bare version ("0.0.4"); every other build
+# (branch/PR/local) appends the short commit hash ("0.0.4~abc1234") so the
+# exact source of an APK is identifiable. No CI-specific wiring is needed —
+# the gradle script auto-detects the tag via `git describe --exact-match`.
 
 on:
   push:

@@ -716,3 +716,32 @@ The `makeup` gain (compressor, `0.001..1000`) is a separate parameter and
 was intentionally left at its native range -- only the input/output trim
 gains were clamped per the request.
 
+---
+
+## Session update -- CI version stamp (version + git hash)
+
+### What changed
+`versionName` is now derived from git in `app/build.gradle.kts`:
+
+- **Tag-triggered builds** (HEAD is exactly a git tag, i.e. a release):
+  bare version `0.0.4`.
+- **All other builds** (CI branch/PR builds, local dev): `0.0.4~<shortHash>`
+  e.g. `0.0.4~398389d`, so the exact source commit of any APK is identifiable
+  at a glance in the UI ("Version 0.0.4~398389d").
+
+"Release" is detected by `git describe --tags --exact-match HEAD`, which
+succeeds only when HEAD is a tagged commit -- exactly the case for tag-pushed
+CI runs (actions/checkout checks out the tag in detached HEAD). Branch/PR
+runs are never on a tag, so they get the hash suffix. No CI-specific wiring
+is required; the gradle script auto-detects. All git calls are defensive and
+fall back to the bare version if git is unavailable, so the build never
+breaks on a missing tool.
+
+### Verification
+- `./build.sh debug` -> `BUILD SUCCESSFUL`; `aapt2 dump badging` shows
+  `versionName='0.0.4~398389d'` on a branch checkout.
+- Tagged checkout (`git tag v0.0.4-test HEAD`): `versionName='0.0.4'`
+  (bare). Test tag removed afterward.
+- `./gradlew :app:testDebugUnitTest` -> all pass.
+- Workflow `build-apk.yml` header documents the versioning scheme.
+
