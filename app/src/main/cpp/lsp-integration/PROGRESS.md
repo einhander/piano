@@ -745,3 +745,31 @@ breaks on a missing tool.
 - `./gradlew :app:testDebugUnitTest` -> all pass.
 - Workflow `build-apk.yml` header documents the versioning scheme.
 
+---
+
+## Session update -- release version sourced from the git tag
+
+### What changed
+Since releases are cut from git tags, the tag is now the **single source of
+truth** for the release version. When HEAD is exactly a tag (the tag-triggered
+CI `release` job), `versionName` is taken **from the tag itself** with a
+leading `v` stripped:
+
+- tag `v0.0.5` -> `versionName='0.0.5'`
+- tag `0.0.5` (no prefix) -> `versionName='0.0.5'`
+
+`baseVersion` in `build.gradle.kts` now only governs the **dev/CI** version
+string (the hash-suffixed one, e.g. `0.0.5~abc1234`); it no longer drives the
+released version. This removes the footgun where a tag and `baseVersion` could
+diverge (e.g. tag `v0.0.6` while `baseVersion` is still `0.0.5` would have
+shipped an APK labelled `0.0.5`).
+
+Version bumped: `baseVersion` 0.0.4 -> 0.0.5, `versionCode` 4 -> 5.
+
+### Verification
+- `./build.sh debug` -> `BUILD SUCCESSFUL`.
+- Branch build -> `versionName='0.0.5~f004a2d'`.
+- Temp tag `v0.0.5` -> `versionName='0.0.5'`; temp bare tag `0.0.5` ->
+  `versionName='0.0.5'`. Both test tags removed afterward.
+- `./gradlew :app:testDebugUnitTest` -> all pass.
+

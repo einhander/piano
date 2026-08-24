@@ -24,17 +24,24 @@ fun signingProp(name: String): String? =
 
 // ── Versioning ──
 //
-// Release builds (a git tag is checked out, e.g. v0.0.5) ship the bare
-// version number: "0.0.5". Every other build (CI branch/PR builds, local
-// dev) appends the short commit hash so the exact source of an APK is
-// identifiable at a glance: "0.0.5~abc1234".
+// Releases are cut from git tags (the CI `release` job fires on `v*` tag
+// pushes). The git tag is the single source of truth for the release
+// version: when HEAD is exactly a tag (e.g. v0.0.5), versionName is the
+// tag with its leading "v" stripped — "0.0.5" — regardless of baseVersion
+// below, so a tag can never ship a mismatched version even if baseVersion
+// was not bumped in lockstep.
+//
+// Every other build (CI branch/PR builds, local dev) is NOT on a tag, so it
+// appends the short commit hash to baseVersion so the exact source of an
+// APK is identifiable at a glance: "0.0.5~abc1234". baseVersion therefore
+// only governs the dev/CI version string, not the released one.
 //
 // "Release" is detected by `git describe --tags --exact-match HEAD` — it
 // only succeeds when HEAD is exactly a tagged commit, which is the case for
 // tag-triggered CI runs (actions/checkout checks out the tag in detached
 // HEAD). Branch/PR runs are never on a tag, so they get the hash suffix.
-// All git calls are defensive: if git is unavailable they fall back to the
-// bare version so the build never fails on a missing tool.
+// All git calls are defensive: if git is unavailable they fall back to
+// baseVersion so the build never fails on a missing tool.
 val baseVersion = "0.0.5"
 
 fun runGit(vararg args: String): String? {
@@ -50,15 +57,19 @@ fun runGit(vararg args: String): String? {
     }
 }
 
-val gitShortHash: String? by lazy { runGit("rev-parse", "--short=7", "HEAD") }
-val gitIsRelease: Boolean by lazy {
-    // Succeeds (exit 0) only when HEAD is exactly a tag.
-    runGit("describe", "--tags", "--exact-match", "HEAD") != null
+// The tag HEAD sits on (e.g. "v0.0.5"), or null when HEAD is not a tag.
+val gitExactTag: String? by lazy {
+    runGit("describe", "--tags", "--exact-match", "HEAD")
 }
 
+val gitShortHash: String? by lazy { runGit("rev-parse", "--short=7", "HEAD") }
+
 val resolvedVersionName: String by lazy {
-    if (gitIsRelease) {
-        baseVersion
+    // Release: version comes from the tag itself (single source of truth).
+    // Strip a leading "v" (tags are v0.0.5); tolerate bare numeric tags too.
+    val tagVersion = gitExactTag?.removePrefix("v")
+    if (tagVersion != null) {
+        tagVersion
     } else if (gitShortHash != null) {
         "$baseVersion~$gitShortHash"
     } else {
