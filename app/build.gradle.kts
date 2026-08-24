@@ -24,10 +24,10 @@ fun signingProp(name: String): String? =
 
 // ── Versioning ──
 //
-// Release builds (a git tag is checked out, e.g. v0.0.4) ship the bare
-// version number: "0.0.4". Every other build (CI branch/PR builds, local
+// Release builds (a git tag is checked out, e.g. v0.0.5) ship the bare
+// version number: "0.0.5". Every other build (CI branch/PR builds, local
 // dev) appends the short commit hash so the exact source of an APK is
-// identifiable at a glance: "0.0.4~abc1234".
+// identifiable at a glance: "0.0.5~abc1234".
 //
 // "Release" is detected by `git describe --tags --exact-match HEAD` — it
 // only succeeds when HEAD is exactly a tagged commit, which is the case for
@@ -35,7 +35,7 @@ fun signingProp(name: String): String? =
 // HEAD). Branch/PR runs are never on a tag, so they get the hash suffix.
 // All git calls are defensive: if git is unavailable they fall back to the
 // bare version so the build never fails on a missing tool.
-val baseVersion = "0.0.4"
+val baseVersion = "0.0.5"
 
 fun runGit(vararg args: String): String? {
     return try {
@@ -97,7 +97,7 @@ android {
         applicationId = "com.piano.sequencer"
         minSdk = 26
         targetSdk = 29
-        versionCode = 4
+        versionCode = 5
         versionName = resolvedVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
