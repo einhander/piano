@@ -15,9 +15,11 @@ name: Build APK
 # second `release` job creates a GitHub Release with the signed APK attached.
 #
 # Versioning: app/build.gradle.kts derives versionName from git. Tag-triggered
-# builds (HEAD == a tag) ship the bare version ("0.0.5"); every other build
-# (branch/PR/local) appends the short commit hash ("0.0.5~abc1234") so the
-# exact source of an APK is identifiable. No CI-specific wiring is needed —
+# builds (HEAD == a tag, e.g. v0.0.5) use the tag itself as the version — the
+# leading "v" is stripped, so the APK shows "0.0.5" exactly matching the tag
+# (the tag is the single source of truth for the release version). Every other
+# build (branch/PR/local) appends the short commit hash ("0.0.5~abc1234") so
+# the exact source of an APK is identifiable. No CI-specific wiring is needed —
 # the gradle script auto-detects the tag via `git describe --exact-match`.
 
 on:
