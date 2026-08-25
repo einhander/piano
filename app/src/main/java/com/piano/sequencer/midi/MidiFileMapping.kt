@@ -10,6 +10,23 @@ const val TRIGGER_NOTE = "NOTE"
 const val TRIGGER_CC = "CC"
 const val TRIGGER_PITCH_BEND = "PITCH_BEND"
 
+/** Cell modes: file playback (sequencer) vs chord (single held chord). */
+const val MODE_FILE = "FILE"
+const val MODE_CHORD = "CHORD"
+
+/**
+ * One note of a chord: MIDI key + the last-recorded velocity (0–127) + the
+ * channel it was recorded on. Channel is kept per-note so a chord can span
+ * channels (e.g. split keyboards); playback reuses it. Velocity is the
+ * *base* value — the live trigger velocity scales it at play time.
+ */
+@Serializable
+data class ChordNote(
+    val note: Int,
+    val velocity: Int,
+    val channel: Int = 0
+)
+
 /**
  * A sequencer cell: one slot that can hold a MIDI file with learned trigger, loop, tempo,
  * and optional channel remap.
@@ -22,6 +39,11 @@ const val TRIGGER_PITCH_BEND = "PITCH_BEND"
  * deserializes as NOTE with the existing `note` (kotlinx default values).
  * For CC / PITCH_BEND cells `note` is -1 (no note); the trigger is fully
  * described by `triggerType` + `ccNumber`.
+ *
+ * Chord mode: `mode == MODE_CHORD` → the cell holds a single chord in
+ * `chordNotes` (no MIDI file). While the trigger is held the chord sounds
+ * (gate); the trigger velocity scales every note's velocity. `filePath`,
+ * `loop`, `tempo`, `channel` are unused in chord mode.
  */
 @Serializable
 data class SequencerCell(
@@ -32,13 +54,19 @@ data class SequencerCell(
     val tempo: Double = 120.0, // BPM, 20–300
     val channel: Int = -1,     // -1 = from file, 0-15 = remap all events
     val triggerType: String = TRIGGER_NOTE, // "NOTE" / "CC" / "PITCH_BEND"
-    val ccNumber: Int? = null  // CC number; set for triggerType == "CC", null otherwise
+    val ccNumber: Int? = null, // CC number; set for triggerType == "CC", null otherwise
+    val mode: String = MODE_FILE,           // "FILE" / "CHORD"
+    val chordNotes: List<ChordNote> = emptyList()
 ) {
     /** True if the cell has a usable trigger (note >= 0, or a CC/pitch-bend trigger). */
     fun hasTrigger(): Boolean = when (triggerType) {
         TRIGGER_CC, TRIGGER_PITCH_BEND -> true
         else -> note >= 0
     }
+
+    /** True if the cell has playable content: a MIDI file (FILE) or ≥1 chord note (CHORD). */
+    fun hasContent(): Boolean =
+        if (mode == MODE_CHORD) chordNotes.isNotEmpty() else filePath.isNotEmpty()
 
     /**
      * Encoded trigger key in one Int space: NOTE 0–127, CC 128–255 (128+cc),

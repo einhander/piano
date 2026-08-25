@@ -14,10 +14,13 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.piano.sequencer.midi.ChordNote
+import com.piano.sequencer.midi.ChordRecorder
 import com.piano.sequencer.midi.MidiFileLearnState
 import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.MidiFileTriggerController
 import com.piano.sequencer.midi.MidiRecordSession
+import com.piano.sequencer.midi.MODE_CHORD
 import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.service.PlaybackService
 import com.piano.sequencer.ui.MidiFilesPanel
@@ -229,7 +232,11 @@ class SequencerActivity : AppCompatActivity() {
                     recordBusy.set(false)
                     return@cell
                 }
-                val hasExisting = cell.filePath.isNotEmpty() && File(cell.filePath).exists()
+                val hasExisting = if (cell.mode == MODE_CHORD) {
+                    cell.chordNotes.isNotEmpty()
+                } else {
+                    cell.filePath.isNotEmpty() && File(cell.filePath).exists()
+                }
                 if (hasExisting) {
                     // F1: build with .create(), add cancel listener, then show
                     val dialog = AlertDialog.Builder(this)
@@ -285,6 +292,18 @@ class SequencerActivity : AppCompatActivity() {
         panel.onNoteUnlearned = { key ->
             MidiFileTriggerController.get(this).freeSlotForKey(key)
             refreshPanel()
+        }
+
+        panel.onModeToggle = { cellId, newMode ->
+            val store = MidiFileMappingStore.get(this)
+            val cur = store.get(cellId)
+            if (cur != null && cur.mode != newMode) {
+                // Stop any sounding chord / free the file slot for the old mode.
+                if (cur.hasTrigger()) {
+                    MidiFileTriggerController.get(this).freeSlotForTrigger(cur.triggerKey())
+                }
+                store.set(cur.copy(mode = newMode))
+            }
         }
 
         panel.onCellRemove = { cell ->
@@ -370,9 +389,18 @@ class SequencerActivity : AppCompatActivity() {
                 // F5: stop all active file slots + test-play; their pass-start events
                 // (timestamp == 0) would otherwise leak into the recording
                 MidiFileTriggerController.get(this).stopAllForRecording()
+                val cell = MidiFileMappingStore.get(this).get(cellId)
+                val isChord = cell?.mode == MODE_CHORD
                 MidiRecordSession.inFlight = true
                 try {
-                    svc.startRecording()
+                    if (isChord) {
+                        // Chord mode: collect notes in Kotlin (no engine MIDI
+                        // recorder needed — the chord is the union of played
+                        // keys, not a timed MIDI stream).
+                        ChordRecorder.start()
+                    } else {
+                        svc.startRecording()
+                    }
                     MidiRecordSession.cellId = cellId
                     recordingCellId = cellId
                     getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
@@ -409,13 +437,14 @@ class SequencerActivity : AppCompatActivity() {
                     return@execute
                 }
                 MidiRecordSession.inFlight = true
-                var eventCount = 0
-                var recCellId: Int? = null
+                val recCellId = MidiRecordSession.cellId
+                val cell = recCellId?.let { MidiFileMappingStore.get(this).get(it) }
+                val isChord = cell?.mode == MODE_CHORD
                 try {
-                    svc.stopRecording()
-                    eventCount = svc.getRecordedEventCount()
+                    if (!isChord) {
+                        svc.stopRecording()
+                    }
                     // Holder is authoritative (survives activity recreation); in-memory mirror for UI
-                    recCellId = MidiRecordSession.cellId
                     MidiRecordSession.cellId = null
                     recordingCellId = null
                     getSharedPreferences("piano_prefs", MODE_PRIVATE).edit().remove("recording_cell_id").apply()
@@ -423,6 +452,33 @@ class SequencerActivity : AppCompatActivity() {
                     MidiRecordSession.inFlight = false
                 }
 
+                if (isChord && recCellId != null) {
+                    val chordNotes = ChordRecorder.stop()
+                    if (chordNotes.isNotEmpty() && cell != null) {
+                        runOnUiThread {
+                            val store = MidiFileMappingStore.get(this)
+                            val cur = store.get(recCellId)
+                            if (cur != null) {
+                                store.set(cur.copy(chordNotes = chordNotes))
+                                refreshPanel()
+                                Toast.makeText(this, "Chord recorded: ${chordNotes.size} notes", Toast.LENGTH_SHORT).show()
+                            } else {
+                                panel.updateCellRecordState(null)
+                            }
+                            recordBusy.set(false)
+                        }
+                    } else {
+                        ChordRecorder.cancel()
+                        runOnUiThread {
+                            Toast.makeText(this, "Nothing recorded", Toast.LENGTH_SHORT).show()
+                            panel.updateCellRecordState(null)
+                            recordBusy.set(false)
+                        }
+                    }
+                    return@execute
+                }
+
+                val eventCount = if (!isChord) svc.getRecordedEventCount() else 0
                 if (eventCount > 0 && recCellId != null) {
                     val midiDir = File(getExternalFilesDir(null), "midi_files")
                     if (!midiDir.exists()) midiDir.mkdirs()

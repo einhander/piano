@@ -28,6 +28,7 @@ import java.io.File
 import java.util.Locale
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import com.piano.sequencer.midi.ChordRecorder
 import com.piano.sequencer.midi.MidiDeviceManager
 import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.MidiInputReceiver
@@ -522,6 +523,12 @@ class MainActivity : AppCompatActivity() {
             override fun onNoteOn(channel: Int, note: Int, velocity: Int) {
                 // Keyboard is using this channel regardless of file triggering
                 lastNoteChannel = channel
+                // Chord recording window: collect the note into the chord
+                // (regardless of trigger mapping). The note still reaches the
+                // engine below so the user hears it while building the chord.
+                if (ChordRecorder.isActive()) {
+                    ChordRecorder.onNoteOn(channel, note, velocity)
+                }
                 // Delegate to trigger controller — consumed if mapped
                 if (MidiFileTriggerController.get(this@MainActivity).onNoteOn(channel, note, velocity)) return
                 // Unmapped note → forward to engine
