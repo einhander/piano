@@ -8,11 +8,17 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
 import android.widget.ArrayAdapter
+import android.widget.BaseAdapter
 import android.widget.Button
+import android.widget.ListView
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONArray
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
@@ -27,8 +33,12 @@ class SettingsActivity : AppCompatActivity() {
 
     private lateinit var btnBrowse: Button
     private lateinit var btnUnload: Button
-    private lateinit var tvSf2Path: TextView
+    private lateinit var lvSf2List: ListView
     private lateinit var tvSf2Count: TextView
+    // Loaded SF2s: each row {id, name, path}. Backed by the native list.
+    private data class LoadedSf2(val id: Int, val name: String, val path: String)
+    private val loadedSf2s = mutableListOf<LoadedSf2>()
+    private var sf2ListAdapter: Sf2ListAdapter? = null
     private lateinit var tvPolyphony: TextView
     private lateinit var seekBarPolyphony: SeekBar
     private lateinit var tvMasterGain: TextView
@@ -87,7 +97,7 @@ class SettingsActivity : AppCompatActivity() {
 
         btnBrowse = findViewById(R.id.btnBrowse)
         btnUnload = findViewById(R.id.btnUnload)
-        tvSf2Path = findViewById(R.id.tvSf2Path)
+        lvSf2List = findViewById(R.id.lvSf2List)
         tvSf2Count = findViewById(R.id.tvSf2Count)
         tvPolyphony = findViewById(R.id.tvPolyphony)
         seekBarPolyphony = findViewById(R.id.seekBarPolyphony)
@@ -243,7 +253,13 @@ class SettingsActivity : AppCompatActivity() {
 
         btnBrowse.setOnClickListener { sf2Picker.launch("*/*") }
 
-        btnUnload.setOnClickListener { unloadSoundFont() }
+        btnUnload.setOnClickListener { unloadAllSoundFonts() }
+
+        // Loaded-SF2 list adapter: each row shows the font name + an "Unload"
+        // button that removes just that one SF2 (arbitrary single unload).
+        sf2ListAdapter = Sf2ListAdapter(loadedSf2s) { sf -> unloadSoundFont(sf) }
+        lvSf2List.adapter = sf2ListAdapter
+        lvSf2List.onItemClickListener = null
 
         btnPitchBendChannels.setOnClickListener { showPitchBendChannelsDialog() }
 
@@ -342,7 +358,7 @@ class SettingsActivity : AppCompatActivity() {
         val polyphony = svc.getPolyphony()
         val gain = svc.getMasterGain()
         val gainProgress = (gain * 1000f).toInt().coerceIn(0, 2000)
-        val sf2Path = svc.getSoundFontPath()
+        val sf2List = parseLoadedSoundFonts(svc.getLoadedSoundFonts())
         val sf2Count = svc.getSoundFontCount()
         val reverb = svc.getReverb()
         val chorus = svc.getChorus()
@@ -392,12 +408,7 @@ class SettingsActivity : AppCompatActivity() {
             seekBarBufferSize.isEnabled = (autoTune == 0)
             isRestoringState = false
 
-            if (sf2Path.isEmpty()) {
-                tvSf2Path.text = getString(R.string.settings_sf2_none)
-            } else {
-                tvSf2Path.text = File(sf2Path).name
-            }
-            tvSf2Count.text = getString(R.string.settings_sf2_loaded_count, sf2Count)
+            updateSf2List(sf2List, sf2Count)
         }
     }
 
@@ -432,48 +443,69 @@ class SettingsActivity : AppCompatActivity() {
                 }
 
                 val result = svc?.loadSoundFont(destFile.absolutePath) ?: -1
-                    if (result < 0) {
-                        AppLogger.error("SettingsActivity", "Failed to load SF2: $fileName (error: $result)")
-                    } else {
-                        AppLogger.info("SettingsActivity", "Loaded SF2: $fileName (synth ID: $result)")
-                    }
-                    result
-                } catch (e: Exception) {
-                    AppLogger.error("SettingsActivity", "SF2 load exception: ${e.message}")
-                    -1
+                if (result < 0) {
+                    AppLogger.error("SettingsActivity", "Failed to load SF2: $fileName (error: $result)")
+                } else {
+                    AppLogger.info("SettingsActivity", "Loaded SF2: $fileName (synth ID: $result)")
                 }
+                result
+            } catch (e: Exception) {
+                AppLogger.error("SettingsActivity", "SF2 load exception: ${e.message}")
+                -1
+            }
         }, mainExecutor)
         loadFuture.whenComplete { result, ex ->
-            // Read the SF count on the worker thread (JNI must not run on the
-            // main thread); pass it into the UI update.
-            val count = if (ex == null && result >= 0) (service?.getSoundFontCount() ?: 0) else 0
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 btnBrowse.isEnabled = true
-                if (ex == null && result >= 0) {
-                    val svc = service
-                    if (svc != null) {
-                        tvSf2Path.text = fileName
-                        tvSf2Count.text = getString(R.string.settings_sf2_loaded_count, count)
-                        Toast.makeText(this@SettingsActivity, "SoundFont loaded", Toast.LENGTH_SHORT).show()
-                        // Persist the path so the SF2 is reloaded after
-                        // process death (the engine is recreated empty).
-                        getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
-                            .putString("sf2_path", File(getExternalFilesDir(null)!!.absolutePath, fileName).absolutePath)
-                            .apply()
-                    }
+                val svcLocal = service
+                if (ex == null && result >= 0 && svcLocal != null) {
+                    // Refresh the loaded-SF2 list + count from the engine on a
+                    // worker thread (JNI must not run on main), then update UI.
+                    refreshSf2List(svcLocal)
+                    Toast.makeText(this@SettingsActivity, "SoundFont loaded", Toast.LENGTH_SHORT).show()
                 } else {
-                    val msg = ex?.message ?: "Failed to load SoundFont (error: $result)"
+                    val msg = ex?.message ?: getString(R.string.settings_sf2_load_failed)
                     Toast.makeText(this@SettingsActivity, msg, Toast.LENGTH_LONG).show()
                 }
             }
         }
     }
 
-    private fun unloadSoundFont() {
+    // Reload a single SF2 by its id (arbitrary unload). Worker thread for the
+    // JNI call; UI + persistence updated back on main.
+    private fun unloadSoundFont(sf: LoadedSf2) {
+        val svc = service ?: return
+        CompletableFuture.supplyAsync(java.util.function.Supplier<Boolean> {
+            try {
+                val ok = svc.unloadSoundFont(sf.id)
+                if (!ok) {
+                    AppLogger.error("SettingsActivity", "Failed to unload SF2: ${sf.name} (id=${sf.id})")
+                } else {
+                    AppLogger.info("SettingsActivity", "Unloaded SF2: ${sf.name} (id=${sf.id})")
+                }
+                ok
+            } catch (e: Exception) {
+                AppLogger.error("SettingsActivity", "SF2 unload exception: ${e.message}")
+                false
+            }
+        }, mainExecutor).whenComplete { ok, ex ->
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (ok && ex == null) {
+                    refreshSf2List(svc)
+                } else {
+                    Toast.makeText(this@SettingsActivity, getString(R.string.settings_sf2_unload_failed),
+                        Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun unloadAllSoundFonts() {
         btnUnload.isEnabled = false
 
-        val svc = service ?: return
+        val svc = service ?: run { btnUnload.isEnabled = true; return }
         CompletableFuture.runAsync({
             svc.unloadSoundFonts()
         }, mainExecutor)
@@ -483,19 +515,100 @@ class SettingsActivity : AppCompatActivity() {
                 btnUnload.isEnabled = true
                 if (ex == null) {
                     AppLogger.info("SettingsActivity", "Unloaded all SoundFonts")
-                    val svc = service
-                    if (svc != null) {
-                        tvSf2Path.text = getString(R.string.settings_sf2_none)
-                        tvSf2Count.text = getString(R.string.settings_sf2_loaded_count, 0)
-                    }
-                    getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
-                        .remove("sf2_path")
-                        .apply()
+                    refreshSf2List(svc)
                 } else {
                     AppLogger.error("SettingsActivity", "Failed to unload SoundFont: ${ex.message}")
-                    Toast.makeText(this@SettingsActivity, "Failed to unload SoundFont", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@SettingsActivity, getString(R.string.settings_sf2_unload_failed),
+                        Toast.LENGTH_SHORT).show()
                 }
             }
+        }
+    }
+
+    // Read the current loaded-SF2 list + count from the engine (worker thread)
+    // and push them to the UI adapter + persistence.
+    private fun refreshSf2List(svc: PlaybackService) {
+        CompletableFuture.supplyAsync(java.util.function.Supplier<Pair<List<LoadedSf2>, Int>?> {
+            try {
+                val list = parseLoadedSoundFonts(svc.getLoadedSoundFonts())
+                val count = svc.getSoundFontCount()
+                Pair(list, count)
+            } catch (e: Exception) {
+                AppLogger.error("SettingsActivity", "SF2 list read exception: ${e.message}")
+                null
+            }
+        }, mainExecutor).whenComplete { pair, _ ->
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (pair != null) {
+                    updateSf2List(pair.first, pair.second)
+                    persistSf2Paths(pair.first)
+                }
+            }
+        }
+    }
+
+    // Replace the in-memory list + count label, then notify the adapter.
+    private fun updateSf2List(list: List<LoadedSf2>, count: Int) {
+        loadedSf2s.clear()
+        loadedSf2s.addAll(list)
+        sf2ListAdapter?.notifyDataSetChanged()
+        tvSf2Count.text = getString(R.string.settings_sf2_loaded_count, count)
+    }
+
+    // Persist the loaded SF2 paths so they are reloaded after process death.
+    // Stored as a JSON array under "sf2_paths" (multi-SF2). The legacy single
+    // "sf2_path" key is cleared to avoid a stale single-path restore.
+    private fun persistSf2Paths(list: List<LoadedSf2>) {
+        val arr = JSONArray()
+        for (sf in list) {
+            arr.put(sf.path)
+        }
+        getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+            .remove("sf2_path")
+            .putString("sf2_paths", arr.toString())
+            .apply()
+    }
+
+    // Parse the JSON array returned by nativeGetLoadedSoundFonts:
+    // [{"id":int,"path":"..."}, ...] → LoadedSf2 list (name = path basename).
+    private fun parseLoadedSoundFonts(json: String): List<LoadedSf2> {
+        val result = mutableListOf<LoadedSf2>()
+        if (json.isBlank()) return result
+        try {
+            val arr = JSONArray(json)
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val id = o.getInt("id")
+                val path = o.getString("path")
+                val name = File(path).name
+                result.add(LoadedSf2(id, name, path))
+            }
+        } catch (e: Exception) {
+            AppLogger.error("SettingsActivity", "SF2 JSON parse exception: ${e.message}")
+        }
+        return result
+    }
+
+    // ListView adapter for the loaded-SF2 rows. Each row shows the font name
+    // and an "Unload" button (removes just that one SF2). The button click is
+    // wired per-row; the ListView's own item click is disabled.
+    private inner class Sf2ListAdapter(
+        private val items: List<LoadedSf2>,
+        private val onUnload: (LoadedSf2) -> Unit
+    ) : BaseAdapter() {
+        override fun getCount() = items.size
+        override fun getItem(position: Int) = items[position]
+        override fun getItemId(position: Int) = position.toLong()
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val view = convertView ?: LayoutInflater.from(parent.context)
+                .inflate(R.layout.sf2_list_item, parent, false)
+            val sf = items[position]
+            view.findViewById<TextView>(R.id.tvSf2ItemName).text = sf.name
+            view.findViewById<Button>(R.id.btnSf2ItemUnload).setOnClickListener {
+                onUnload(sf)
+            }
+            return view
         }
     }
 

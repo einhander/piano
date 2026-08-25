@@ -134,13 +134,13 @@ void FluidSynthEngine::freeOldActiveSlotSf2(int oldActive) {
     }
 }
 
-// Prepare the inactive synth slot for an SF2 change: unload all SF2s from it,
-// then (if newSfPath != null) load the new one, apply the desired state, flip
-// mActiveIndex so the audio thread picks up the new synth on the next
-// callback, then free the old active slot's SF2 (M3). The target is the slot
-// the audio thread is NOT rendering from, so this never races with the audio
-// thread (M2: the mPreparing flag makes processCommands skip the target slot).
-int FluidSynthEngine::prepareInactiveSlot(const char* newSfPath) {
+// Prepare the inactive synth slot so it contains exactly the given list of
+// SF2 paths (worker thread): unload all SF2s from it, then load each path in
+// order. Returns the sfId of the LAST loaded SF2 (or -1 if the list is empty /
+// all loads failed). The target is the slot the audio thread is NOT rendering
+// from, so this never races with the audio thread (M2: the mPreparing flag
+// makes processCommands skip the target slot).
+int FluidSynthEngine::prepareInactiveSlot(const std::vector<std::string>& sfPaths) {
     int target = 1 - mActiveIndex.load(std::memory_order_acquire);
     fluid_synth_t* synth = mSynth[target];
     if (!synth) {
@@ -159,17 +159,21 @@ int FluidSynthEngine::prepareInactiveSlot(const char* newSfPath) {
         fluid_synth_sfunload(synth, id, 1);
     }
 
-    int sfId = -1;
-    if (newSfPath) {
+    int lastSfId = -1;
+    for (const std::string& path : sfPaths) {
+        if (path.empty()) continue;
         // Load SF2 — returns synthID, -1 on error. Worker thread only.
         // [perf]: measure the load duration (file I/O + parsing) for the
         // one-time [perf] dump.
         auto t0 = std::chrono::steady_clock::now();
-        sfId = fluid_synth_sfload(synth, newSfPath, 1);
+        int sfId = fluid_synth_sfload(synth, path.c_str(), 1);
         auto t1 = std::chrono::steady_clock::now();
         mLastSf2LoadMs.store(
             std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count(),
             std::memory_order_relaxed);
+        if (sfId >= 0) {
+            lastSfId = sfId;
+        }
     }
 
     // M2: apply the current desired state to the prepared slot BEFORE the flip
@@ -182,7 +186,7 @@ int FluidSynthEngine::prepareInactiveSlot(const char* newSfPath) {
     int oldActive = mActiveIndex.load(std::memory_order_acquire);
     mActiveIndex.store(target, std::memory_order_release);
 
-    // M3: free the old active slot's SF2 (now inactive) — keeps 1× SF2
+    // M3: free the old active slot's SF2 (now inactive) — keeps 1× the SF2 set
     // resident instead of 2× (a 150MB SF2 would otherwise be 300MB on a 2GB
     // device).
     freeOldActiveSlotSf2(oldActive);
@@ -191,7 +195,7 @@ int FluidSynthEngine::prepareInactiveSlot(const char* newSfPath) {
     // skips the target slot for the entire preparation).
     mPreparing[target].store(false, std::memory_order_release);
 
-    return sfId;
+    return lastSfId;
 }
 
 // M5: re-prepare the inactive synth slot at a NEW sample rate (worker thread).
@@ -201,7 +205,7 @@ int FluidSynthEngine::prepareInactiveSlot(const char* newSfPath) {
 // (e.g. BT device switch 44.1k→48k) — the init() path is idempotent, so a
 // reopen at a new rate would otherwise leave the transport tempo + FluidSynth
 // pitch off by the rate ratio.
-void FluidSynthEngine::reprepareAtNewRate(int newRate, const char* sfPath) {
+void FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::string>& sfPaths) {
     if (!mInitialized.load()) return;
     // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
     // Worker-thread blocking is allowed; the audio thread never takes this lock.
@@ -237,11 +241,12 @@ void FluidSynthEngine::reprepareAtNewRate(int newRate, const char* sfPath) {
             // polyphony changes (≤ 256) never allocate in the audio callback.
             // The user's setting (mPolyphony) is the active cap (applyDesiredState).
             fluid_synth_set_polyphony(mSynth[target], 256);
-            // Load the current SF2 (if any) into the new synth.
+            // Reload ALL currently-loaded SF2s into the new synth.
             // [perf]: measure the reload duration for the one-time [perf] dump.
-            if (sfPath) {
+            for (const std::string& path : sfPaths) {
+                if (path.empty()) continue;
                 auto t0 = std::chrono::steady_clock::now();
-                fluid_synth_sfload(mSynth[target], sfPath, 1);
+                fluid_synth_sfload(mSynth[target], path.c_str(), 1);
                 auto t1 = std::chrono::steady_clock::now();
                 mLastSf2LoadMs.store(
                     std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count(),
@@ -271,23 +276,97 @@ int FluidSynthEngine::loadSoundFont(const char* filePath) {
     if (!mInitialized.load()) {
         return -1;
     }
+    if (!filePath || filePath[0] == '\0') {
+        return -1;
+    }
     // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
     // Worker-thread blocking is allowed; the audio thread never takes this lock.
     std::lock_guard<std::mutex> workerLock(mWorkerMutex);
-    int sfId = prepareInactiveSlot(filePath);
-    if (sfId >= 0) {
-        { std::lock_guard<std::mutex> lock(mSfPathMutex); mLoadedSfPath = filePath; }
+
+    // Additive: build the target SF2 list = currently-loaded paths + the new
+    // one. prepareInactiveSlot reloads them all into the inactive slot, then
+    // flips. A duplicate path is still loaded (FluidSynth assigns a fresh id);
+    // the caller may dedupe by path before calling if desired.
+    std::vector<std::string> sfPaths;
+    {
+        std::lock_guard<std::mutex> lock(mSfPathMutex);
+        sfPaths.reserve(mLoadedSf2s.size() + 1);
+        for (const Sf2Entry& e : mLoadedSf2s) {
+            sfPaths.push_back(e.path);
+        }
     }
-    return sfId;
+    sfPaths.push_back(filePath);
+
+    int lastSfId = prepareInactiveSlot(sfPaths);
+    if (lastSfId >= 0) {
+        rebuildLoadedSf2List();
+    }
+    return lastSfId;
+}
+
+bool FluidSynthEngine::unloadSoundFont(int sfId) {
+    if (!mInitialized.load()) return false;
+    if (sfId < 0) return false;
+    // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
+    std::lock_guard<std::mutex> workerLock(mWorkerMutex);
+
+    // Build the target SF2 list = currently-loaded paths MINUS the one to drop.
+    std::vector<std::string> sfPaths;
+    bool found = false;
+    {
+        std::lock_guard<std::mutex> lock(mSfPathMutex);
+        sfPaths.reserve(mLoadedSf2s.size());
+        for (const Sf2Entry& e : mLoadedSf2s) {
+            if (e.id == sfId) {
+                found = true;
+                continue;  // skip the one being unloaded
+            }
+            sfPaths.push_back(e.path);
+        }
+    }
+    if (!found) return false;
+
+    prepareInactiveSlot(sfPaths);
+    rebuildLoadedSf2List();
+    return true;
 }
 
 void FluidSynthEngine::unloadSoundFonts() {
     if (!mInitialized.load()) return;
     // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
     std::lock_guard<std::mutex> workerLock(mWorkerMutex);
-    { std::lock_guard<std::mutex> lock(mSfPathMutex); mLoadedSfPath.clear(); }
+    { std::lock_guard<std::mutex> lock(mSfPathMutex); mLoadedSf2s.clear(); }
     // Unload all SF2s from the inactive slot and flip to it (active = no SF2).
-    prepareInactiveSlot(nullptr);
+    prepareInactiveSlot(std::vector<std::string>{});
+}
+
+void FluidSynthEngine::rebuildLoadedSf2List() {
+    std::vector<Sf2Entry> rebuilt;
+    while (true) {
+        uint32_t s1 = mSynthSeq.load(std::memory_order_acquire);
+        if (s1 & 1) {
+            std::this_thread::yield();
+            continue;
+        }
+        int idx = mActiveIndex.load(std::memory_order_acquire);
+        fluid_synth_t* synth = mSynth[idx];
+        if (synth) {
+            int sfCount = fluid_synth_sfcount(synth);
+            rebuilt.reserve(static_cast<size_t>(sfCount));
+            for (int i = 0; i < sfCount; i++) {
+                fluid_sfont_t* sfont = fluid_synth_get_sfont(synth, i);
+                if (!sfont) continue;
+                int id = fluid_sfont_get_id(sfont);
+                const char* name = fluid_sfont_get_name(sfont);
+                rebuilt.push_back({id, std::string(name ? name : "")});
+            }
+        }
+        uint32_t s2 = mSynthSeq.load(std::memory_order_acquire);
+        if (s1 == s2) break;
+        rebuilt.clear();
+    }
+    std::lock_guard<std::mutex> lock(mSfPathMutex);
+    mLoadedSf2s = std::move(rebuilt);
 }
 
 // ── Audio-thread entry points (NO locks) ─────────────────────────────────────
@@ -653,8 +732,20 @@ int FluidSynthEngine::getSoundFontCount() const {
 }
 
 std::string FluidSynthEngine::getSoundFontPath() const {
+    // Back-compat: return the first loaded SF2's path (or "" if none). New
+    // callers should use getLoadedSoundFonts() for the full list.
     std::lock_guard<std::mutex> lock(mSfPathMutex);
-    return mLoadedSfPath;
+    return mLoadedSf2s.empty() ? std::string() : mLoadedSf2s.front().path;
+}
+
+std::vector<FluidSynthEngine::LoadedSf2> FluidSynthEngine::getLoadedSoundFonts() const {
+    std::lock_guard<std::mutex> lock(mSfPathMutex);
+    std::vector<LoadedSf2> result;
+    result.reserve(mLoadedSf2s.size());
+    for (const Sf2Entry& e : mLoadedSf2s) {
+        result.push_back({e.id, e.path});
+    }
+    return result;
 }
 
 std::vector<InstrumentInfo> FluidSynthEngine::getInstruments() const {

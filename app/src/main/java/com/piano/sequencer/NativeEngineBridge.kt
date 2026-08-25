@@ -173,8 +173,10 @@ object NativeEngineBridge {
     external fun nativeGetFramesPerBurst(): Int
 
     external fun nativeUnloadSoundFonts()
+    external fun nativeUnloadSoundFont(sfId: Int): Boolean
     external fun nativeGetSoundFontCount(): Int
     external fun nativeGetSoundFontPath(): String
+    external fun nativeGetLoadedSoundFonts(): String  // JSON: [{"id":int,"path":"..."}]
 
     // Instruments
     external fun nativeGetInstruments(): String
