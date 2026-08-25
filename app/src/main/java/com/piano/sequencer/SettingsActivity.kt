@@ -8,17 +8,14 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
 import android.widget.ArrayAdapter
-import android.widget.BaseAdapter
 import android.widget.Button
-import android.widget.ListView
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
-import android.view.LayoutInflater
 import android.view.View
-import android.view.ViewGroup
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
@@ -33,12 +30,12 @@ class SettingsActivity : AppCompatActivity() {
 
     private lateinit var btnBrowse: Button
     private lateinit var btnUnload: Button
-    private lateinit var lvSf2List: ListView
+    private lateinit var llSf2List: LinearLayout
+    private lateinit var tvSf2Empty: TextView
     private lateinit var tvSf2Count: TextView
     // Loaded SF2s: each row {id, name, path}. Backed by the native list.
     private data class LoadedSf2(val id: Int, val name: String, val path: String)
     private val loadedSf2s = mutableListOf<LoadedSf2>()
-    private var sf2ListAdapter: Sf2ListAdapter? = null
     private lateinit var tvPolyphony: TextView
     private lateinit var seekBarPolyphony: SeekBar
     private lateinit var tvMasterGain: TextView
@@ -97,7 +94,8 @@ class SettingsActivity : AppCompatActivity() {
 
         btnBrowse = findViewById(R.id.btnBrowse)
         btnUnload = findViewById(R.id.btnUnload)
-        lvSf2List = findViewById(R.id.lvSf2List)
+        llSf2List = findViewById(R.id.llSf2List)
+        tvSf2Empty = findViewById(R.id.tvSf2Empty)
         tvSf2Count = findViewById(R.id.tvSf2Count)
         tvPolyphony = findViewById(R.id.tvPolyphony)
         seekBarPolyphony = findViewById(R.id.seekBarPolyphony)
@@ -254,12 +252,6 @@ class SettingsActivity : AppCompatActivity() {
         btnBrowse.setOnClickListener { sf2Picker.launch("*/*") }
 
         btnUnload.setOnClickListener { unloadAllSoundFonts() }
-
-        // Loaded-SF2 list adapter: each row shows the font name + an "Unload"
-        // button that removes just that one SF2 (arbitrary single unload).
-        sf2ListAdapter = Sf2ListAdapter(loadedSf2s) { sf -> unloadSoundFont(sf) }
-        lvSf2List.adapter = sf2ListAdapter
-        lvSf2List.onItemClickListener = null
 
         btnPitchBendChannels.setOnClickListener { showPitchBendChannelsDialog() }
 
@@ -548,11 +540,23 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    // Replace the in-memory list + count label, then notify the adapter.
+    // Replace the in-memory list + count label, then rebuild the row views.
+    // Rows are inflated into a LinearLayout (NOT a ListView) because the
+    // settings screen scrolls via a ScrollView, and a ListView with
+    // wrap_content height inside a ScrollView only measures its first row.
     private fun updateSf2List(list: List<LoadedSf2>, count: Int) {
         loadedSf2s.clear()
         loadedSf2s.addAll(list)
-        sf2ListAdapter?.notifyDataSetChanged()
+        llSf2List.removeAllViews()
+        for (sf in loadedSf2s) {
+            val row = layoutInflater.inflate(R.layout.sf2_list_item, llSf2List, false)
+            row.findViewById<TextView>(R.id.tvSf2ItemName).text = sf.name
+            row.findViewById<Button>(R.id.btnSf2ItemUnload).setOnClickListener {
+                unloadSoundFont(sf)
+            }
+            llSf2List.addView(row)
+        }
+        tvSf2Empty.visibility = if (loadedSf2s.isEmpty()) View.VISIBLE else View.GONE
         tvSf2Count.text = getString(R.string.settings_sf2_loaded_count, count)
     }
 
@@ -588,28 +592,6 @@ class SettingsActivity : AppCompatActivity() {
             AppLogger.error("SettingsActivity", "SF2 JSON parse exception: ${e.message}")
         }
         return result
-    }
-
-    // ListView adapter for the loaded-SF2 rows. Each row shows the font name
-    // and an "Unload" button (removes just that one SF2). The button click is
-    // wired per-row; the ListView's own item click is disabled.
-    private inner class Sf2ListAdapter(
-        private val items: List<LoadedSf2>,
-        private val onUnload: (LoadedSf2) -> Unit
-    ) : BaseAdapter() {
-        override fun getCount() = items.size
-        override fun getItem(position: Int) = items[position]
-        override fun getItemId(position: Int) = position.toLong()
-        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val view = convertView ?: LayoutInflater.from(parent.context)
-                .inflate(R.layout.sf2_list_item, parent, false)
-            val sf = items[position]
-            view.findViewById<TextView>(R.id.tvSf2ItemName).text = sf.name
-            view.findViewById<Button>(R.id.btnSf2ItemUnload).setOnClickListener {
-                onUnload(sf)
-            }
-            return view
-        }
     }
 
     // 16-channel multi-choice dialog for the pitch bend / mod / breath

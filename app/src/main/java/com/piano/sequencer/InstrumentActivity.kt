@@ -296,10 +296,22 @@ class InstrumentActivity : AppCompatActivity() {
         val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, all.map { displayName(it) })
         listView.adapter = adapter
 
+        // Build the full view hierarchy BEFORE showing the dialog, so the
+        // EditText is part of the window when it becomes visible — needed for
+        // the soft-input flag below to take effect.
+        container.addView(search)
+        container.addView(listView)
+
+        // create() (not show()) so we can set the soft-input mode on the
+        // window before it is shown. SOFT_INPUT_STATE_ALWAYS_VISIBLE is the
+        // forceful variant; the plain _VISIBLE flag is a hint the system may
+        // ignore, which is why the keyboard did not appear.
         val dialog = AlertDialog.Builder(this)
             .setTitle(getString(R.string.instrument_picker_title, channel + 1))
             .setView(container)
-            .show()
+            .create()
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        dialog.show()
 
         listView.setOnItemClickListener { _, _, position, _ ->
             applyInstrument(channel, visible[position])
@@ -319,11 +331,10 @@ class InstrumentActivity : AppCompatActivity() {
             override fun afterTextChanged(s: Editable?) {}
         })
 
-        container.addView(search)
-        container.addView(listView)
         search.requestFocus()
-        // requestFocus() alone does not reliably raise the IME on all devices
-        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        // requestFocus() alone does not reliably raise the IME on all devices;
+        // post the show call so it runs after the EditText is attached and
+        // laid out.
         val imm = getSystemService(InputMethodManager::class.java)
         search.post { imm?.showSoftInput(search, InputMethodManager.SHOW_IMPLICIT) }
     }
