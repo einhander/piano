@@ -24,10 +24,13 @@ name: Build APK
 
 on:
   push:
-    branches: [master, feature/lsp-plugins-integration]
+    # master, any feature/* or fix/* branch, and version tags (v*). The prefix
+    # globs ('feature/*', 'fix/*') match exactly one path segment after the
+    # prefix, e.g. feature/multiple-sf2 or fix/build-ndk.
+    branches: [master, 'feature/*', 'fix/*']
     tags: ['v*']
   pull_request:
-    branches: [master]
+    branches: [master, 'feature/*', 'fix/*']
   workflow_dispatch:
 
 concurrency:
