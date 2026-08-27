@@ -216,11 +216,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${GITHUB_REF##*/}"
-          echo "Creating release for tag $tag"
+          echo "Publishing release for tag $tag"
           # Rename to a friendly filename inside the release.
           cp "$APK_PATH" "piano-sequencer-${tag}.apk"
-          gh release create "$tag" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$tag" \
-            --generate-notes \
-            "piano-sequencer-${tag}.apk"
+          # Idempotent: if a release for this tag already exists (e.g. it was
+          # created out-of-band, or this job is a re-run), attach the APK to it
+          # instead of failing. --clobber overwrites a same-named asset.
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists; uploading APK to it."
+            gh release upload "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber \
+              "piano-sequencer-${tag}.apk"
+          else
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$tag" \
+              --generate-notes \
+              "piano-sequencer-${tag}.apk"
+          fi
