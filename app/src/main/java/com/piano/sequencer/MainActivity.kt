@@ -802,16 +802,37 @@ class MainActivity : AppCompatActivity() {
         if (svc.getSoundFontCount() > 0) return
         val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
 
-        // 1. Reload the last SoundFont (file on disk, path in prefs).
+        // 1. Reload the persisted SoundFonts (file on disk, paths in prefs).
+        //    Multi-SF2: "sf2_paths" is a JSON array of paths. Back-compat: the
+        //    legacy single "sf2_path" key is honoured if "sf2_paths" is absent.
+        val sf2Paths = mutableListOf<String>()
+        val multiJson = prefs.getString("sf2_paths", null)
+        if (multiJson != null) {
+            try {
+                val arr = org.json.JSONArray(multiJson)
+                for (i in 0 until arr.length()) {
+                    arr.optString(i)?.let { if (it.isNotBlank()) sf2Paths.add(it) }
+                }
+            } catch (e: Exception) {
+                AppLogger.error("MainActivity", "sf2_paths parse: ${e.message}")
+            }
+        }
+        if (sf2Paths.isEmpty()) {
+            prefs.getString("sf2_path", null)?.let { sf2Paths.add(it) }
+        }
+
         var sf2Loaded = false
-        val path = prefs.getString("sf2_path", null)
-        if (path != null && File(path).exists()) {
-            val id = svc.loadSoundFont(path)
-            if (id >= 0) {
-                sf2Loaded = true
-                AppLogger.info("MainActivity", "Reloaded SF2: ${File(path).name} (synth ID: $id)")
+        for (path in sf2Paths) {
+            if (File(path).exists()) {
+                val id = svc.loadSoundFont(path)
+                if (id >= 0) {
+                    sf2Loaded = true
+                    AppLogger.info("MainActivity", "Reloaded SF2: ${File(path).name} (synth ID: $id)")
+                } else {
+                    AppLogger.warn("MainActivity", "Failed to reload SF2: $path (error: $id)")
+                }
             } else {
-                AppLogger.warn("MainActivity", "Failed to reload SF2: $path (error: $id)")
+                AppLogger.warn("MainActivity", "SF2 not found on disk: $path")
             }
         }
 
@@ -859,6 +880,26 @@ class MainActivity : AppCompatActivity() {
 
     // ── .pseq project save / load ──
 
+    // Read the persisted SF2 file NAMES (basenames) for project saving.
+    // Multi-SF2: from "sf2_paths" JSON array; back-compat: legacy "sf2_path".
+    private fun readPersistedSf2Names(prefs: android.content.SharedPreferences): List<String> {
+        val names = mutableListOf<String>()
+        val multiJson = prefs.getString("sf2_paths", null)
+        if (multiJson != null) {
+            try {
+                val arr = org.json.JSONArray(multiJson)
+                for (i in 0 until arr.length()) {
+                    val p = arr.optString(i)
+                    if (p.isNotBlank()) names.add(File(p).name)
+                }
+            } catch (_: Exception) { }
+        }
+        if (names.isEmpty()) {
+            prefs.getString("sf2_path", null)?.let { names.add(File(it).name) }
+        }
+        return names
+    }
+
     /**
      * Save the current session (settings + cells + MIDI files) as a .pseq
      * archive to the SAF uri. File I/O + engine reads run on a worker thread
@@ -869,9 +910,10 @@ class MainActivity : AppCompatActivity() {
             try {
                 val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
 
-                // Settings from prefs (soundFont = SF2 file name only, not bundled)
-                val sf2Path = prefs.getString("sf2_path", null)
-                val soundFont = sf2Path?.let { File(it).name }
+                // Settings from prefs (soundFont = SF2 file names, '\n'-joined,
+                // not bundled). Multi-SF2: read the persisted JSON list.
+                val soundFonts = readPersistedSf2Names(prefs)
+                val soundFont = soundFonts.takeIf { it.isNotEmpty() }?.joinToString("\n")
                 val polyphony = prefs.getInt("polyphony", 64)
                 val masterGain = prefs.getFloat("master_gain", 1.0f)
                 val channels = (0 until 16).map { prefs.getInt("chan_prog_$it", 0) }
@@ -998,26 +1040,36 @@ class MainActivity : AppCompatActivity() {
                 // old-project .mid files are not re-added as cells.
                 store.markBackfillDone()
 
-                // 5. SF2: name only in the archive — load it if the file is on
-                //    this device, otherwise keep the current one. The pref is
-                //    written only on success (or when the engine is not up yet —
-                //    boot restore will load it), so a failed load never
-                //    clobbers a working sf2_path.
+                // 5. SF2: names only in the archive ('\n'-joined for multi-SF2) —
+                //    load each if the file is on this device, otherwise skip it.
+                //    The pref is written only on success (or when the engine is
+                //    not up yet — boot restore will load it), so a failed load
+                //    never clobbers a working sf2_paths. Before loading the
+                //    project's fonts, clear any currently-loaded ones so the
+                //    project state is authoritative.
                 var sf2Missing = false
                 var sf2Unavailable = false
-                val sf2Name = doc.soundFont
-                if (sf2Name != null) {
-                    // User-provided archive data: reject path separators.
-                    if (sf2Name.contains('/')) {
-                        sf2Missing = true
-                    } else {
+                val sf2Names = doc.soundFont?.split('\n')?.map { it.trim() }
+                    ?.filter { it.isNotEmpty() } ?: emptyList()
+                val loadedPaths = mutableListOf<String>()
+                if (sf2Names.isNotEmpty()) {
+                    val svc = playbackService
+                    if (svc != null) {
+                        // Replace: unload all, then load the project's fonts.
+                        svc.unloadSoundFonts()
+                    }
+                    for (sf2Name in sf2Names) {
+                        // User-provided archive data: reject path separators.
+                        if (sf2Name.contains('/')) {
+                            sf2Missing = true
+                            continue
+                        }
                         val sf2File = File(extDir, sf2Name)
                         if (sf2File.exists()) {
                             val svc = playbackService
                             val id = svc?.loadSoundFont(sf2File.absolutePath) ?: -1
                             if (id >= 0 || svc == null) {
-                                getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
-                                    .putString("sf2_path", sf2File.absolutePath).apply()
+                                loadedPaths.add(sf2File.absolutePath)
                             } else {
                                 sf2Unavailable = true
                                 AppLogger.warn("MainActivity", "Failed to load SF2 on project load: ${sf2File.absolutePath} (error: $id)")
@@ -1035,6 +1087,14 @@ class MainActivity : AppCompatActivity() {
                     .putFloat("master_gain", doc.masterGain)
                 for (ch in 0 until 16) {
                     editor.putInt("chan_prog_$ch", doc.channels[ch])
+                }
+                // Multi-SF2: persist the loaded paths as a JSON array, and clear
+                // the legacy single-path key. If the project had no SF2, keep
+                // whatever is currently persisted (don't clobber a working set).
+                if (sf2Names.isNotEmpty()) {
+                    val arr = org.json.JSONArray()
+                    for (p in loadedPaths) arr.put(p)
+                    editor.remove("sf2_path").putString("sf2_paths", arr.toString())
                 }
                 editor.apply()
 
@@ -1056,7 +1116,7 @@ class MainActivity : AppCompatActivity() {
                 //    re-reads the singleton store in onResume → refreshPanel,
                 //    so no explicit refresh is needed here.
                 val msg = if (sf2Missing || sf2Unavailable) {
-                    "Project loaded: ${doc.name} — SF2 $sf2Name not available, keeping current"
+                    "Project loaded: ${doc.name} — some SF2 file(s) not available, keeping current"
                 } else {
                     "Project loaded: ${doc.name}"
                 }

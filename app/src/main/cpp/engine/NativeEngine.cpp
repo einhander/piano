@@ -151,6 +151,13 @@ int NativeEngine::loadSoundFont(const char* filePath) {
     return mSynth->loadSoundFont(filePath);
 }
 
+bool NativeEngine::unloadSoundFont(int sfId) {
+    if (!mSynth || !mInitialized.load(std::memory_order_acquire)) {
+        return false;
+    }
+    return mSynth->unloadSoundFont(sfId);
+}
+
 void NativeEngine::unloadSoundFonts() {
     if (mSynth) {
         mSynth->unloadSoundFonts();
@@ -259,6 +266,10 @@ int NativeEngine::getSoundFontCount() const {
 
 std::string NativeEngine::getSoundFontPath() const {
     return mSynth ? mSynth->getSoundFontPath() : std::string();
+}
+
+std::vector<FluidSynthEngine::LoadedSf2> NativeEngine::getLoadedSoundFonts() const {
+    return mSynth ? mSynth->getLoadedSoundFonts() : std::vector<FluidSynthEngine::LoadedSf2>();
 }
 
 std::vector<InstrumentInfo> NativeEngine::getInstruments() const {
@@ -405,8 +416,12 @@ void NativeEngine::handleSampleRateChange(int newRate) {
     if (newRate == mSampleRate) return;  // no change
     updateSampleRate(newRate);
     if (mSynth) {
-        std::string sfPath = mSynth->getSoundFontPath();
-        mSynth->reprepareAtNewRate(newRate, sfPath.empty() ? nullptr : sfPath.c_str());
+        // Reload ALL currently-loaded SF2s into the new synth (multi-SF2).
+        std::vector<std::string> sfPaths;
+        for (const auto& sf : mSynth->getLoadedSoundFonts()) {
+            sfPaths.push_back(sf.path);
+        }
+        mSynth->reprepareAtNewRate(newRate, sfPaths);
     }
 }
 

@@ -8,6 +8,10 @@
     <string name="settings_browse">Browse…</string>
     <string name="settings_sf2_none">No SoundFont loaded</string>
     <string name="settings_unload">Unload</string>
+    <string name="settings_unload_all">Unload all</string>
+    <string name="settings_sf2_loaded_title">Loaded SoundFonts</string>
+    <string name="settings_sf2_load_failed">Failed to load SoundFont</string>
+    <string name="settings_sf2_unload_failed">Failed to unload SoundFont</string>
     <string name="settings_fluidsynth_title">FluidSynth Settings</string>
     <string name="settings_polyphony">Polyphony</string>
     <string name="settings_master_gain">Master Gain</string>

@@ -43,6 +43,7 @@ public:
 
     // SoundFont
     int loadSoundFont(const char* filePath);
+    bool unloadSoundFont(int sfId);
     void unloadSoundFonts();
 
     // MIDI events — from JNI or MIDI router
@@ -71,6 +72,7 @@ public:
     int getActiveVoices() const;
     int getSoundFontCount() const;
     std::string getSoundFontPath() const;
+    std::vector<FluidSynthEngine::LoadedSf2> getLoadedSoundFonts() const;
 
     // Instruments (settings thread, NOT audio callback)
     std::vector<InstrumentInfo> getInstruments() const;

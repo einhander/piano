@@ -243,6 +243,15 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeLoadSoundFont(JNIEnv* env, jcl
     return result;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeUnloadSoundFont(JNIEnv* /*env*/, jclass, jint sfId) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) {
+        return false;
+    }
+    return static_cast<jboolean>(inst->unloadSoundFont(static_cast<int>(sfId)));
+}
+
 JNIEXPORT void JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeNoteOn(JNIEnv* env, jclass, jint channel, jint note, jint velocity) {
     NativeEngine* inst = NativeEngine::getInstance();
@@ -513,6 +522,30 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetSoundFontPath(JNIEnv* env, 
         return env->NewStringUTF("");
     }
     return result;
+}
+
+// JSON-escape a string for embedding in a JSON string literal (forward
+// declaration — defined below; used by nativeGetLoadedSoundFonts).
+static std::string jsonEscape(const std::string& s);
+
+// Returns JSON array: [{"id":1,"path":"..."}, ...] of all loaded SoundFonts.
+// Empty array "[]" if no SoundFont is loaded.
+JNIEXPORT jstring JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetLoadedSoundFonts(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return env->NewStringUTF("[]");
+    auto fonts = inst->getLoadedSoundFonts();
+    std::string json = "[";
+    for (size_t i = 0; i < fonts.size(); i++) {
+        if (i > 0) json += ",";
+        json += "{\"id\":";
+        json += std::to_string(fonts[i].id);
+        json += ",\"path\":\"";
+        json += jsonEscape(fonts[i].path);
+        json += "\"}";
+    }
+    json += "]";
+    return env->NewStringUTF(json.c_str());
 }
 
 // JSON-escape a string for embedding in a JSON string literal

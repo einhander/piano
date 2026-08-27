@@ -62,8 +62,10 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
             this@PlaybackService.getMasterEffectParamName(slot, index)
         fun loadSoundFont(filePath: String): Int = this@PlaybackService.loadSoundFont(filePath)
         fun unloadSoundFonts() = this@PlaybackService.unloadSoundFonts()
+        fun unloadSoundFont(sfId: Int): Boolean = this@PlaybackService.unloadSoundFont(sfId)
         fun getSoundFontCount(): Int = this@PlaybackService.getSoundFontCount()
         fun getSoundFontPath(): String = this@PlaybackService.getSoundFontPath()
+        fun getLoadedSoundFonts(): String = this@PlaybackService.getLoadedSoundFonts()
         fun isAudioPlaying(): Boolean = this@PlaybackService.isAudioPlaying()
         fun getInstruments(): String = this@PlaybackService.getInstruments()
         fun setChannelProgram(channel: Int, bank: Int, program: Int): Boolean =
@@ -243,7 +245,6 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         NativeEngineBridge.nativeInitEngine(sampleRate, bufferSize)
 
     fun loadSoundFont(filePath: String): Int = NativeEngineBridge.nativeLoadSoundFont(filePath)
-
     fun noteOn(channel: Int, note: Int, velocity: Int) =
         NativeEngineBridge.nativeNoteOn(channel, note, velocity)
 
@@ -324,8 +325,10 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun getPerformanceMode(): Int = NativeEngineBridge.nativeGetPerformanceMode()
 
     fun unloadSoundFonts() = NativeEngineBridge.nativeUnloadSoundFonts()
+    fun unloadSoundFont(sfId: Int): Boolean = NativeEngineBridge.nativeUnloadSoundFont(sfId)
     fun getSoundFontCount(): Int = NativeEngineBridge.nativeGetSoundFontCount()
     fun getSoundFontPath(): String = NativeEngineBridge.nativeGetSoundFontPath()
+    fun getLoadedSoundFonts(): String = NativeEngineBridge.nativeGetLoadedSoundFonts()
 
     // Instrument assignment (16 MIDI channels)
     fun getInstruments(): String = NativeEngineBridge.nativeGetInstruments()

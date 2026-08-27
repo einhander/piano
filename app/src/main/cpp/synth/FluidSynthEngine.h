@@ -63,9 +63,14 @@ public:
     // Creates BOTH synth slots with the given sample rate.
     bool init(int sampleRate, int bufferSize);
 
-    // Load SoundFont 2 file (WORKER THREAD — does file I/O).
-    // Returns synthID on success, -1 on failure.
+    // Load SoundFont 2 file (WORKER THREAD — does file I/O). Additive: the new
+    // SF2 is loaded alongside any already-loaded SF2s (presets merge). Returns
+    // synthID on success, -1 on failure.
     int loadSoundFont(const char* filePath);
+
+    // Unload one SoundFont by its synthID (WORKER THREAD). Returns true if the
+    // SF2 was found and unloaded.
+    bool unloadSoundFont(int sfId);
 
     // Unload all SoundFonts (WORKER THREAD).
     void unloadSoundFonts();
@@ -156,6 +161,9 @@ public:
     int getCmdQueueDrops() const { return static_cast<int>(mCmdQueue.droppedCount()); }
     int getSoundFontCount() const;
     std::string getSoundFontPath() const;
+    // All loaded SF2s: {synthID, filePath}. Worker thread.
+    struct LoadedSf2 { int id; std::string path; };
+    std::vector<LoadedSf2> getLoadedSoundFonts() const;
 
     // [perf]: duration (ms) of the most recent SF2 load (worker-thread write,
     // atomic read). 0 = no SF2 loaded yet. Surfaced in the one-time [perf] dump.
@@ -163,12 +171,12 @@ public:
 
     // M5: re-prepare the inactive synth slot at a NEW sample rate (worker
     // thread). Frees the old synth in the target slot, creates a new synth at
-    // the new rate, loads the given SF2 (if any), applies the desired state,
-    // flips mActiveIndex, then frees the old active slot's SF2 (M3). Used on a
-    // mid-session rate change (e.g. BT device switch 44.1k→48k) — the init()
-    // path is idempotent, so a reopen at a new rate would otherwise leave the
-    // transport tempo + FluidSynth pitch off by the rate ratio.
-    void reprepareAtNewRate(int newRate, const char* sfPath);
+    // the new rate, reloads ALL currently-loaded SF2s, applies the desired
+    // state, flips mActiveIndex, then frees the old active slot's SF2 (M3).
+    // Used on a mid-session rate change (e.g. BT device switch 44.1k→48k) — the
+    // init() path is idempotent, so a reopen at a new rate would otherwise
+    // leave the transport tempo + FluidSynth pitch off by the rate ratio.
+    void reprepareAtNewRate(int newRate, const std::vector<std::string>& sfPaths);
 
     // Enumerate all presets of all loaded SoundFonts (worker thread, NOT audio
     // callback). Synchronized with the audio thread via the sequence lock.
@@ -185,10 +193,17 @@ private:
     // Apply a single control command to one synth slot.
     void applyCommandToSynth(fluid_synth_t* synth, const SynthCmd& cmd);
 
-    // Prepare the inactive synth slot for an SF2 change (worker thread):
-    // unload all SF2s from it, then (if newSfPath != null) load the new one.
-    // Returns the new SF2 id or -1.
-    int prepareInactiveSlot(const char* newSfPath);
+    // Prepare the inactive synth slot so it contains exactly the given list of
+    // SF2 paths (worker thread): unload all SF2s from it, then load each path
+    // in order. Returns the sfId of the LAST loaded SF2 (or -1 if the list is
+    // empty / all loads failed). Flips mActiveIndex and frees the old active
+    // slot's SF2s (M3). Used by loadSoundFont (additive) and unloadSoundFont.
+    int prepareInactiveSlot(const std::vector<std::string>& sfPaths);
+
+    // Rebuild mLoadedSf2s from the now-active synth (fresh ids after a slot
+    // swap). Enumerated under the sequence lock (audio thread may render).
+    // Worker thread, caller holds mWorkerMutex.
+    void rebuildLoadedSf2List();
 
     // M2: apply the current desired state (polyphony/gain/reverb/chorus/
     // interps/channel programs) to one synth slot. Worker thread, called
@@ -241,8 +256,13 @@ private:
     // Active voice count (audio thread refreshes after each render).
     std::atomic<int> mActiveVoices{0};
 
-    // Note: tracks only the last-loaded SF2 path. Multi-SF2 support not yet implemented.
-    std::string mLoadedSfPath;
+    // Loaded SF2s: the authoritative list of {synthID, filePath} currently
+    // resident in the active synth slot. Worker-thread writes (under
+    // mSfPathMutex) inside loadSoundFont/unloadSoundFont; getLoadedSoundFonts/
+    // getSoundFontPath read it. Multi-SF2 support: the synth holds several SF2s
+    // at once (presets merge); this list mirrors that.
+    struct Sf2Entry { int id; std::string path; };
+    std::vector<Sf2Entry> mLoadedSf2s;
     mutable std::mutex mSfPathMutex;
 
     // M1: worker-side mutex serializing the SF2 slot-prep operations
