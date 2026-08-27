@@ -30,6 +30,14 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         @Volatile
         private var instance: MidiFileTriggerController? = null
 
+        /**
+         * Sentinel timestamp for chord note-on/off events. Any non-zero value
+         * marks them as non-live in the synth so the held-note bitmap is not
+         * touched and a held keyboard note on the same (channel, note) is
+         * re-armed on chord release. The exact value is irrelevant; 1 is used.
+         */
+        private const val CHORD_TIMESTAMP = 1L
+
         fun get(context: Context): MidiFileTriggerController {
             instance ?: run {
                 synchronized(MidiFileTriggerController::class) {
@@ -71,6 +79,16 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     private val loadedFilePerSlot = ConcurrentHashMap<Int, Pair<String, Int>>()
 
     private val noteStateMachine = NoteToggleStateMachine()
+
+    /**
+     * Active chord strikes, keyed by trigger note: note → list of (channel,
+     * note, velocity) currently sounding. Used by [stopChord] to send note-off
+     * for exactly the notes this trigger started. Guarded by [chordLock].
+     * Chord playback runs on the MIDI binder thread (onNoteOn/onNoteOff), so a
+     * single mutex is fine — it is never held from the audio callback.
+     */
+    private val activeChords = mutableMapOf<Int, List<Triple<Int, Int, Int>>>()
+    private val chordLock = Any()
 
     /** B4: last-seen value per CC number (press = value change; same value = repeat). */
     private val ccPressDetector = ContinuousPressDetector(128)
@@ -126,7 +144,9 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     fun onNoteOn(channel: Int, note: Int, velocity: Int): Boolean {
         // While recording, all notes must reach the engine (recorded + synthesized);
         // file triggering is paused for the duration of the recording.
-        if (service?.isRecording() == true) return false
+        // (Chord recording is tracked separately by ChordRecorder and does not
+        // gate on service.isRecording(), but the trigger still must not fire.)
+        if (service?.isRecording() == true || ChordRecorder.isActive()) return false
         // Learn state active → capture
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
             MidiFileLearnState.captureNote(note)
@@ -135,6 +155,22 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         val s = store ?: return false
         val cell = s.findByNote(note)
         if (cell == null) return false // unmapped → caller forwards
+
+        if (cell.mode == MODE_CHORD) {
+            // Chord gate: a fresh press plays the chord (re-trigger — stop then
+            // play). Key repeat (note-on without note-off between) is IGNORED so
+            // holding the key sustains instead of re-triggering.
+            val result = noteStateMachine.noteOn(note, loop = false)
+            when (result) {
+                NoteToggleStateMachine.Result.TOGGLE_ON -> {
+                    stopChord(note) // re-trigger: silence the previous strike first
+                    playChord(cell, velocity)
+                }
+                NoteToggleStateMachine.Result.TOGGLE_OFF,
+                NoteToggleStateMachine.Result.IGNORED -> {}
+            }
+            return true
+        }
 
         val result = noteStateMachine.noteOn(note, cell.loop)
         when (result) {
@@ -153,10 +189,15 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     fun onNoteOff(channel: Int, note: Int, velocity: Int): Boolean {
         // While recording, all notes must reach the engine (recorded + synthesized);
         // file triggering is paused for the duration of the recording.
-        if (service?.isRecording() == true) return false
+        if (service?.isRecording() == true || ChordRecorder.isActive()) return false
         noteStateMachine.noteOff(note)
         val s = store ?: return false
-        return s.findByNote(note) != null // consumed if mapped
+        val cell = s.findByNote(note) ?: return false // unmapped → caller forwards
+        // Chord gate: release stops the chord's notes.
+        if (cell.mode == MODE_CHORD) {
+            stopChord(note)
+        }
+        return true
     }
 
     /**
@@ -320,6 +361,8 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      * so a re-learned trigger starts with a fresh "no stable value yet" state.
      */
     fun freeSlotForTrigger(key: Int) {
+        // Stop a sounding chord (no slot) before tearing down the mapping.
+        stopChord(key)
         val slot = triggerSlotMap.remove(key)
         if (slot != null) {
             noteStateMachine.stopPlaying(key)
@@ -331,6 +374,9 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     loadedFilePerSlot.remove(slot)
                 }
             }
+        } else {
+            noteStateMachine.stopPlaying(key)
+            resetPressDetector(key)
         }
     }
 
@@ -354,6 +400,73 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         when {
             key in 128..255 -> ccPressDetector.reset(key - 128)
             key == 256 -> pbPressDetector.reset(0)
+        }
+    }
+
+    // ── Chord mode ──
+
+    /**
+     * Play a chord cell's notes. The trigger velocity scales each note's
+     * recorded base velocity: scale = triggerVelocity / 127 (so a full-velocity
+     * trigger reproduces the recorded dynamics exactly, a softer trigger plays
+     * proportionally quieter — and, via the synth's velocity-sensitive
+     * envelopes, softer-attacking). All notes fire at once (block chord; the
+     * recorded strum timing is intentionally ignored).
+     *
+     * Runs on the MIDI binder thread — sends note-ons through the same
+     * service path as live notes (→ SynthCmdQueue → audio callback), never on
+     * the audio callback directly.
+     */
+    private fun playChord(cell: SequencerCell, triggerVelocity: Int) {
+        val svc = service ?: return
+        if (cell.chordNotes.isEmpty()) return
+        val scale = (triggerVelocity.coerceIn(0, 127)) / 127.0
+        val struck = ArrayList<Triple<Int, Int, Int>>(cell.chordNotes.size)
+        for (cn in cell.chordNotes) {
+            val vel = (cn.velocity * scale).toInt().coerceIn(1, 127)
+            // Non-live (timestamp != 0): the chord strike is a programmatic
+            // transient, not a sustained keyboard press, so it must NOT mark
+            // the note as held. This lets the engine re-arm a keyboard note
+            // that is still held on the same (channel, note) when the chord is
+            // released — releasing the chord button no longer steals a held
+            // keyboard note that shares a pitch with the chord.
+            svc.sendMidiMessageTimed(0x90 or (cn.channel and 0x0F), cn.note, vel, CHORD_TIMESTAMP)
+            struck.add(Triple(cn.channel and 0x0F, cn.note, vel))
+        }
+        synchronized(chordLock) {
+            activeChords[cell.triggerKey()] = struck
+        }
+    }
+
+    /**
+     * Stop the chord started by a trigger note (send note-off for exactly the
+     * notes [playChord] sounded for it). No-op if no chord is active for the key.
+     */
+    private fun stopChord(triggerNote: Int) {
+        val svc = service
+        val struck = synchronized(chordLock) { activeChords.remove(triggerNote) }
+        if (struck == null || svc == null) return
+        for ((ch, note, _) in struck) {
+            // Non-live note-off: kills the chord's voices, then the engine
+            // re-arms any keyboard note still held on (ch, note) instead of
+            // silencing it. Matches the note-on timestamp used in playChord.
+            svc.sendMidiMessageTimed(0x80 or ch, note, 0, CHORD_TIMESTAMP)
+        }
+    }
+
+    /** Stop all active chords (used when entering recording / stopping all). */
+    fun stopAllChords() {
+        val svc = service
+        val all = synchronized(chordLock) {
+            val copy = activeChords.toMap()
+            activeChords.clear()
+            copy
+        }
+        if (svc == null) return
+        for ((_, struck) in all) {
+            for ((ch, note, _) in struck) {
+                svc.sendMidiMessageTimed(0x80 or ch, note, 0, CHORD_TIMESTAMP)
+            }
         }
     }
 
@@ -455,6 +568,8 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     noteStateMachine.stopPlaying(key)
                 }
             }
+            // Chord cells have no slot; stop any sounding chord strikes too.
+            stopAllChords()
             synchronized(slotLocks[testPlaySlot]) {
                 if (testPlayPlaying) {
                     svc.stopMidiFileSlot(testPlaySlot)

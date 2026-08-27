@@ -21,6 +21,8 @@ import com.piano.sequencer.R
 import com.piano.sequencer.midi.MidiFileLearnState
 import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.MidiFileTriggerController
+import com.piano.sequencer.midi.MODE_CHORD
+import com.piano.sequencer.midi.MODE_FILE
 import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.midi.TRIGGER_CC
 import com.piano.sequencer.midi.TRIGGER_NOTE
@@ -72,6 +74,9 @@ class MidiFilesPanel @JvmOverloads constructor(
 
     /** Called when a cell is removed (file stays on disk). */
     var onCellRemove: (cell: SequencerCell) -> Unit = {}
+
+    /** Called when the user toggles a cell's mode (FILE ↔ CHORD). */
+    var onModeToggle: (cellId: Int, newMode: String) -> Unit = { _, _ -> }
 
     // ── State ──
 
@@ -188,15 +193,33 @@ class MidiFilesPanel @JvmOverloads constructor(
             )
         }
 
-        // File name
+        // File name / chord label
         val nameText = TextView(context).apply {
-            text = if (cell.filePath.isNotEmpty()) {
+            text = if (cell.mode == MODE_CHORD) {
+                val n = cell.chordNotes.size
+                if (n > 0) "♪ Chord: $n note" + (if (n == 1) "" else "s") else "♪ Chord: empty"
+            } else if (cell.filePath.isNotEmpty()) {
                 val name = File(cell.filePath).name
                 if (name.length > 25) "${name.substring(0, 22)}..." else name
             } else "—"
             textSize = 12f
             setTextColor(0xFF000000.toInt())
             layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        // Mode toggle: FILE ↔ CHORD. In chord mode the file-specific controls
+        // (channel, loop, tempo, import, export, test) are irrelevant and hidden.
+        val modeBtn = Button(context).apply {
+            text = if (cell.mode == MODE_CHORD) "Mode: Chord" else "Mode: File"
+            textSize = 9f
+            setPadding(4, 4, 4, 4)
+            minWidth = 0
+            setAllCaps(false)
+            layoutParams = LayoutParams(
+                LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 4, 0)
+            }
         }
 
         // Key label: NOTE → note name; CC → "CC <n>"; PITCH_BEND → "PB" (short — the row
@@ -244,10 +267,19 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         row1.addView(nameText)
+        row1.addView(modeBtn)
         row1.addView(keyLabel)
         row1.addView(channelSpinner)
         row1.addView(loopCheck)
         row1.addView(tempoEdit)
+
+        // In chord mode hide the file-specific controls (they have no meaning).
+        val isChord = cell.mode == MODE_CHORD
+        if (isChord) {
+            channelSpinner.visibility = android.view.View.GONE
+            loopCheck.visibility = android.view.View.GONE
+            tempoEdit.visibility = android.view.View.GONE
+        }
 
         container.addView(row1, LayoutParams(
             LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
@@ -304,6 +336,12 @@ class MidiFilesPanel @JvmOverloads constructor(
         row2.addView(importBtn)
         row2.addView(removeBtn)
 
+        // File-only buttons are meaningless in chord mode.
+        if (isChord) {
+            testBtn.visibility = android.view.View.GONE
+            importBtn.visibility = android.view.View.GONE
+        }
+
         container.addView(row2)
 
         // ── Row 3: per-cell record + export ──
@@ -342,6 +380,11 @@ class MidiFilesPanel @JvmOverloads constructor(
         row3.addView(recordBtn)
         row3.addView(exportBtn)
 
+        // Export is file-only (chord has no .mid to export).
+        if (isChord) {
+            exportBtn.visibility = android.view.View.GONE
+        }
+
         container.addView(row3, LayoutParams(
             LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
         ).apply {
@@ -362,6 +405,15 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         // ── Button handlers ──
+
+        modeBtn.setOnClickListener {
+            val cur = store.get(cell.id) ?: return@setOnClickListener
+            // Stop any sounding chord before leaving chord mode; free the slot
+            // when leaving either mode so the trigger re-binds cleanly.
+            val newMode = if (cur.mode == MODE_CHORD) MODE_FILE else MODE_CHORD
+            onModeToggle(cur.id, newMode)
+            refresh()
+        }
 
         learnBtn.setOnClickListener {
             if (cell.hasTrigger()) {
