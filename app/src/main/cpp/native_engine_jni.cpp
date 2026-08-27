@@ -638,6 +638,26 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeSendMidiMessage(
     );
 }
 
+// Programmatic (non-keyboard) MIDI: same as nativeSendMidiMessage but with a
+// caller-supplied timestamp. A non-zero timestamp marks the event as non-live,
+// so FluidSynthEngine::processOneMidi neither sets nor clears the held-note
+// bitmap. This is what chord strikes need: their note-off must still kill the
+// synth voices (fluid_synth_noteoff) and then re-arm any keyboard note that is
+// still held on the shared channel, instead of clearing the bitmap first and
+// silencing the held note for good. See processOneMidi re-arm logic.
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSendMidiMessageTimed(
+    JNIEnv* env, jclass, jint status, jint data1, jint data2, jlong timestamp) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return;
+    inst->enqueueMidiMessage(
+        static_cast<uint8_t>(status & 0xFF),
+        static_cast<uint8_t>(data1 & 0xFF),
+        static_cast<uint8_t>(data2 & 0xFF),
+        static_cast<int64_t>(timestamp)
+    );
+}
+
 // Transport control
 JNIEXPORT void JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeSetBPM(JNIEnv* env, jclass, jdouble bpm) {

@@ -255,6 +255,15 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun sendMidiMessage(status: Int, data1: Int, data2: Int) =
         NativeEngineBridge.nativeSendMidiMessage(status, data1, data2)
 
+    /**
+     * Programmatic (non-keyboard) MIDI: same as [sendMidiMessage] but marked
+     * non-live via a non-zero [timestamp]. The synth plays the event without
+     * touching the held-note bitmap, so a subsequent note-off re-arms a keyboard
+     * note still held on the same (channel, note) instead of silencing it.
+     */
+    fun sendMidiMessageTimed(status: Int, data1: Int, data2: Int, timestamp: Long) =
+        NativeEngineBridge.nativeSendMidiMessageTimed(status, data1, data2, timestamp)
+
     fun setMasterGain(gain: Float) = NativeEngineBridge.nativeSetMasterGain(gain)
 
     fun getUnderrunCount(): Int = NativeEngineBridge.nativeGetUnderrunCount()

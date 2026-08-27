@@ -184,6 +184,16 @@ object NativeEngineBridge {
     external fun nativeGetChannelProgram(channel: Int): Int
     external fun nativeSendMidiMessage(status: Int, data1: Int, data2: Int)
 
+    /**
+     * Programmatic (non-keyboard) MIDI message with a caller-supplied timestamp.
+     * A non-zero [timestamp] marks the event as non-live: the synth plays it but
+     * does NOT treat it as a held keyboard note, so a later note-off for the same
+     * (channel, note) re-arms any keyboard note still held instead of silencing
+     * it. Used by chord strikes so releasing a chord button no longer kills a
+     * keyboard note that shares a note number with the chord.
+     */
+    external fun nativeSendMidiMessageTimed(status: Int, data1: Int, data2: Int, timestamp: Long)
+
     // Transport control
     external fun nativeSetBPM(bpm: Double)
     external fun nativeSetTransportState(state: Int)

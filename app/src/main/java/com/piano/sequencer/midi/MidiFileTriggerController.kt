@@ -30,6 +30,14 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         @Volatile
         private var instance: MidiFileTriggerController? = null
 
+        /**
+         * Sentinel timestamp for chord note-on/off events. Any non-zero value
+         * marks them as non-live in the synth so the held-note bitmap is not
+         * touched and a held keyboard note on the same (channel, note) is
+         * re-armed on chord release. The exact value is irrelevant; 1 is used.
+         */
+        private const val CHORD_TIMESTAMP = 1L
+
         fun get(context: Context): MidiFileTriggerController {
             instance ?: run {
                 synchronized(MidiFileTriggerController::class) {
@@ -416,7 +424,13 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         val struck = ArrayList<Triple<Int, Int, Int>>(cell.chordNotes.size)
         for (cn in cell.chordNotes) {
             val vel = (cn.velocity * scale).toInt().coerceIn(1, 127)
-            svc.sendMidiMessage(0x90 or (cn.channel and 0x0F), cn.note, vel)
+            // Non-live (timestamp != 0): the chord strike is a programmatic
+            // transient, not a sustained keyboard press, so it must NOT mark
+            // the note as held. This lets the engine re-arm a keyboard note
+            // that is still held on the same (channel, note) when the chord is
+            // released — releasing the chord button no longer steals a held
+            // keyboard note that shares a pitch with the chord.
+            svc.sendMidiMessageTimed(0x90 or (cn.channel and 0x0F), cn.note, vel, CHORD_TIMESTAMP)
             struck.add(Triple(cn.channel and 0x0F, cn.note, vel))
         }
         synchronized(chordLock) {
@@ -433,7 +447,10 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         val struck = synchronized(chordLock) { activeChords.remove(triggerNote) }
         if (struck == null || svc == null) return
         for ((ch, note, _) in struck) {
-            svc.sendMidiMessage(0x80 or ch, note, 0)
+            // Non-live note-off: kills the chord's voices, then the engine
+            // re-arms any keyboard note still held on (ch, note) instead of
+            // silencing it. Matches the note-on timestamp used in playChord.
+            svc.sendMidiMessageTimed(0x80 or ch, note, 0, CHORD_TIMESTAMP)
         }
     }
 
@@ -448,7 +465,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         if (svc == null) return
         for ((_, struck) in all) {
             for ((ch, note, _) in struck) {
-                svc.sendMidiMessage(0x80 or ch, note, 0)
+                svc.sendMidiMessageTimed(0x80 or ch, note, 0, CHORD_TIMESTAMP)
             }
         }
     }
