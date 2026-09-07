@@ -155,6 +155,8 @@ Kotlin plugins: `org.jetbrains.kotlin.android`, `org.jetbrains.kotlin.plugin.ser
   ignored files.
 - Orchestration: never run multiple specialist agents in parallel. At most one
   sub-agent at a time, plus @oracle for architecture/review. Sequential lanes only.
+- Branch naming: new work goes on a branch prefixed `feature/` (features) or `fix/`
+  (bug fixes) — e.g. `feature/chord-channel-del-cell`, `fix/chord-release`. Not `feat/`.
 
 ## Docs
 
