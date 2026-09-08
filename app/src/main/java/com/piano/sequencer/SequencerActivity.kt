@@ -294,6 +294,12 @@ class SequencerActivity : AppCompatActivity() {
             refreshPanel()
         }
 
+        panel.onTrackSelection = { cellId, selectedTracks, trackChannels ->
+            // UI thread; the controller persists first, then reloads the slot
+            // on a worker thread (no-op when the slot is not loaded).
+            MidiFileTriggerController.get(this).updateTrackSelection(cellId, selectedTracks, trackChannels)
+        }
+
         panel.onModeToggle = { cellId, newMode ->
             val store = MidiFileMappingStore.get(this)
             val cur = store.get(cellId)
@@ -356,7 +362,14 @@ class SequencerActivity : AppCompatActivity() {
                         val store = MidiFileMappingStore.get(this@SequencerActivity)
                         val cur = store.get(cellId)
                         if (cur != null) {
-                            store.set(cur.copy(filePath = destFile.absolutePath))
+                            // New file: reset the per-track selection — track indices
+                            // are file-specific; the old selection would point at
+                            // out-of-range tracks (silence) or remap the wrong tracks.
+                            store.set(cur.copy(
+                                filePath = destFile.absolutePath,
+                                selectedTracks = null,
+                                trackChannels = emptyMap()
+                            ))
                         }
                     }
                     Toast.makeText(this@SequencerActivity, "Imported: ${destFile.name}", Toast.LENGTH_SHORT).show()
@@ -495,7 +508,14 @@ class SequencerActivity : AppCompatActivity() {
                             val store = MidiFileMappingStore.get(this)
                             val cell = store.get(recCellId)
                             if (cell != null) {
-                                store.set(cell.copy(filePath = destFile.absolutePath))
+                                // New file: reset the per-track selection (track indices
+                                // are file-specific — a carried selection would silence or
+                                // remap the fresh recording).
+                                store.set(cell.copy(
+                                    filePath = destFile.absolutePath,
+                                    selectedTracks = null,
+                                    trackChannels = emptyMap()
+                                ))
                                 // Force slot reload of the new file (same pattern as onNoteLearned)
                                 if (cell.hasTrigger()) {
                                     val c = MidiFileTriggerController.get(this)

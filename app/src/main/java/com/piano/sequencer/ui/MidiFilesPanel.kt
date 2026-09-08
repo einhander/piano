@@ -78,6 +78,14 @@ class MidiFilesPanel @JvmOverloads constructor(
     /** Called when the user toggles a cell's mode (FILE ↔ CHORD). */
     var onModeToggle: (cellId: Int, newMode: String) -> Unit = { _, _ -> }
 
+    /**
+     * Called when the user applies a track selection for a cell: the explicit
+     * list of checked track indices (empty = cell silent) and the per-track
+     * channel map (track index → 0-15; "From file" tracks omitted).
+     */
+    var onTrackSelection: (cellId: Int, selectedTracks: List<Int>, trackChannels: Map<Int, Int>) -> Unit =
+        { _, _, _ -> }
+
     // ── State ──
 
     /** M2: store injected by hosting activity, not created here. */
@@ -102,10 +110,15 @@ class MidiFilesPanel @JvmOverloads constructor(
     /** Theme-default background per record button, restored when the button is not active. */
     private val cellRecordButtonDefaults = mutableMapOf<Int, Drawable?>()
 
-    // ── Channel spinner items ──
-    // Position 0 is mode-aware: "From file" in FILE, "As recorded" in CHORD.
-    // Positions 1..16 are "Ch 1".."Ch 16" (internal 0..15 → display 1..16).
-    private val channelItems = listOf("From file") + (1..16).map { "Ch $it" }
+    companion object {
+        /**
+         * Channel spinner items (FILE mode), shared with [TrackSelectionDialog]:
+         * position 0 = "From file", positions 1..16 = "Ch 1".."Ch 16"
+         * (internal 0..15 → display 1..16). In CHORD mode the panel swaps
+         * position 0 for "As recorded".
+         */
+        val CHANNEL_ITEMS: List<String> = listOf("From file") + (1..16).map { "Ch $it" }
+    }
 
     // ── Construction ──
 
@@ -242,7 +255,7 @@ class MidiFilesPanel @JvmOverloads constructor(
 
         // Channel spinner
         val channelSpinner = Spinner(context).apply {
-            val items = if (cell.mode == MODE_CHORD) listOf("As recorded") + (1..16).map { "Ch $it" } else channelItems
+            val items = if (cell.mode == MODE_CHORD) listOf("As recorded") + (1..16).map { "Ch $it" } else CHANNEL_ITEMS
             val adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, items)
             setAdapter(adapter)
             // Internal 0..15 → display 1..16; -1 → position 0
@@ -370,6 +383,19 @@ class MidiFilesPanel @JvmOverloads constructor(
             layoutParams = btnParams()
         }
 
+        // Tracks: multi-track selection + per-track channel. Starts hidden;
+        // shown only for FILE cells whose file has a readable track list with
+        // ≥2 tracks (fetched off the UI thread — single-track files keep the
+        // channel spinner as the only control).
+        val tracksBtn = Button(context).apply {
+            text = "Tracks"
+            textSize = 10f
+            setPadding(4, 4, 4, 4)
+            minWidth = 0
+            layoutParams = btnParams()
+            visibility = android.view.View.GONE
+        }
+
         recordBtn.setOnClickListener {
             onCellRecordClick(cell.id)
         }
@@ -380,10 +406,38 @@ class MidiFilesPanel @JvmOverloads constructor(
 
         row3.addView(recordBtn)
         row3.addView(exportBtn)
+        row3.addView(tracksBtn)
 
-        // Export is file-only (chord has no .mid to export).
+        // Export is file-only (chord has no .mid to export). Tracks is
+        // file-only too (chord has no .mid to select tracks in).
         if (isChord) {
             exportBtn.visibility = android.view.View.GONE
+            tracksBtn.visibility = android.view.View.GONE
+        }
+
+        if (!isChord && cell.filePath.isNotEmpty()) {
+            val path = cell.filePath
+            var trackNames: List<String>? = null
+            MidiFileTriggerController.get(context).fetchTrackNames(path) { names ->
+                // The row may have been rebuilt or the file re-imported since
+                // the fetch started — only show the button when the cell still
+                // points at this file and the list is usable (≥2 tracks).
+                if (names != null && names.size >= 2 && store.get(cell.id)?.filePath == path) {
+                    trackNames = names.toList()
+                    tracksBtn.visibility = android.view.View.VISIBLE
+                }
+            }
+            tracksBtn.setOnClickListener {
+                val names = trackNames ?: return@setOnClickListener
+                // CRITICAL: re-read from store
+                val cur = store.get(cell.id) ?: return@setOnClickListener
+                if (cur.filePath != path || cur.mode != MODE_FILE) return@setOnClickListener
+                TrackSelectionDialog.show(
+                    context, names, cur.selectedTracks, cur.trackChannels
+                ) { selected, channels ->
+                    onTrackSelection(cur.id, selected, channels)
+                }
+            }
         }
 
         container.addView(row3, LayoutParams(

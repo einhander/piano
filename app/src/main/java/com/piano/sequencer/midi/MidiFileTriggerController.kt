@@ -705,6 +705,20 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         loadedFilePerSlot.remove(slot)
     }
 
+    /**
+     * Fetch a MIDI file's track names (index = track position) on a worker
+     * thread and post the result back on the main thread. Pure file parse via
+     * the player's (path, size, mtime) cache — no engine init involved.
+     * [onResult] receives null when the service is not connected or the file
+     * has no readable track list. Never call from the audio thread.
+     */
+    fun fetchTrackNames(filePath: String, onResult: (Array<String>?) -> Unit) {
+        slotExecutor.execute {
+            val names = service?.getMidiFileTracks(filePath)
+            mainHandler.post { onResult(names) }
+        }
+    }
+
     /** Worker-thread: warm the parsed-event cache for a file (no slot involved). */
     fun preloadFile(filePath: String) {
         slotExecutor.execute {
