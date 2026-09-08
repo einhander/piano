@@ -465,8 +465,23 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         }
     }
 
-    /** Test-play: slot 15, generation counter, 3s auto-stop. */
-    fun testPlay(cellId: Int, filePath: String, loop: Boolean, tempo: Double, channel: Int) {
+    /**
+     * Test-play: slot 15, generation counter, 3s auto-stop.
+     * [selectedTracks]/[trackChannels] are the cell's per-track selection —
+     * test play must preview exactly what the trigger plays, so the same
+     * [resolveSelection] path as the trigger load is used. null/empty = all
+     * tracks + the [channel] legacy fallback (single-track/legacy cells,
+     * unchanged behavior).
+     */
+    fun testPlay(
+        cellId: Int,
+        filePath: String,
+        loop: Boolean,
+        tempo: Double,
+        channel: Int,
+        selectedTracks: List<Int>?,
+        trackChannels: Map<Int, Int>
+    ) {
         slotExecutor.execute {
             synchronized(slotLocks[testPlaySlot]) {
                 val svc = service ?: return@synchronized
@@ -480,7 +495,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     cancelTestPlayAutoStop()
                     return@synchronized
                 }
-                val selection = resolveSelection(svc, filePath, null, emptyMap(), channel)
+                val selection = resolveSelection(svc, filePath, selectedTracks, trackChannels, channel)
                 var loadResult = svc.loadMidiFileSlot(testPlaySlot, filePath, tempo, loop, selection.first, selection.second, false)
                 var retries = 0
                 while (loadResult == -4 && retries < 3) {

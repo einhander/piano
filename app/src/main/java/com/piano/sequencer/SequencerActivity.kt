@@ -271,7 +271,12 @@ class SequencerActivity : AppCompatActivity() {
         }
 
         panel.onTestPlay = { cell ->
-            MidiFileTriggerController.get(this).testPlay(cell.id, cell.filePath, cell.loop, cell.tempo, cell.channel)
+            // Pass the cell's per-track selection so test play previews exactly
+            // what the trigger plays (same resolveSelection path as the trigger).
+            MidiFileTriggerController.get(this).testPlay(
+                cell.id, cell.filePath, cell.loop, cell.tempo, cell.channel,
+                cell.selectedTracks, cell.trackChannels
+            )
         }
 
         panel.onSettingChange = { cell ->
@@ -362,13 +367,18 @@ class SequencerActivity : AppCompatActivity() {
                         val store = MidiFileMappingStore.get(this@SequencerActivity)
                         val cur = store.get(cellId)
                         if (cur != null) {
-                            // New file: reset the per-track selection — track indices
-                            // are file-specific; the old selection would point at
-                            // out-of-range tracks (silence) or remap the wrong tracks.
+                            // New file: reset the per-track selection AND the cell
+                            // channel — both are file-specific. A carried selection
+                            // would point at out-of-range tracks (silence) or remap
+                            // the wrong ones; a carried channel would silently remap
+                            // every track of the new file (legacy fallback) with no
+                            // UI left to undo it (the spinner is hidden for
+                            // multi-track cells).
                             store.set(cur.copy(
                                 filePath = destFile.absolutePath,
                                 selectedTracks = null,
-                                trackChannels = emptyMap()
+                                trackChannels = emptyMap(),
+                                channel = -1
                             ))
                         }
                     }
@@ -508,13 +518,16 @@ class SequencerActivity : AppCompatActivity() {
                             val store = MidiFileMappingStore.get(this)
                             val cell = store.get(recCellId)
                             if (cell != null) {
-                                // New file: reset the per-track selection (track indices
-                                // are file-specific — a carried selection would silence or
-                                // remap the fresh recording).
+                                // New file: reset the per-track selection AND the cell
+                                // channel (both file-specific — a carried selection would
+                                // silence or remap the fresh recording; a carried channel
+                                // would remap it via the legacy fallback with no UI left
+                                // to undo it).
                                 store.set(cell.copy(
                                     filePath = destFile.absolutePath,
                                     selectedTracks = null,
-                                    trackChannels = emptyMap()
+                                    trackChannels = emptyMap(),
+                                    channel = -1
                                 ))
                                 // Force slot reload of the new file (same pattern as onNoteLearned)
                                 if (cell.hasTrigger()) {

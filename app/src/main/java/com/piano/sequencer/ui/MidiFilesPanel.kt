@@ -425,6 +425,12 @@ class MidiFilesPanel @JvmOverloads constructor(
                 if (names != null && names.size >= 2 && store.get(cell.id)?.filePath == path) {
                     trackNames = names.toList()
                     tracksBtn.visibility = android.view.View.VISIBLE
+                    // Multi-track file: per-track channels live in the Tracks
+                    // dialog, so the cell-level spinner is hidden. Same signal
+                    // and same callback as the button — the two stay in sync
+                    // by construction (a rebuilt row starts with the spinner
+                    // visible again, matching the button's GONE default).
+                    channelSpinner.visibility = android.view.View.GONE
                 }
             }
             tracksBtn.setOnClickListener {
