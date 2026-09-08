@@ -27,10 +27,21 @@ bool MidiFileParser::parse(const char* filePath,
                            std::vector<std::pair<int64_t, uint32_t>>& outTempoMap,
                            std::vector<std::pair<int64_t, std::pair<int, int>>>& outTimeSignatures,
                            int* outTicksPerBeat) {
+    std::vector<std::string> dummyTrackNames;
+    return parse(filePath, outEvents, outTempoMap, outTimeSignatures, dummyTrackNames, outTicksPerBeat);
+}
+
+bool MidiFileParser::parse(const char* filePath,
+                           std::vector<RecordedMidiEvent>& outEvents,
+                           std::vector<std::pair<int64_t, uint32_t>>& outTempoMap,
+                           std::vector<std::pair<int64_t, std::pair<int, int>>>& outTimeSignatures,
+                           std::vector<std::string>& outTrackNames,
+                           int* outTicksPerBeat) {
     // Clear outputs
     outEvents.clear();
     outTempoMap.clear();
     outTimeSignatures.clear();
+    outTrackNames.clear();
 
     // Read entire file into memory
     std::ifstream file(filePath, std::ios::binary);
@@ -102,8 +113,9 @@ bool MidiFileParser::parse(const char* filePath,
         if (trackDataEnd > mFileData.size()) break;
 
         std::vector<RecordedMidiEvent> trackEvents;
+        std::string trackName;
         if (!parseTrackEvents(mFileData, trackDataStart, trackDataEnd,
-                              trackEvents, mTicksPerBeat)) {
+                              trackEvents, mTicksPerBeat, &trackName)) {
             return false;
         }
 
@@ -111,6 +123,7 @@ bool MidiFileParser::parse(const char* filePath,
             evt.trackId = static_cast<uint8_t>(i);
             outEvents.push_back(evt);
         }
+        outTrackNames.push_back(trackName);
 
         pos = trackDataEnd;
     }
@@ -344,7 +357,8 @@ bool MidiFileParser::parseTrackEvents(std::vector<uint8_t>& trackData,
                                        size_t dataStart,
                                        size_t dataEnd,
                                        std::vector<RecordedMidiEvent>& outEvents,
-                                       int ticksPerBeat) {
+                                       int ticksPerBeat,
+                                       std::string* trackName) {
     (void)ticksPerBeat;  // Used when converting ticks to time
     int64_t absTick = 0;
     size_t p = dataStart;
@@ -381,6 +395,9 @@ bool MidiFileParser::parseTrackEvents(std::vector<uint8_t>& trackData,
                 break;
             }
 
+            if (metaType == 0x03 && trackName) {
+                *trackName = std::string(reinterpret_cast<const char*>(trackData.data() + p), len);
+            }
             p += len;
         } else if (byte >= 0x80 && byte < 0xF0) {
             uint8_t nData = ((byte & 0xF0) == 0xC0 || (byte & 0xF0) == 0xD0) ? 1 : 2;

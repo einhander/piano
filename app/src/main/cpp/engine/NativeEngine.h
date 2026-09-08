@@ -190,7 +190,10 @@ public:
     // MIDI file slot playback (worker thread for load, audio thread for process)
     // NOTE: call from a worker thread, never the main thread.
     // loadMidiFileSlot does blocking file I/O + parse (tens of ms).
-    int loadMidiFileSlot(int slot, const char* filePath, float bpm, bool loop, int channel = -1, bool startAfterLoad = false);
+    int loadMidiFileSlot(int slot, const char* filePath, float bpm, bool loop,
+                         const int32_t* selectedTracks, int32_t selectedCount,
+                         const int32_t* trackChannels, bool startAfterLoad = false);
+    std::vector<std::string> getMidiFileTracks(const char* filePath);
     int preloadMidiFile(const char* filePath); // worker-thread: parse into cache, returns 0/-1
     void startMidiFileSlot(int slot);
     void stopMidiFileSlot(int slot);

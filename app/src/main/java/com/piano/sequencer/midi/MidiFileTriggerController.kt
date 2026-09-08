@@ -308,24 +308,18 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     AppLogger.info("TRIG", "start slot=$slot total=${t4 - t0}ms")
                 } else {
                     val t2 = SystemClock.uptimeMillis()
-                    var loadResult = svc.loadMidiFileSlot(
-                        slot, cell.filePath, cell.tempo, cell.loop,
-                        cell.channel, true
-                    )
+                    val selection = resolveSelection(svc, cell.filePath, cell.channel)
+                    var loadResult = svc.loadMidiFileSlot(slot, cell.filePath, cell.tempo, cell.loop, selection.first, selection.second, true)
                     var retries = 0
                     while (loadResult == -4 && retries < 5) {
                         Thread.sleep(20)
-                        loadResult = svc.loadMidiFileSlot(
-                            slot, cell.filePath, cell.tempo, cell.loop,
-                            cell.channel, true
-                        )
+                        loadResult = svc.loadMidiFileSlot(slot, cell.filePath, cell.tempo, cell.loop, selection.first, selection.second, true)
                         retries++
                     }
                     val t3 = SystemClock.uptimeMillis()
                     if (loadResult != 0) {
                         val msg = when (loadResult) {
                             -1 -> "Invalid file or engine"
-                            -2 -> "File too long (>8192 events)"
                             -3 -> "Command queue full"
                             -4 -> "Slot busy (after retries)"
                             else -> "Error $loadResult"
@@ -486,15 +480,12 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     cancelTestPlayAutoStop()
                     return@synchronized
                 }
-                var loadResult = svc.loadMidiFileSlot(
-                    testPlaySlot, filePath, tempo, loop, channel, false
-                )
+                val selection = resolveSelection(svc, filePath, channel)
+                var loadResult = svc.loadMidiFileSlot(testPlaySlot, filePath, tempo, loop, selection.first, selection.second, false)
                 var retries = 0
                 while (loadResult == -4 && retries < 3) {
                     Thread.sleep(50)
-                    loadResult = svc.loadMidiFileSlot(
-                        testPlaySlot, filePath, tempo, loop, channel, false
-                    )
+                    loadResult = svc.loadMidiFileSlot(testPlaySlot, filePath, tempo, loop, selection.first, selection.second, false)
                     retries++
                 }
                 if (loadResult != 0) {
@@ -613,21 +604,15 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 if (channel != loadedFilePerSlot[slot]?.second) {
                     val wasPlaying = svc.isMidiFileSlotPlaying(slot)
                     if (wasPlaying) svc.stopMidiFileSlot(slot)
-                    var loadResult = svc.loadMidiFileSlot(
-                        slot,
-                        loadedFilePerSlot[slot]?.first ?: return@synchronized,
-                        tempo, loop, channel, wasPlaying
-                    )
+                    val path = loadedFilePerSlot[slot]?.first ?: return@synchronized
+                    val selection = resolveSelection(svc, path, channel)
+                    var loadResult = svc.loadMidiFileSlot(slot, path, tempo, loop, selection.first, selection.second, wasPlaying)
                     // 4-thread pool: a concurrent triggerSlot may hold the slot (workerBusy).
                     // Bounded retry, same as triggerSlot.
                     var retries = 0
                     while (loadResult == -4 && retries < 5) {
                         Thread.sleep(20)
-                        loadResult = svc.loadMidiFileSlot(
-                            slot,
-                            loadedFilePerSlot[slot]?.first ?: return@synchronized,
-                            tempo, loop, channel, wasPlaying
-                        )
+                        loadResult = svc.loadMidiFileSlot(slot, path, tempo, loop, selection.first, selection.second, wasPlaying)
                         retries++
                     }
                     if (loadResult == 0) {
@@ -694,5 +679,12 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         mainHandler.post {
             Toast.makeText(appContext, msg, Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun resolveSelection(svc: PlaybackService, filePath: String, channel: Int): Pair<IntArray, IntArray> {
+        val tracks = svc.getMidiFileTracks(filePath)
+        val selected = tracks?.indices?.toList()?.toIntArray() ?: intArrayOf(0)
+        val channels = IntArray(selected.size) { if (channel == -1) -1 else channel }
+        return selected to channels
     }
 }

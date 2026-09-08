@@ -38,10 +38,10 @@ struct MidiFileCmd {
     bool startAfterLoad;      // for LOAD: merge START into same callback
 };
 
-// Per-slot state — all pre-allocated in a static array
+// Per-slot state — fixed slot array; event buffer heap-owned on worker thread
 struct MidiFileSlot {
-    // Event buffer (pre-allocated, 8192 events max)
-    MidiFileEvent events[8192];
+    // Event buffer (worker-thread heap, audio thread read-only)
+    std::vector<MidiFileEvent> events;
     int32_t eventCount = 0;
 
     // Active-note tracking: bit 0-127 per channel (0-15)
@@ -82,7 +82,6 @@ struct MidiQueue;
 class MidiFilePlayer {
 public:
     static constexpr int32_t kMaxSlots = 16;
-    static constexpr int32_t kMaxEventsPerSlot = 8192;
     static constexpr int32_t kCmdQueueCapacity = 256;
 
     MidiFilePlayer();
@@ -93,13 +92,19 @@ public:
     MidiFilePlayer& operator=(const MidiFilePlayer&) = delete;
 
     // Worker-thread: parse file and enqueue LOAD command.
-    // Returns 0 on success, -1 (path invalid/no free slot), -2 (file too long),
+    // Returns 0 on success, -1 (path/selection invalid/no free slot),
     // -3 (command queue full), -4 (slot is active/playing — busy).
-    int load(int slot, const char* filePath, float bpm, bool loop, int channel = -1, bool startAfterLoad = false);
+    int load(int slot, const char* filePath, float bpm, bool loop,
+             // trackChannels, if non-null, has at least selectedCount entries; -1 = keep file channel; values clamped to [0,15].
+             const int32_t* selectedTracks, int32_t selectedCount,
+             const int32_t* trackChannels, bool startAfterLoad = false);
 
     // Worker-thread: parse file into the cache without touching any slot.
-    // Returns 0 on success, -1 on any failure (missing file, parse error, >8192 events).
+    // Returns 0 on success, -1 on any failure (missing file, parse error).
     int preload(const char* filePath);
+
+    // Worker-thread: return track names from cache or parse-and-cache file.
+    std::vector<std::string> getTrackNamesForFile(const char* filePath);
 
     // Audio-thread: process all active slots for this audio frame.
     // frameCount: number of audio frames in this callback.
@@ -152,10 +157,16 @@ public:
         int64_t size = 0;
         int64_t mtime = 0;
         std::vector<MidiFileEvent> events;  // normalized (vel-0 note-on → 0x80), NO channel remap
+        std::vector<std::string> trackNames;
         int64_t lengthTicks = 0;
         int32_t ppq = 960;
         float initialTempo = 120.0f;
     };
+
+    static std::vector<MidiFileEvent> applyTrackSelection(
+        const std::vector<MidiFileEvent>& in,
+        const int32_t* selectedTracks, int32_t selectedCount,
+        const int32_t* trackChannels);
 
 private:
     // Flush all active notes for a slot (send Note Offs).
@@ -171,7 +182,7 @@ private:
     // Wait for the audio thread to consume a FREE command (bounded spin on worker).
     bool waitForFree(int slot, int timeoutMs);
 
-    // Slot storage (pre-allocated, no heap in audio path)
+    // Slot storage (fixed slots; event buffer heap-allocated on worker thread)
     MidiFileSlot mSlots[kMaxSlots];
 
     // Command queue (lock-free, pre-allocated)

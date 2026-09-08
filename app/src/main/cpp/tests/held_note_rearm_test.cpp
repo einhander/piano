@@ -184,7 +184,9 @@ int main(int argc, char** argv) {
         // Every message must carry timestamp >= 1.
         {
             MidiFilePlayer player;
-            if (player.load(0, tmpPath, 120.0f, false, -1, true) != 0) {
+            int32_t sel[] = {0};
+            int32_t ch[] = {-1};
+            if (player.load(0, tmpPath, 120.0f, false, sel, 1, ch, true) != 0) {
                 return fail("B1: load failed");
             }
             MidiQueue q(256);
@@ -210,7 +212,9 @@ int main(int argc, char** argv) {
         // the loop-wrap flush must all carry timestamp >= 1.
         {
             MidiFilePlayer player;
-            if (player.load(0, tmpPath, 120.0f, false, -1, true) != 0) {
+            int32_t sel[] = {0};
+            int32_t ch[] = {-1};
+            if (player.load(0, tmpPath, 120.0f, false, sel, 1, ch, true) != 0) {
                 return fail("B2: load failed");
             }
             MidiQueue q(256);
@@ -262,7 +266,9 @@ int main(int argc, char** argv) {
             synth.processLiveMidi(kb);
 
             MidiFilePlayer player;
-            if (player.load(0, tmpPath, 120.0f, true, -1, true) != 0) {
+            int32_t sel[] = {0};
+            int32_t ch[] = {-1};
+            if (player.load(0, tmpPath, 120.0f, true, sel, 1, ch, true) != 0) {
                 return fail("C1: load failed");
             }
             MidiQueue q(256);
@@ -305,7 +311,9 @@ int main(int argc, char** argv) {
             }
 
             MidiFilePlayer player;
-            if (player.load(0, tmpPath, 120.0f, true, -1, true) != 0) {
+            int32_t sel[] = {0};
+            int32_t ch[] = {-1};
+            if (player.load(0, tmpPath, 120.0f, true, sel, 1, ch, true) != 0) {
                 return fail("C2: load failed");
             }
             MidiQueue q(256);

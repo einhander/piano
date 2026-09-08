@@ -1154,24 +1154,55 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeSetOverdub(
 
 JNIEXPORT jint JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeLoadMidiFileSlot(
-    JNIEnv* env, jclass, jint slot, jstring filePath, jdouble tempo, jboolean loop, jint channel, jboolean startAfterLoad) {
+    JNIEnv* env, jclass, jint slot, jstring filePath, jdouble tempo, jboolean loop,
+    jintArray selectedTracks, jintArray trackChannels, jboolean startAfterLoad) {
     NativeEngine* inst = NativeEngine::getInstance();
     if (inst == nullptr) return -1;
 
     const char* path = env->GetStringUTFChars(filePath, nullptr);
     if (!path) return -1;
 
-    jint result = inst->loadMidiFileSlot(
-        static_cast<int>(slot),
-        path,
-        static_cast<float>(tempo),
-        loop != 0,
-        static_cast<int>(channel),
-        startAfterLoad != 0
-    );
+    jsize selectedCount = selectedTracks ? env->GetArrayLength(selectedTracks) : 0;
+    jsize channelCount = trackChannels ? env->GetArrayLength(trackChannels) : 0;
+    std::vector<int32_t> selectedBuf(selectedCount);
+    std::vector<int32_t> channelBuf(channelCount);
+    if (selectedTracks && selectedCount > 0) env->GetIntArrayRegion(selectedTracks, 0, selectedCount, selectedBuf.data());
+    if (trackChannels && channelCount > 0) env->GetIntArrayRegion(trackChannels, 0, channelCount, channelBuf.data());
+    channelBuf.resize(static_cast<size_t>(selectedCount), -1);
+    for (jsize i = 0; i < selectedCount; ++i) {
+        int32_t v = (i < channelCount) ? channelBuf[static_cast<size_t>(i)] : -1;
+        channelBuf[static_cast<size_t>(i)] = (v < -1 || v > 15) ? -1 : v;
+    }
+    jint result = inst->loadMidiFileSlot(static_cast<int>(slot), path, static_cast<float>(tempo), loop != 0,
+                                         selectedCount ? selectedBuf.data() : nullptr, static_cast<int32_t>(selectedCount),
+                                         selectedCount ? channelBuf.data() : nullptr, startAfterLoad != 0);
 
     env->ReleaseStringUTFChars(filePath, path);
     return result;
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMidiFileTracks(
+    JNIEnv* env, jclass, jstring filePath) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return nullptr;
+    const char* path = env->GetStringUTFChars(filePath, nullptr);
+    if (!path) return nullptr;
+    auto tracks = inst->getMidiFileTracks(path);
+    env->ReleaseStringUTFChars(filePath, path);
+    if (tracks.empty()) return nullptr;
+    jclass stringClass = env->FindClass("java/lang/String");
+    if (!stringClass) return nullptr;
+    jobjectArray arr = env->NewObjectArray(static_cast<jsize>(tracks.size()), stringClass, nullptr);
+    if (!arr) { env->DeleteLocalRef(stringClass); return nullptr; }
+    for (jsize i = 0; i < static_cast<jsize>(tracks.size()); ++i) {
+        jstring js = env->NewStringUTF(tracks[i].c_str());
+        if (!js) { env->DeleteLocalRef(stringClass); env->DeleteLocalRef(arr); return nullptr; }
+        env->SetObjectArrayElement(arr, i, js);
+        env->DeleteLocalRef(js);
+    }
+    env->DeleteLocalRef(stringClass);
+    return arr;
 }
 
 JNIEXPORT jint JNICALL
