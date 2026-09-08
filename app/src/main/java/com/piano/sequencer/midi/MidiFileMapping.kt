@@ -43,7 +43,9 @@ data class ChordNote(
  * Chord mode: `mode == MODE_CHORD` → the cell holds a single chord in
  * `chordNotes` (no MIDI file). While the trigger is held the chord sounds
  * (gate); the trigger velocity scales every note's velocity. `filePath`,
- * `loop`, `tempo`, `channel` are unused in chord mode.
+ * `loop`, and `tempo` are unused in chord mode. `channel == -1` preserves
+ * each note's recorded channel; `channel` in `0..15` remaps every chord note
+ * to the selected channel.
  */
 @Serializable
 data class SequencerCell(
@@ -52,7 +54,9 @@ data class SequencerCell(
     val filePath: String = "", // "" = no file
     val loop: Boolean = false,
     val tempo: Double = 120.0, // BPM, 20–300
-    val channel: Int = -1,     // -1 = from file, 0-15 = remap all events
+    // FILE: -1 = from file, 0-15 = remap all events; CHORD: -1 = as recorded,
+    // 0-15 = remap all chord notes.
+    val channel: Int = -1,
     val triggerType: String = TRIGGER_NOTE, // "NOTE" / "CC" / "PITCH_BEND"
     val ccNumber: Int? = null, // CC number; set for triggerType == "CC", null otherwise
     val mode: String = MODE_FILE,           // "FILE" / "CHORD"

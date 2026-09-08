@@ -424,14 +424,15 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         val struck = ArrayList<Triple<Int, Int, Int>>(cell.chordNotes.size)
         for (cn in cell.chordNotes) {
             val vel = (cn.velocity * scale).toInt().coerceIn(1, 127)
+            val ch = if (cell.channel in 0..15) cell.channel else (cn.channel and 0x0F)
             // Non-live (timestamp != 0): the chord strike is a programmatic
             // transient, not a sustained keyboard press, so it must NOT mark
             // the note as held. This lets the engine re-arm a keyboard note
             // that is still held on the same (channel, note) when the chord is
             // released — releasing the chord button no longer steals a held
             // keyboard note that shares a pitch with the chord.
-            svc.sendMidiMessageTimed(0x90 or (cn.channel and 0x0F), cn.note, vel, CHORD_TIMESTAMP)
-            struck.add(Triple(cn.channel and 0x0F, cn.note, vel))
+            svc.sendMidiMessageTimed(0x90 or ch, cn.note, vel, CHORD_TIMESTAMP)
+            struck.add(Triple(ch, cn.note, vel))
         }
         synchronized(chordLock) {
             activeChords[cell.triggerKey()] = struck

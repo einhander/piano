@@ -103,7 +103,8 @@ class MidiFilesPanel @JvmOverloads constructor(
     private val cellRecordButtonDefaults = mutableMapOf<Int, Drawable?>()
 
     // ── Channel spinner items ──
-    // 1-based: "From file" + "Ch 1".."Ch 16" (internal 0..15 → display 1..16)
+    // Position 0 is mode-aware: "From file" in FILE, "As recorded" in CHORD.
+    // Positions 1..16 are "Ch 1".."Ch 16" (internal 0..15 → display 1..16).
     private val channelItems = listOf("From file") + (1..16).map { "Ch $it" }
 
     // ── Construction ──
@@ -207,8 +208,8 @@ class MidiFilesPanel @JvmOverloads constructor(
             layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
         }
 
-        // Mode toggle: FILE ↔ CHORD. In chord mode the file-specific controls
-        // (channel, loop, tempo, import, export, test) are irrelevant and hidden.
+        // Mode toggle: FILE ↔ CHORD. In CHORD mode loop/tempo and file-only actions
+        // (test/import/export) are hidden; channel selection stays available.
         val modeBtn = Button(context).apply {
             text = if (cell.mode == MODE_CHORD) "Mode: Chord" else "Mode: File"
             textSize = 9f
@@ -241,7 +242,8 @@ class MidiFilesPanel @JvmOverloads constructor(
 
         // Channel spinner
         val channelSpinner = Spinner(context).apply {
-            val adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, channelItems)
+            val items = if (cell.mode == MODE_CHORD) listOf("As recorded") + (1..16).map { "Ch $it" } else channelItems
+            val adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, items)
             setAdapter(adapter)
             // Internal 0..15 → display 1..16; -1 → position 0
             setSelection(if (cell.channel == -1) 0 else cell.channel + 1)
@@ -273,10 +275,9 @@ class MidiFilesPanel @JvmOverloads constructor(
         row1.addView(loopCheck)
         row1.addView(tempoEdit)
 
-        // In chord mode hide the file-specific controls (they have no meaning).
+        // In chord mode hide file-only controls; channel selection stays available.
         val isChord = cell.mode == MODE_CHORD
         if (isChord) {
-            channelSpinner.visibility = android.view.View.GONE
             loopCheck.visibility = android.view.View.GONE
             tempoEdit.visibility = android.view.View.GONE
         }
@@ -324,7 +325,7 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         val removeBtn = Button(context).apply {
-            text = "−"
+            text = "− DEL CELL"
             textSize = 10f
             setPadding(4, 4, 4, 4)
             minWidth = 0
