@@ -308,7 +308,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     AppLogger.info("TRIG", "start slot=$slot total=${t4 - t0}ms")
                 } else {
                     val t2 = SystemClock.uptimeMillis()
-                    val selection = resolveSelection(svc, cell.filePath, cell.channel)
+                    val selection = resolveSelection(svc, cell.filePath, cell.selectedTracks, cell.trackChannels, cell.channel)
                     var loadResult = svc.loadMidiFileSlot(slot, cell.filePath, cell.tempo, cell.loop, selection.first, selection.second, true)
                     var retries = 0
                     while (loadResult == -4 && retries < 5) {
@@ -480,7 +480,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     cancelTestPlayAutoStop()
                     return@synchronized
                 }
-                val selection = resolveSelection(svc, filePath, channel)
+                val selection = resolveSelection(svc, filePath, null, emptyMap(), channel)
                 var loadResult = svc.loadMidiFileSlot(testPlaySlot, filePath, tempo, loop, selection.first, selection.second, false)
                 var retries = 0
                 while (loadResult == -4 && retries < 3) {
@@ -586,6 +586,8 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         slotExecutor.execute {
             val svc = service ?: return@execute
             val slot = triggerSlotMap[key] ?: return@execute
+            val (triggerType, triggerData) = decodeTriggerKey(key)
+            val cell = store?.findByTrigger(triggerType, triggerData) ?: return@execute
             synchronized(slotLocks[slot]) {
                 // Live loop/tempo
                 svc.setMidiFileSlotLoop(slot, loop)
@@ -604,28 +606,72 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 if (channel != loadedFilePerSlot[slot]?.second) {
                     val wasPlaying = svc.isMidiFileSlotPlaying(slot)
                     if (wasPlaying) svc.stopMidiFileSlot(slot)
-                    val path = loadedFilePerSlot[slot]?.first ?: return@synchronized
-                    val selection = resolveSelection(svc, path, channel)
-                    var loadResult = svc.loadMidiFileSlot(slot, path, tempo, loop, selection.first, selection.second, wasPlaying)
-                    // 4-thread pool: a concurrent triggerSlot may hold the slot (workerBusy).
-                    // Bounded retry, same as triggerSlot.
-                    var retries = 0
-                    while (loadResult == -4 && retries < 5) {
-                        Thread.sleep(20)
-                        loadResult = svc.loadMidiFileSlot(slot, path, tempo, loop, selection.first, selection.second, wasPlaying)
-                        retries++
-                    }
-                    if (loadResult == 0) {
-                        val path = loadedFilePerSlot[slot]?.first ?: return@synchronized
-                        loadedFilePerSlot[slot] = path to channel
-                    } else {
-                        mainHandler.post {
-                            AppLogger.warn("TriggerController",
-                                "Channel reload failed for slot $slot: $loadResult")
-                        }
-                    }
+                    reloadSlotLocked(svc, slot, cell, channel, wasPlaying)
                 }
             }
+        }
+    }
+
+    /**
+     * Update selected tracks + per-track channels.
+     * Caller thread: UI thread; reload dispatches to worker pool. Never call from audio thread.
+     * Persist-first: selection is saved before slot reload, so crash mid-reload keeps user choice.
+     * No-op when no store, no cell, CHORD mode, no file, no slot, slot not loaded, or path mismatch.
+     * In those cases new selection applies on next trigger.
+     */
+    fun updateTrackSelection(cellIndex: Int, selectedTracks: List<Int>?, trackChannels: Map<Int, Int>) {
+        val s = store ?: return
+        val current = s.get(cellIndex) ?: return
+        if (current.selectedTracks == selectedTracks && current.trackChannels == trackChannels) return
+        val updated = current.copy(selectedTracks = selectedTracks, trackChannels = trackChannels)
+        if (updated.mode == MODE_CHORD || updated.filePath.isEmpty()) return
+        s.set(updated)
+
+        slotExecutor.execute {
+            val svc = service ?: return@execute
+            val slot = triggerSlotMap[updated.triggerKey()] ?: return@execute
+            synchronized(slotLocks[slot]) {
+                val loaded = loadedFilePerSlot[slot] ?: return@synchronized
+                if (loaded.first != updated.filePath) return@synchronized
+                val wasPlaying = svc.isMidiFileSlotPlaying(slot)
+                reloadSlotLocked(svc, slot, updated, updated.channel, wasPlaying)
+            }
+        }
+    }
+
+    private fun decodeTriggerKey(key: Int): Pair<String, Int> = when {
+        key in 0..127 -> TRIGGER_NOTE to key
+        key in 128..255 -> TRIGGER_CC to (key - 128)
+        else -> TRIGGER_PITCH_BEND to 0
+    }
+
+    private fun reloadSlotLocked(
+        svc: PlaybackService,
+        slot: Int,
+        cell: SequencerCell,
+        channel: Int,
+        wasPlaying: Boolean
+    ): Boolean {
+        val path = loadedFilePerSlot[slot]?.first ?: return false
+        if (path != cell.filePath) return false
+        if (wasPlaying) svc.stopMidiFileSlot(slot)
+        val selection = resolveSelection(svc, path, cell.selectedTracks, cell.trackChannels, channel)
+        var loadResult = svc.loadMidiFileSlot(slot, path, cell.tempo, cell.loop, selection.first, selection.second, wasPlaying)
+        // m8: failure leaves slot on stale selection until later file/channel reload forces retry.
+        var retries = 0
+        while (loadResult == -4 && retries < 5) {
+            Thread.sleep(20)
+            loadResult = svc.loadMidiFileSlot(slot, path, cell.tempo, cell.loop, selection.first, selection.second, wasPlaying)
+            retries++
+        }
+        return if (loadResult == 0) {
+            loadedFilePerSlot[slot] = path to channel
+            true
+        } else {
+            mainHandler.post {
+                AppLogger.warn("TriggerController", "Channel reload failed for slot $slot: $loadResult")
+            }
+            false
         }
     }
 
@@ -681,10 +727,21 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         }
     }
 
-    private fun resolveSelection(svc: PlaybackService, filePath: String, channel: Int): Pair<IntArray, IntArray> {
-        val tracks = svc.getMidiFileTracks(filePath)
-        val selected = tracks?.indices?.toList()?.toIntArray() ?: intArrayOf(0)
-        val channels = IntArray(selected.size) { if (channel == -1) -1 else channel }
+    private fun resolveSelection(
+        svc: PlaybackService,
+        filePath: String,
+        selectedTracks: List<Int>?,
+        trackChannels: Map<Int, Int>,
+        channel: Int
+    ): Pair<IntArray, IntArray> {
+        val selected = when (selectedTracks) {
+            null -> svc.getMidiFileTracks(filePath)?.indices?.toList()?.toIntArray() ?: intArrayOf(0)
+            else -> selectedTracks.toIntArray()
+        }
+        val channels = IntArray(selected.size) { idx ->
+            val track = selected[idx]
+            trackChannels[track] ?: if (channel >= 0) channel else -1
+        }
         return selected to channels
     }
 }
