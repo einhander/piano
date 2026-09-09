@@ -198,16 +198,15 @@ class MidiFilesPanel @JvmOverloads constructor(
             }
         }
 
-        // ── Row 1: controls ──
-        val row1 = LinearLayout(context).apply {
+        // ── Row 0: cell name (top of the cell, full width) ──
+        val row0 = LinearLayout(context).apply {
             orientation = HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
             layoutParams = LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
             )
         }
 
-        // File name / chord label
+        // File name / chord label — full width, above the controls row
         val nameText = TextView(context).apply {
             text = if (cell.mode == MODE_CHORD) {
                 val n = cell.chordNotes.size
@@ -218,7 +217,20 @@ class MidiFilesPanel @JvmOverloads constructor(
             } else "—"
             textSize = 12f
             setTextColor(0xFF000000.toInt())
-            layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        row0.addView(nameText)
+
+        // ── Row 1: controls ──
+        val row1 = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
+            )
         }
 
         // Mode toggle: FILE ↔ CHORD. In CHORD mode loop/tempo and file-only actions
@@ -237,7 +249,7 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         // Key label: NOTE → note name; CC → "CC <n>"; PITCH_BEND → "PB" (short — the row
-        // already holds name + spinner + checkbox + tempo edit, no room for "Pitch bend").
+        // already holds mode + spinner + checkbox + tempo edit, no room for "Pitch bend").
         val keyLabel = TextView(context).apply {
             text = when (cell.triggerType) {
                 TRIGGER_CC -> "CC ${cell.ccNumber}"
@@ -281,7 +293,6 @@ class MidiFilesPanel @JvmOverloads constructor(
             textSize = 11f
         }
 
-        row1.addView(nameText)
         row1.addView(modeBtn)
         row1.addView(keyLabel)
         row1.addView(channelSpinner)
@@ -294,6 +305,12 @@ class MidiFilesPanel @JvmOverloads constructor(
             loopCheck.visibility = android.view.View.GONE
             tempoEdit.visibility = android.view.View.GONE
         }
+
+        container.addView(row0, LayoutParams(
+            LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
+        ).apply {
+            setMargins(0, 0, 0, dpToPx(4, context))
+        })
 
         container.addView(row1, LayoutParams(
             LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
