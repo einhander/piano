@@ -9,6 +9,7 @@
 #include "engine/LaunchQuantizer.h"
 #include "engine/MidiRecorder.h"
 #include "engine/MidiFilePlayer.h"
+#include "midi/MidiFileParser.h"
 #include "midi/MidiFileWriter.h"
 
 #include <atomic>
@@ -959,8 +960,20 @@ std::vector<RecordedMidiEvent> NativeEngine::getRecordedEvents() {
 }
 
 // MIDI file slot playback
-int NativeEngine::loadMidiFileSlot(int slot, const char* filePath, float bpm, bool loop, int channel, bool startAfterLoad) {
-    return mMidiFilePlayer.load(slot, filePath, bpm, loop, channel, startAfterLoad);
+int NativeEngine::loadMidiFileSlot(int slot, const char* filePath, float bpm, bool loop,
+                                   const int32_t* selectedTracks, int32_t selectedCount,
+                                   const int32_t* trackChannels, bool startAfterLoad) {
+    return mMidiFilePlayer.load(slot, filePath, bpm, loop, selectedTracks, selectedCount, trackChannels, startAfterLoad);
+}
+
+std::vector<std::string> NativeEngine::getMidiFileTracks(const char* filePath) {
+    if (!filePath) return {};
+    return mMidiFilePlayer.getTrackNamesForFile(filePath);
+}
+
+float NativeEngine::getMidiFileTempo(const char* filePath) {
+    if (!filePath) return -1.0f;
+    return mMidiFilePlayer.getMidiFileTempo(filePath);
 }
 
 int NativeEngine::preloadMidiFile(const char* filePath) {

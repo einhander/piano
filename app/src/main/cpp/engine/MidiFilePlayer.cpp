@@ -1,5 +1,5 @@
 #include "MidiFilePlayer.h"
-#include "MidiFileParser.h"
+#include "midi/MidiFileParser.h"
 #include "realtime/MidiQueue.h"
 
 #include <fstream>
@@ -91,12 +91,14 @@ void MidiFilePlayer::insertCacheEntry(CacheEntry&& entry) {
 
 static MidiFilePlayer::CacheEntry buildCacheEntry(const char* path, const struct stat& st,
     const std::vector<RecordedMidiEvent>& parsedEvents,
-    const std::vector<std::pair<int64_t, uint32_t>>& tempoMap, int32_t ppq) {
+    const std::vector<std::pair<int64_t, uint32_t>>& tempoMap, int32_t ppq,
+    const std::vector<std::string>& trackNames) {
     MidiFilePlayer::CacheEntry entry;
     entry.path = path;
     entry.size = st.st_size;
     entry.mtime = st.st_mtime;
     entry.ppq = ppq;
+    entry.trackNames = trackNames;
 
     entry.events.reserve(parsedEvents.size());
     int64_t maxTick = 0;
@@ -149,15 +151,12 @@ int MidiFilePlayer::preload(const char* filePath) {
     int32_t ppq = 960;
 
     MidiFileParser parser;
-    if (!parser.parse(filePath, parsedEvents, tempoMap, timeSigs, &ppq)) {
+    std::vector<std::string> trackNames;
+    if (!parser.parse(filePath, parsedEvents, tempoMap, timeSigs, trackNames, &ppq)) {
         return -1;
     }
 
-    if (static_cast<int32_t>(parsedEvents.size()) > kMaxEventsPerSlot) {
-        return -1;
-    }
-
-    CacheEntry entry = buildCacheEntry(filePath, st, parsedEvents, tempoMap, ppq);
+    CacheEntry entry = buildCacheEntry(filePath, st, parsedEvents, tempoMap, ppq, trackNames);
 
     std::lock_guard<std::mutex> lock(mCacheMutex);
     insertCacheEntry(std::move(entry));
@@ -165,13 +164,97 @@ int MidiFilePlayer::preload(const char* filePath) {
     return 0;
 }
 
+std::vector<std::string> MidiFilePlayer::getTrackNamesForFile(const char* filePath) {
+    if (!filePath) return {};
+    struct stat st;
+    if (stat(filePath, &st) != 0) return {};
+    {
+        std::lock_guard<std::mutex> lock(mCacheMutex);
+        if (findCacheEntry(filePath, st.st_size, st.st_mtime)) {
+            for (const auto& e : mCache) {
+                if (e.path == filePath && e.size == st.st_size && e.mtime == st.st_mtime) return e.trackNames;
+            }
+        }
+    }
+    std::vector<RecordedMidiEvent> parsedEvents;
+    std::vector<std::pair<int64_t, uint32_t>> tempoMap;
+    std::vector<std::pair<int64_t, std::pair<int, int>>> timeSigs;
+    std::vector<std::string> trackNames;
+    int32_t ppq = 960;
+    MidiFileParser parser;
+    if (!parser.parse(filePath, parsedEvents, tempoMap, timeSigs, trackNames, &ppq)) return {};
+    CacheEntry entry = buildCacheEntry(filePath, st, parsedEvents, tempoMap, ppq, trackNames);
+    {
+        std::lock_guard<std::mutex> lock(mCacheMutex);
+        insertCacheEntry(std::move(entry));
+    }
+    return trackNames;
+}
+
+float MidiFilePlayer::getMidiFileTempo(const char* filePath) {
+    if (!filePath) return -1.0f;
+    struct stat st;
+    if (stat(filePath, &st) != 0) return -1.0f;
+    {
+        std::lock_guard<std::mutex> lock(mCacheMutex);
+        if (findCacheEntry(filePath, st.st_size, st.st_mtime)) {
+            for (const auto& e : mCache) {
+                if (e.path == filePath && e.size == st.st_size && e.mtime == st.st_mtime) return e.initialTempo;
+            }
+        }
+    }
+    std::vector<RecordedMidiEvent> parsedEvents;
+    std::vector<std::pair<int64_t, uint32_t>> tempoMap;
+    std::vector<std::pair<int64_t, std::pair<int, int>>> timeSigs;
+    std::vector<std::string> trackNames;
+    int32_t ppq = 960;
+    MidiFileParser parser;
+    if (!parser.parse(filePath, parsedEvents, tempoMap, timeSigs, trackNames, &ppq)) return -1.0f;
+    CacheEntry entry = buildCacheEntry(filePath, st, parsedEvents, tempoMap, ppq, trackNames);
+    float tempo = entry.initialTempo;
+    {
+        std::lock_guard<std::mutex> lock(mCacheMutex);
+        insertCacheEntry(std::move(entry));
+    }
+    return tempo;
+}
+
 // ── Worker thread: load ──
 
-int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop, int channel, bool startAfterLoad) {
+std::vector<MidiFileEvent> MidiFilePlayer::applyTrackSelection(
+    const std::vector<MidiFileEvent>& in,
+    const int32_t* selectedTracks, int32_t selectedCount,
+    const int32_t* trackChannels) {
+    std::vector<MidiFileEvent> out;
+    int32_t chanFor[256];
+    for (int i = 0; i < 256; ++i) chanFor[i] = -2;
+    for (int32_t i = 0; i < selectedCount; ++i) {
+        uint8_t tid = static_cast<uint8_t>(selectedTracks[i]);
+        chanFor[tid] = i;
+    }
+    for (const auto& evt : in) {
+        if (evt.status == 0xFF) { out.push_back(evt); continue; }
+        if (selectedCount == 0) continue;
+        int32_t idx = chanFor[evt.trackId];
+        if (idx < 0) continue;
+        MidiFileEvent outEvt = evt;
+        int32_t ch = trackChannels ? trackChannels[idx] : -1;
+        if (ch < -1 || ch > 15) ch = -1;
+        if (ch >= 0 && outEvt.status < 0xF0) {
+            outEvt.status = (outEvt.status & 0xF0) | static_cast<uint8_t>(ch);
+        }
+        out.push_back(outEvt);
+    }
+    return out;
+}
+
+int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop,
+                         const int32_t* selectedTracks, int32_t selectedCount,
+                         const int32_t* trackChannels, bool startAfterLoad) {
     if (slot < 0 || slot >= kMaxSlots) return -1;
     if (!filePath) return -1;
-    // channel < -1 or > 15 → invalid
-    if (channel < -1 || channel > 15) return -1;
+    if (selectedCount < 0) return -1;
+    if (selectedCount > 0 && !selectedTracks) return -1;
 
     MidiFileSlot* s = &mSlots[slot];
 
@@ -203,6 +286,7 @@ int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop, i
         if (!waitForFree(slot, 50)) {
             return -4; // slot busy — couldn't free in time
         }
+        std::vector<MidiFileEvent>().swap(s->events);
     }
 
     // stat + cache lookup (worker-thread only)
@@ -219,7 +303,7 @@ int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop, i
     {
         std::lock_guard<std::mutex> lock(mCacheMutex);
         if (findCacheEntry(filePath, st.st_size, st.st_mtime)) {
-            // Cache hit — copy events out (≤8192×12B is fine on a worker thread)
+            // Cache hit — copy events out on worker thread.
             for (auto& e : mCache) {
                 if (e.path == filePath && e.size == st.st_size && e.mtime == st.st_mtime) {
                     slotEvents = e.events;
@@ -240,15 +324,12 @@ int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop, i
         int32_t localPpq = 960;
 
         MidiFileParser parser;
-        if (!parser.parse(filePath, parsedEvents, tempoMap, timeSigs, &localPpq)) {
+        std::vector<std::string> trackNames;
+        if (!parser.parse(filePath, parsedEvents, tempoMap, timeSigs, trackNames, &localPpq)) {
             return -1; // parse failed
         }
 
-        if (static_cast<int32_t>(parsedEvents.size()) > kMaxEventsPerSlot) {
-            return -2; // file too long
-        }
-
-        CacheEntry entry = buildCacheEntry(filePath, st, parsedEvents, tempoMap, localPpq);
+        CacheEntry entry = buildCacheEntry(filePath, st, parsedEvents, tempoMap, localPpq, trackNames);
 
         ppq = entry.ppq;
         lengthTicks = entry.lengthTicks;
@@ -274,6 +355,7 @@ int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop, i
         if (!waitForFree(slot, 50)) {
             return -4;
         }
+        std::vector<MidiFileEvent>().swap(s->events);
     }
 
     // Clamp BPM to sane range (n9)
@@ -295,26 +377,8 @@ int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop, i
     s->currentTick = 0.0;
     std::memset(s->activeNotes, 0, sizeof(s->activeNotes));
 
-    // Copy events into slot buffer. Vel-0 normalization already in cache.
-    // Only apply channel remap here.
-    int32_t count = 0;
-    for (const auto& evt : slotEvents) {
-        MidiFileEvent outEvt;
-        outEvt.tick = evt.tick;
-        outEvt.status = evt.status;
-        outEvt.data1 = evt.data1;
-        outEvt.data2 = evt.data2;
-        outEvt.trackId = evt.trackId;
-
-        // D3: channel remap — when channel >= 0, remap all events to that channel.
-        if (channel >= 0) {
-            outEvt.status = (outEvt.status & 0xF0) | static_cast<uint8_t>(channel);
-        }
-
-        s->events[count] = outEvt;
-        count++;
-    }
-    s->eventCount = count;
+    s->events = applyTrackSelection(slotEvents, selectedTracks, selectedCount, trackChannels);
+    s->eventCount = static_cast<int32_t>(s->events.size());
 
     // Enqueue LOAD command for audio thread to finalize
     MidiFileCmd cmd;
@@ -322,7 +386,7 @@ int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop, i
     cmd.type = MidiFileCmdType::LOAD;
     cmd.slot = slot;
     cmd.lengthTicks = lengthTicks;
-    cmd.eventCount = count;
+    cmd.eventCount = s->eventCount;
     cmd.ppq = ppq;
     cmd.bpm = bpm;
     cmd.loop = loop;
@@ -335,6 +399,12 @@ int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop, i
     s->ppq = ppq;
 
     if (!cmdQueuePush(mCmdBuffer, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd)) {
+        s->events.clear();
+        std::vector<MidiFileEvent>().swap(s->events);
+        s->eventCount = 0;
+        s->playing.store(false, std::memory_order_release);
+        s->loaded.store(false, std::memory_order_release);
+        s->active.store(false, std::memory_order_release);
         return -3; // command queue full
     }
 

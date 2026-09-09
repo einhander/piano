@@ -78,6 +78,14 @@ class MidiFilesPanel @JvmOverloads constructor(
     /** Called when the user toggles a cell's mode (FILE ↔ CHORD). */
     var onModeToggle: (cellId: Int, newMode: String) -> Unit = { _, _ -> }
 
+    /**
+     * Called when the user applies a track selection for a cell: the explicit
+     * list of checked track indices (empty = cell silent) and the per-track
+     * channel map (track index → 0-15; "From file" tracks omitted).
+     */
+    var onTrackSelection: (cellId: Int, selectedTracks: List<Int>, trackChannels: Map<Int, Int>) -> Unit =
+        { _, _, _ -> }
+
     // ── State ──
 
     /** M2: store injected by hosting activity, not created here. */
@@ -102,10 +110,15 @@ class MidiFilesPanel @JvmOverloads constructor(
     /** Theme-default background per record button, restored when the button is not active. */
     private val cellRecordButtonDefaults = mutableMapOf<Int, Drawable?>()
 
-    // ── Channel spinner items ──
-    // Position 0 is mode-aware: "From file" in FILE, "As recorded" in CHORD.
-    // Positions 1..16 are "Ch 1".."Ch 16" (internal 0..15 → display 1..16).
-    private val channelItems = listOf("From file") + (1..16).map { "Ch $it" }
+    companion object {
+        /**
+         * Channel spinner items (FILE mode), shared with [TrackSelectionDialog]:
+         * position 0 = "From file", positions 1..16 = "Ch 1".."Ch 16"
+         * (internal 0..15 → display 1..16). In CHORD mode the panel swaps
+         * position 0 for "As recorded".
+         */
+        val CHANNEL_ITEMS: List<String> = listOf("From file") + (1..16).map { "Ch $it" }
+    }
 
     // ── Construction ──
 
@@ -185,16 +198,15 @@ class MidiFilesPanel @JvmOverloads constructor(
             }
         }
 
-        // ── Row 1: controls ──
-        val row1 = LinearLayout(context).apply {
+        // ── Row 0: cell name (top of the cell, full width) ──
+        val row0 = LinearLayout(context).apply {
             orientation = HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
             layoutParams = LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
             )
         }
 
-        // File name / chord label
+        // File name / chord label — full width, above the controls row
         val nameText = TextView(context).apply {
             text = if (cell.mode == MODE_CHORD) {
                 val n = cell.chordNotes.size
@@ -205,7 +217,20 @@ class MidiFilesPanel @JvmOverloads constructor(
             } else "—"
             textSize = 12f
             setTextColor(0xFF000000.toInt())
-            layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        row0.addView(nameText)
+
+        // ── Row 1: controls ──
+        val row1 = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LayoutParams(
+                LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
+            )
         }
 
         // Mode toggle: FILE ↔ CHORD. In CHORD mode loop/tempo and file-only actions
@@ -224,7 +249,7 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         // Key label: NOTE → note name; CC → "CC <n>"; PITCH_BEND → "PB" (short — the row
-        // already holds name + spinner + checkbox + tempo edit, no room for "Pitch bend").
+        // already holds mode + spinner + checkbox + tempo edit, no room for "Pitch bend").
         val keyLabel = TextView(context).apply {
             text = when (cell.triggerType) {
                 TRIGGER_CC -> "CC ${cell.ccNumber}"
@@ -242,7 +267,7 @@ class MidiFilesPanel @JvmOverloads constructor(
 
         // Channel spinner
         val channelSpinner = Spinner(context).apply {
-            val items = if (cell.mode == MODE_CHORD) listOf("As recorded") + (1..16).map { "Ch $it" } else channelItems
+            val items = if (cell.mode == MODE_CHORD) listOf("As recorded") + (1..16).map { "Ch $it" } else CHANNEL_ITEMS
             val adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, items)
             setAdapter(adapter)
             // Internal 0..15 → display 1..16; -1 → position 0
@@ -268,7 +293,6 @@ class MidiFilesPanel @JvmOverloads constructor(
             textSize = 11f
         }
 
-        row1.addView(nameText)
         row1.addView(modeBtn)
         row1.addView(keyLabel)
         row1.addView(channelSpinner)
@@ -281,6 +305,12 @@ class MidiFilesPanel @JvmOverloads constructor(
             loopCheck.visibility = android.view.View.GONE
             tempoEdit.visibility = android.view.View.GONE
         }
+
+        container.addView(row0, LayoutParams(
+            LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
+        ).apply {
+            setMargins(0, 0, 0, dpToPx(4, context))
+        })
 
         container.addView(row1, LayoutParams(
             LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
@@ -370,6 +400,19 @@ class MidiFilesPanel @JvmOverloads constructor(
             layoutParams = btnParams()
         }
 
+        // Tracks: multi-track selection + per-track channel. Starts hidden;
+        // shown only for FILE cells whose file has a readable track list with
+        // ≥2 tracks (fetched off the UI thread — single-track files keep the
+        // channel spinner as the only control).
+        val tracksBtn = Button(context).apply {
+            text = "Tracks"
+            textSize = 10f
+            setPadding(4, 4, 4, 4)
+            minWidth = 0
+            layoutParams = btnParams()
+            visibility = android.view.View.GONE
+        }
+
         recordBtn.setOnClickListener {
             onCellRecordClick(cell.id)
         }
@@ -380,10 +423,44 @@ class MidiFilesPanel @JvmOverloads constructor(
 
         row3.addView(recordBtn)
         row3.addView(exportBtn)
+        row3.addView(tracksBtn)
 
-        // Export is file-only (chord has no .mid to export).
+        // Export is file-only (chord has no .mid to export). Tracks is
+        // file-only too (chord has no .mid to select tracks in).
         if (isChord) {
             exportBtn.visibility = android.view.View.GONE
+            tracksBtn.visibility = android.view.View.GONE
+        }
+
+        if (!isChord && cell.filePath.isNotEmpty()) {
+            val path = cell.filePath
+            var trackNames: List<String>? = null
+            MidiFileTriggerController.get(context).fetchTrackNames(path) { names ->
+                // The row may have been rebuilt or the file re-imported since
+                // the fetch started — only show the button when the cell still
+                // points at this file and the list is usable (≥2 tracks).
+                if (names != null && names.size >= 2 && store.get(cell.id)?.filePath == path) {
+                    trackNames = names.toList()
+                    tracksBtn.visibility = android.view.View.VISIBLE
+                    // Multi-track file: per-track channels live in the Tracks
+                    // dialog, so the cell-level spinner is hidden. Same signal
+                    // and same callback as the button — the two stay in sync
+                    // by construction (a rebuilt row starts with the spinner
+                    // visible again, matching the button's GONE default).
+                    channelSpinner.visibility = android.view.View.GONE
+                }
+            }
+            tracksBtn.setOnClickListener {
+                val names = trackNames ?: return@setOnClickListener
+                // CRITICAL: re-read from store
+                val cur = store.get(cell.id) ?: return@setOnClickListener
+                if (cur.filePath != path || cur.mode != MODE_FILE) return@setOnClickListener
+                TrackSelectionDialog.show(
+                    context, names, cur.selectedTracks, cur.trackChannels
+                ) { selected, channels ->
+                    onTrackSelection(cur.id, selected, channels)
+                }
+            }
         }
 
         container.addView(row3, LayoutParams(

@@ -52,6 +52,8 @@ data class SequencerCell(
     val id: Int,
     val note: Int = -1,        // learned MIDI key; -1 = none (always -1 for CC/PITCH_BEND cells)
     val filePath: String = "", // "" = no file
+    val selectedTracks: List<Int>? = null,
+    val trackChannels: Map<Int, Int> = emptyMap(),
     val loop: Boolean = false,
     val tempo: Double = 120.0, // BPM, 20–300
     // FILE: -1 = from file, 0-15 = remap all events; CHORD: -1 = as recorded,
@@ -117,6 +119,7 @@ class MidiFileMappingStore(private val prefs: SharedPreferences) {
 
     companion object {
         private const val KEY = "midi_file_map"
+        @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
         private val JSON = Json {
             ignoreUnknownKeys = true
             explicitNulls = false
