@@ -194,6 +194,7 @@ public:
                          const int32_t* selectedTracks, int32_t selectedCount,
                          const int32_t* trackChannels, bool startAfterLoad = false);
     std::vector<std::string> getMidiFileTracks(const char* filePath);
+    float getMidiFileTempo(const char* filePath); // worker-thread: file's initial bpm, -1 on failure
     int preloadMidiFile(const char* filePath); // worker-thread: parse into cache, returns 0/-1
     void startMidiFileSlot(int slot);
     void stopMidiFileSlot(int slot);

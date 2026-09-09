@@ -191,6 +191,34 @@ std::vector<std::string> MidiFilePlayer::getTrackNamesForFile(const char* filePa
     return trackNames;
 }
 
+float MidiFilePlayer::getMidiFileTempo(const char* filePath) {
+    if (!filePath) return -1.0f;
+    struct stat st;
+    if (stat(filePath, &st) != 0) return -1.0f;
+    {
+        std::lock_guard<std::mutex> lock(mCacheMutex);
+        if (findCacheEntry(filePath, st.st_size, st.st_mtime)) {
+            for (const auto& e : mCache) {
+                if (e.path == filePath && e.size == st.st_size && e.mtime == st.st_mtime) return e.initialTempo;
+            }
+        }
+    }
+    std::vector<RecordedMidiEvent> parsedEvents;
+    std::vector<std::pair<int64_t, uint32_t>> tempoMap;
+    std::vector<std::pair<int64_t, std::pair<int, int>>> timeSigs;
+    std::vector<std::string> trackNames;
+    int32_t ppq = 960;
+    MidiFileParser parser;
+    if (!parser.parse(filePath, parsedEvents, tempoMap, timeSigs, trackNames, &ppq)) return -1.0f;
+    CacheEntry entry = buildCacheEntry(filePath, st, parsedEvents, tempoMap, ppq, trackNames);
+    float tempo = entry.initialTempo;
+    {
+        std::lock_guard<std::mutex> lock(mCacheMutex);
+        insertCacheEntry(std::move(entry));
+    }
+    return tempo;
+}
+
 // ── Worker thread: load ──
 
 std::vector<MidiFileEvent> MidiFilePlayer::applyTrackSelection(

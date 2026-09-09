@@ -1205,6 +1205,19 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetMidiFileTracks(
     return arr;
 }
 
+JNIEXPORT jfloat JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMidiFileTempo(
+    JNIEnv* env, jclass, jstring filePath) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst == nullptr) return -1.0f;
+    if (!filePath) return -1.0f;
+    const char* path = env->GetStringUTFChars(filePath, nullptr);
+    if (!path) return -1.0f;
+    float result = inst->getMidiFileTempo(path);
+    env->ReleaseStringUTFChars(filePath, path);
+    return result;
+}
+
 JNIEXPORT jint JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativePreloadMidiFile(
     JNIEnv* env, jclass, jstring filePath) {

@@ -362,6 +362,10 @@ class SequencerActivity : AppCompatActivity() {
                         input.copyTo(output)
                     }
                 } ?: throw IOException("Could not open input stream for $sourceUri")
+                // The file's initial tempo (worker thread — blocking parse on a
+                // cache miss). Unreadable file / service not bound → -1 → the cell
+                // keeps its current tempo (today's behavior).
+                val fileTempo = service?.getMidiFileTempo(destFile.absolutePath) ?: -1f
                 runOnUiThread {
                     if (cellId != null) {
                         val store = MidiFileMappingStore.get(this@SequencerActivity)
@@ -373,12 +377,15 @@ class SequencerActivity : AppCompatActivity() {
                             // the wrong ones; a carried channel would silently remap
                             // every track of the new file (legacy fallback) with no
                             // UI left to undo it (the spinner is hidden for
-                            // multi-track cells).
+                            // multi-track cells). The tempo is set from the file
+                            // (its initial tempo meta) so the cell plays at the
+                            // file's speed.
                             store.set(cur.copy(
                                 filePath = destFile.absolutePath,
                                 selectedTracks = null,
                                 trackChannels = emptyMap(),
-                                channel = -1
+                                channel = -1,
+                                tempo = if (fileTempo > 0f) fileTempo.toDouble() else cur.tempo
                             ))
                         }
                     }

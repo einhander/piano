@@ -365,6 +365,8 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     fun getMidiFileTracks(filePath: String): Array<String>? = NativeEngineBridge.nativeGetMidiFileTracks(filePath)
 
+    fun getMidiFileTempo(filePath: String): Float = NativeEngineBridge.nativeGetMidiFileTempo(filePath)
+
     fun preloadMidiFile(filePath: String): Int =
         NativeEngineBridge.nativePreloadMidiFile(filePath)
 

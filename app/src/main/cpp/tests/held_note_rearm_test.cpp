@@ -24,6 +24,7 @@
 //     -I /tmp/opencode/fs-host/include \
 //     app/src/main/cpp/synth/FluidSynthEngine.cpp \
 //     app/src/main/cpp/realtime/MidiQueue.cpp \
+//     app/src/main/cpp/realtime/SynthCmdQueue.cpp \
 //     app/src/main/cpp/engine/MidiFilePlayer.cpp \
 //     app/src/main/cpp/midi/MidiFileParser.cpp \
 //     app/src/main/cpp/midi/MidiFileWriter.cpp \

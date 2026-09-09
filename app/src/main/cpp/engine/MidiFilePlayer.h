@@ -106,6 +106,10 @@ public:
     // Worker-thread: return track names from cache or parse-and-cache file.
     std::vector<std::string> getTrackNamesForFile(const char* filePath);
 
+    // Worker-thread: return the file's initial tempo (bpm) from cache or
+    // parse-and-cache file. Returns -1.0f on failure (missing file, parse error).
+    float getMidiFileTempo(const char* filePath);
+
     // Audio-thread: process all active slots for this audio frame.
     // frameCount: number of audio frames in this callback.
     // sampleRate: device sample rate.

@@ -971,6 +971,11 @@ std::vector<std::string> NativeEngine::getMidiFileTracks(const char* filePath) {
     return mMidiFilePlayer.getTrackNamesForFile(filePath);
 }
 
+float NativeEngine::getMidiFileTempo(const char* filePath) {
+    if (!filePath) return -1.0f;
+    return mMidiFilePlayer.getMidiFileTempo(filePath);
+}
+
 int NativeEngine::preloadMidiFile(const char* filePath) {
     return mMidiFilePlayer.preload(filePath);
 }

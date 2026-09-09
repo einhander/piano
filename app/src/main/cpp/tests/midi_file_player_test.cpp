@@ -13,6 +13,7 @@
 #include "midi/MidiFileWriter.h"
 #include "midi/MidiFileParser.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -62,6 +63,29 @@ static void writeTwoTrackNames(const char* path, const char* name0, const char* 
     t1.insert(t1.end(), {0x00, 0xFF, 0x2F, 0x00});
     writeTrack(f, t0);
     writeTrack(f, t1);
+    std::fclose(f);
+}
+
+// Single-track file with N note on/off pairs; optional tempo meta
+// (0xFF 0x51, 3-byte us-per-quarter, big-endian) at tick 0.
+static void writeTempoFile(const char* path, uint32_t usPerQuarter, bool withTempo, int notes = 1) {
+    FILE* f = std::fopen(path, "wb");
+    if (!f) std::abort();
+    std::fwrite("MThd", 1, 4, f); writeBe32(f, 6); writeBe16(f, 0); writeBe16(f, 1); writeBe16(f, 960);
+    std::vector<uint8_t> trk;
+    if (withTempo) {
+        trk.insert(trk.end(), {0x00, 0xFF, 0x51, 0x03});
+        trk.push_back((usPerQuarter >> 16) & 0xFF);
+        trk.push_back((usPerQuarter >> 8) & 0xFF);
+        trk.push_back(usPerQuarter & 0xFF);
+    }
+    for (int i = 0; i < notes; ++i) {
+        uint8_t note = static_cast<uint8_t>(60 + i);
+        trk.insert(trk.end(), {0x00, 0x90, note, 1});
+        trk.insert(trk.end(), {0x00, 0x80, note, 0});
+    }
+    trk.insert(trk.end(), {0x00, 0xFF, 0x2F, 0x00});
+    writeTrack(f, trk);
     std::fclose(f);
 }
 
@@ -141,7 +165,49 @@ int main() {
         std::puts("TrackNamesCacheInvalidation: PASS");
     }
 
-    // 7) regression existing midi_file_io_test: manual run only, no duplicate here.
+    // 7) initial tempo from file (500000 us/quarter → 120 bpm)
+    {
+        const std::string a = makePath("midi_file_player_tempo.mid");
+        writeTempoFile(a.c_str(), 500000, true);
+        MidiFilePlayer p;
+        float t = p.getMidiFileTempo(a.c_str());
+        if (std::fabs(t - 120.0f) > 0.01f) return fail("tempo 120 wrong");
+        std::puts("FileTempo120: PASS");
+    }
+
+    // 8) no tempo meta → default 120
+    {
+        const std::string a = makePath("midi_file_player_notempo.mid");
+        writeTempoFile(a.c_str(), 0, false);
+        MidiFilePlayer p;
+        float t = p.getMidiFileTempo(a.c_str());
+        if (std::fabs(t - 120.0f) > 0.01f) return fail("default tempo wrong");
+        std::puts("FileTempoDefault: PASS");
+    }
+
+    // 9) missing file / null path → -1
+    {
+        MidiFilePlayer p;
+        if (p.getMidiFileTempo("/tmp/definitely_missing_piano_test.mid") != -1.0f) return fail("missing tempo wrong");
+        if (p.getMidiFileTempo(nullptr) != -1.0f) return fail("null tempo wrong");
+        std::puts("FileTempoMissing: PASS");
+    }
+
+    // 10) cache invalidation on file change (different size + mtime)
+    {
+        MidiFilePlayer p;
+        const std::string a = makePath("midi_file_player_tempo_cache.mid");
+        writeTempoFile(a.c_str(), 500000, true, 1); // 120 bpm
+        float t1 = p.getMidiFileTempo(a.c_str());
+        if (std::fabs(t1 - 120.0f) > 0.01f) return fail("tempo cache first wrong");
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        writeTempoFile(a.c_str(), 250000, true, 2); // 240 bpm, different size
+        float t2 = p.getMidiFileTempo(a.c_str());
+        if (std::fabs(t2 - 240.0f) > 0.01f) return fail("tempo cache invalidation wrong");
+        std::puts("FileTempoCacheInvalidation: PASS");
+    }
+
+    // 11) regression existing midi_file_io_test: manual run only, no duplicate here.
     std::puts("ALL TESTS PASSED");
     return 0;
 }
