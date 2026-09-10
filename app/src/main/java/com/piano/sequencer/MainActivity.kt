@@ -43,6 +43,7 @@ import com.piano.sequencer.project.PseqDocument
 import com.piano.sequencer.project.PseqFormatException
 import com.piano.sequencer.project.ProjectRepository
 import com.piano.sequencer.service.PlaybackService
+import com.piano.sequencer.ui.MultiChannelDialog
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.time.LocalDateTime
@@ -64,6 +65,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var effectsButton: Button
     private lateinit var midiStatusText: TextView
     private lateinit var midiDeviceButton: Button
+    private lateinit var multiChannelButton: Button
 
     private var selectedDeviceName: String? = null
 
@@ -381,6 +383,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Toolbar label for the multi-channel mode: "Multi" when off, a compact
+     * 1-based channel list when on ("Multi: 1,5"), "Multi: all" for all 16,
+     * "Multi: none" when on with an empty selection (a no-op broadcast).
+     */
+    private fun multiChannelLabel(): String {
+        if (!multiChannelEnabled) return "Multi"
+        val mask = multiChannelMask and 0xFFFF
+        if (mask == 0xFFFF) return "Multi: all"
+        if (mask == 0) return "Multi: none"
+        val names = StringBuilder()
+        for (c in 0..15) if ((mask shr c) and 1 == 1) {
+            if (names.isNotEmpty()) names.append(',')
+            names.append(c + 1)
+        }
+        return "Multi: $names"
+    }
+
     private fun connectToDevice(deviceInfo: MidiDeviceInfo, persist: Boolean = true) {
         midiManager.connect(deviceInfo)
         selectedDeviceName = midiManager.deviceName(deviceInfo)
@@ -528,6 +548,30 @@ class MainActivity : AppCompatActivity() {
             }
         }
         layout.addView(midiDeviceButton)
+
+        // Multi-channel play mode: the keyboard plays on the selected
+        // channels simultaneously (additive — the keyboard's own channel is
+        // always included). Live mode: the dialog applies changes immediately
+        // (no OK/apply) and persists them to piano_prefs.
+        multiChannelButton = Button(this).apply {
+            text = "Multi"
+            setOnClickListener {
+                MultiChannelDialog.show(
+                    this@MainActivity,
+                    multiChannelEnabled,
+                    multiChannelMask
+                ) { enabled, mask ->
+                    multiChannelEnabled = enabled
+                    multiChannelMask = mask
+                    getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+                        .putBoolean("multi_channel_enabled", enabled)
+                        .putInt("multi_channel_mask", mask)
+                        .apply()
+                    multiChannelButton.text = multiChannelLabel()
+                }
+            }
+        }
+        layout.addView(multiChannelButton)
 
         // Setup MIDI receiver callback
         midiInputReceiver = MidiInputReceiver()
@@ -1290,6 +1334,9 @@ class MainActivity : AppCompatActivity() {
             .getBoolean("multi_channel_enabled", false)
         multiChannelMask = getSharedPreferences("piano_prefs", MODE_PRIVATE)
             .getInt("multi_channel_mask", 0)
+        // The button was created in onCreate (before the first restore) —
+        // re-sync its label with the restored state.
+        multiChannelButton.text = multiChannelLabel()
         if (!midiManager.isConnected() && !userDisconnected) {
             val devices = midiManager.listDevices()
             if (devices.isNotEmpty()) {
