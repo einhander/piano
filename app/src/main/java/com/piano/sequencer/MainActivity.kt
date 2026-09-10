@@ -34,6 +34,7 @@ import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.MidiInputReceiver
 import com.piano.sequencer.midi.MidiFileTriggerController
 import com.piano.sequencer.midi.PitchBendChannelResolver
+import com.piano.sequencer.midi.MultiChannelResolver
 import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.midi.noteToName
 import com.piano.sequencer.project.PseqArchive
@@ -95,6 +96,11 @@ class MainActivity : AppCompatActivity() {
     // read on binder threads (MIDI callback).
     @Volatile
     private var pitchBendChannelsMask: Int = 1
+
+    @Volatile
+    private var multiChannelEnabled: Boolean = false
+    @Volatile
+    private var multiChannelMask: Int = 0
 
     // Live re-enumeration: notified when any MIDI device is added/removed
     // (e.g. a virtual MIDI device connected after the app started).
@@ -339,6 +345,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Sends one keyboard message to every target channel of multi-channel broadcast. */
+    private fun sendToTargets(statusBase: Int, d1: Int, d2: Int, base: IntArray) {
+        val targets = MultiChannelResolver.resolve(base, multiChannelMask, multiChannelEnabled)
+        withService { svc -> for (t in targets) svc.sendMidiMessage(statusBase or t, d1, d2) }
+    }
+
     /** Toast on the main thread; no-op if the activity is finishing/destroyed. */
     private fun uiToast(msg: String, length: Int = Toast.LENGTH_SHORT) {
         runOnUiThread {
@@ -531,14 +543,14 @@ class MainActivity : AppCompatActivity() {
                 }
                 // Delegate to trigger controller — consumed if mapped
                 if (MidiFileTriggerController.get(this@MainActivity).onNoteOn(channel, note, velocity)) return
-                // Unmapped note → forward to engine
-                withService { it.sendMidiMessage(0x90 or channel, note, velocity) }
+                // Unmapped note → forward to selected channels and keyboard channel
+                sendToTargets(0x90, note, velocity, intArrayOf(channel))
             }
             override fun onNoteOff(channel: Int, note: Int, velocity: Int) {
                 // Delegate to trigger controller — consumed if mapped
                 if (!MidiFileTriggerController.get(this@MainActivity).onNoteOff(channel, note, velocity)) {
-                    // Unmapped note → forward to engine
-                    withService { it.sendMidiMessage(0x80 or channel, note, velocity) }
+                    // Unmapped note → forward to selected channels and keyboard channel
+                    sendToTargets(0x80, note, velocity, intArrayOf(channel))
                 }
             }
             override fun onControlChange(channel: Int, controller: Int, value: Int) {
@@ -548,18 +560,14 @@ class MainActivity : AppCompatActivity() {
                 if (MidiFileTriggerController.get(this@MainActivity).onControlChange(channel, controller, value)) return
                 if (controller in 0..1) {
                     // Modulation / breath follow the keyboard's current channel
-                    val targets = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
-                    withService { svc ->
-                        for (t in targets) {
-                            svc.sendMidiMessage(0xB0 or t, controller, value)
-                        }
-                    }
+                    val base = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
+                    sendToTargets(0xB0, controller, value, base)
                 } else {
-                    withService { it.sendMidiMessage(0xB0 or channel, controller, value) }
+                    sendToTargets(0xB0, controller, value, intArrayOf(channel))
                 }
             }
             override fun onProgramChange(channel: Int, program: Int) {
-                withService { it.sendMidiMessage(0xC0 or channel, program, 0) }
+                sendToTargets(0xC0, program, 0, intArrayOf(channel))
             }
             override fun onPitchBend(channel: Int, value: Int) {
                 // Delegate to trigger controller — consumed while learning (first
@@ -567,15 +575,11 @@ class MainActivity : AppCompatActivity() {
                 // to pitch bend (press toggles the cell's file; repeats consumed).
                 if (MidiFileTriggerController.get(this@MainActivity).onPitchBend(channel, value)) return
                 // Pitch bend follows the keyboard's current channel
-                val targets = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
-                withService { svc ->
-                    for (t in targets) {
-                        svc.sendMidiMessage(0xE0 or t, value and 0x7F, (value shr 7) and 0x7F)
-                    }
-                }
+                val base = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
+                sendToTargets(0xE0, value and 0x7F, (value shr 7) and 0x7F, base)
             }
             override fun onChannelPressure(channel: Int, value: Int) {
-                withService { it.sendMidiMessage(0xD0 or channel, value, 0) }
+                sendToTargets(0xD0, value, 0, intArrayOf(channel))
             }
         })
 
@@ -1282,6 +1286,10 @@ class MainActivity : AppCompatActivity() {
         // launch and returning from SettingsActivity.
         pitchBendChannelsMask = getSharedPreferences("piano_prefs", MODE_PRIVATE)
             .getInt("pitch_bend_channels", 1)
+        multiChannelEnabled = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+            .getBoolean("multi_channel_enabled", false)
+        multiChannelMask = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+            .getInt("multi_channel_mask", 0)
         if (!midiManager.isConnected() && !userDisconnected) {
             val devices = midiManager.listDevices()
             if (devices.isNotEmpty()) {
