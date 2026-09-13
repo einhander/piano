@@ -108,7 +108,7 @@ android {
         applicationId = "com.piano.sequencer"
         minSdk = 26
         targetSdk = 29
-        versionCode = 8
+        versionCode = 9
         versionName = resolvedVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
