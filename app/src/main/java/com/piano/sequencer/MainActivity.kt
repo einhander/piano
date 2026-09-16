@@ -611,6 +611,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             override fun onProgramChange(channel: Int, program: Int) {
+                if (MidiFileTriggerController.get(this@MainActivity).onProgramChange(channel, program)) return
                 sendToTargets(0xC0, program, 0, intArrayOf(channel))
             }
             override fun onPitchBend(channel: Int, value: Int) {
@@ -1003,7 +1004,7 @@ class MainActivity : AppCompatActivity() {
                     soundFont = soundFont,
                     channels = channels,
                     cells = cells.map {
-                         PseqCell(it.id, it.note, it.filePath, it.loop, it.tempo, it.channel, it.triggerType, it.ccNumber)
+                         PseqCell(id = it.id, note = it.note, filePath = it.filePath, loop = it.loop, tempo = it.tempo, channel = it.channel, triggerType = it.triggerType, ccNumber = it.ccNumber, programNumber = it.programNumber)
                      }
                 )
 
@@ -1086,7 +1087,8 @@ class MainActivity : AppCompatActivity() {
                             tempo = cell.tempo,
                             channel = cell.channel,
                             triggerType = cell.triggerType,
-                            ccNumber = cell.ccNumber
+                            ccNumber = cell.ccNumber,
+                            programNumber = cell.programNumber
                         )
                     )
                 }

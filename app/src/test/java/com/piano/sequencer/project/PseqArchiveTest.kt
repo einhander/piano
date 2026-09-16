@@ -185,6 +185,28 @@ class PseqArchiveTest {
         assertNull(doc.cells[0].ccNumber)
     }
 
+    @Test
+    fun roundTripPreservesProgramChangeTrigger() {
+        val doc = baseDoc().copy(cells = listOf(
+            PseqCell(id = 1, note = -1, filePath = "midi/pc.mid", triggerType = "PROGRAM_CHANGE", programNumber = 127)
+        ))
+        val midi = tempFile("pseq_pc_", ".mid"); midi.writeBytes(byteArrayOf(1))
+        val pseq = tempFile("pseq_pcrt_", ".pseq")
+        PseqArchive.write(pseq.outputStream(), doc, mapOf("midi/pc.mid" to midi))
+        val cell = PseqArchive.readDocument(pseq.inputStream()).cells.single()
+        assertEquals("PROGRAM_CHANGE", cell.triggerType)
+        assertEquals(127, cell.programNumber)
+    }
+
+    @Test
+    fun oldArchiveWithoutProgramNumberStillLoads() {
+        val pseq = tempFile("pseq_oldpc_", ".pseq")
+        writeJsonZip(pseq, """{"formatVersion":1,"name":"Old","createdAt":"2026-08-19T12:00:00Z","cells":[{"id":1,"note":-1,"filePath":"midi/pc.mid","triggerType":"PROGRAM_CHANGE"}]}""")
+        val cell = PseqArchive.readDocument(pseq.inputStream()).cells.single()
+        assertEquals("PROGRAM_CHANGE", cell.triggerType)
+        assertNull(cell.programNumber)
+    }
+
     // ── malformed archives ──
 
     @Test

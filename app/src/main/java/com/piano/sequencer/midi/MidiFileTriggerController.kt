@@ -71,7 +71,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
 
     // ── Mutable state ──
 
-    /** trigger key (encoded: NOTE 0-127, CC 128-255, PITCH_BEND 256) → slot. */
+    /** trigger key (NOTE 0-127, CC 128-255, PB 256, PC 257-384) → slot. */
     private val triggerSlotMap = ConcurrentHashMap<Int, Int>()
     private val nextSlotIndex = AtomicInteger(0)
 
@@ -260,6 +260,20 @@ class MidiFileTriggerController private constructor(appContext: Context) {
             NoteToggleStateMachine.Result.TOGGLE_ON -> triggerSlot(cell, SystemClock.uptimeMillis())
             NoteToggleStateMachine.Result.TOGGLE_OFF -> stopSlotForTrigger(key)
             NoteToggleStateMachine.Result.IGNORED -> {} // unreachable via press(); keep exhaustive
+        }
+        return true
+    }
+
+    fun onProgramChange(channel: Int, program: Int): Boolean {
+        if (service?.isRecording() == true) return false
+        if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) { MidiFileLearnState.captureProgramChange(program); return true }
+        if (program !in 0..127) return false
+        val cell = store?.findByProgramChange(program) ?: return false
+        val key = PROGRAM_CHANGE_KEY_BASE + program
+        when (noteStateMachine.press(key, cell.loop)) {
+            NoteToggleStateMachine.Result.TOGGLE_ON -> triggerSlot(cell)
+            NoteToggleStateMachine.Result.TOGGLE_OFF -> stopSlotForTrigger(key)
+            NoteToggleStateMachine.Result.IGNORED -> {}
         }
         return true
     }
@@ -601,7 +615,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         slotExecutor.execute {
             val svc = service ?: return@execute
             val slot = triggerSlotMap[key] ?: return@execute
-            val (triggerType, triggerData) = decodeTriggerKey(key)
+            val (triggerType, triggerData) = decodeTriggerKey(key) ?: return@execute
             val cell = store?.findByTrigger(triggerType, triggerData) ?: return@execute
             synchronized(slotLocks[slot]) {
                 // Live loop/tempo
@@ -654,10 +668,12 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         }
     }
 
-    private fun decodeTriggerKey(key: Int): Pair<String, Int> = when {
-        key in 0..127 -> TRIGGER_NOTE to key
-        key in 128..255 -> TRIGGER_CC to (key - 128)
-        else -> TRIGGER_PITCH_BEND to 0
+    private fun decodeTriggerKey(key: Int): Pair<String, Int>? = when {
+        key in NOTE_KEY_BASE..127 -> TRIGGER_NOTE to key
+        key in CC_KEY_BASE..255 -> TRIGGER_CC to (key - CC_KEY_BASE)
+        key == PITCH_BEND_KEY -> TRIGGER_PITCH_BEND to 0
+        key in PROGRAM_CHANGE_KEY_BASE..384 -> TRIGGER_PROGRAM_CHANGE to key - PROGRAM_CHANGE_KEY_BASE
+        else -> null
     }
 
     private fun reloadSlotLocked(

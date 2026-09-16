@@ -9,6 +9,11 @@ import kotlinx.serialization.json.Json
 const val TRIGGER_NOTE = "NOTE"
 const val TRIGGER_CC = "CC"
 const val TRIGGER_PITCH_BEND = "PITCH_BEND"
+const val TRIGGER_PROGRAM_CHANGE = "PROGRAM_CHANGE"
+const val NOTE_KEY_BASE = 0
+const val CC_KEY_BASE = 128
+const val PITCH_BEND_KEY = 256
+const val PROGRAM_CHANGE_KEY_BASE = 257
 
 /** Cell modes: file playback (sequencer) vs chord (single held chord). */
 const val MODE_FILE = "FILE"
@@ -32,7 +37,7 @@ data class ChordNote(
  * and optional channel remap.
  *
  * D1: mapping key = trigger only (channel-agnostic). A trigger is either a MIDI
- * note (NOTE), a CC number (CC), or pitch bend (PITCH_BEND).
+ * note (NOTE), CC number (CC), pitch bend, or Program Change.
  * D3: single tempo per file, user-overridable, default = file's initial tempo.
  *
  * B4: `triggerType`/`ccNumber` were added later — old saved JSON lacks them and
@@ -61,13 +66,17 @@ data class SequencerCell(
     val channel: Int = -1,
     val triggerType: String = TRIGGER_NOTE, // "NOTE" / "CC" / "PITCH_BEND"
     val ccNumber: Int? = null, // CC number; set for triggerType == "CC", null otherwise
+    val programNumber: Int? = null,
     val mode: String = MODE_FILE,           // "FILE" / "CHORD"
     val chordNotes: List<ChordNote> = emptyList()
 ) {
     /** True if the cell has a usable trigger (note >= 0, or a CC/pitch-bend trigger). */
     fun hasTrigger(): Boolean = when (triggerType) {
-        TRIGGER_CC, TRIGGER_PITCH_BEND -> true
-        else -> note >= 0
+        TRIGGER_NOTE -> note in 0..127
+        TRIGGER_CC -> ccNumber in 0..127
+        TRIGGER_PITCH_BEND -> true
+        TRIGGER_PROGRAM_CHANGE -> programNumber in 0..127
+        else -> false
     }
 
     /** True if the cell has playable content: a MIDI file (FILE) or ≥1 chord note (CHORD). */
@@ -76,18 +85,19 @@ data class SequencerCell(
 
     /**
      * Encoded trigger key in one Int space: NOTE 0–127, CC 128–255 (128+cc),
-     * PITCH_BEND 256. Used as the slot-map key and as the toggle state machine
-     * key, so all three trigger types share one code path.
+     * PITCH_BEND 256, PROGRAM_CHANGE 257–384. Used as slot-map/toggle keys.
      */
     fun triggerKey(): Int = when (triggerType) {
-        TRIGGER_CC -> 128 + (ccNumber ?: 0)
-        TRIGGER_PITCH_BEND -> 256
+        TRIGGER_CC -> CC_KEY_BASE + (ccNumber ?: 0)
+        TRIGGER_PITCH_BEND -> PITCH_BEND_KEY
+        TRIGGER_PROGRAM_CHANGE -> PROGRAM_CHANGE_KEY_BASE + (programNumber ?: 0)
         else -> note
     }
 
     /** Trigger data for store lookups: note for NOTE, ccNumber for CC, 0 for PITCH_BEND. */
     fun triggerData(): Int = when (triggerType) {
         TRIGGER_CC -> ccNumber ?: 0
+        TRIGGER_PROGRAM_CHANGE -> programNumber ?: 0
         else -> note
     }
 }
@@ -96,6 +106,7 @@ data class SequencerCell(
 sealed class LearnedEvent {
     data class Note(val note: Int) : LearnedEvent()
     data class CC(val ccNumber: Int) : LearnedEvent()
+    data class ProgramChange(val program: Int) : LearnedEvent()
     data object PitchBend : LearnedEvent()
 }
 
@@ -104,6 +115,7 @@ fun triggerKeyOf(event: LearnedEvent): Int = when (event) {
     is LearnedEvent.Note -> event.note
     is LearnedEvent.CC -> 128 + event.ccNumber
     is LearnedEvent.PitchBend -> 256
+    is LearnedEvent.ProgramChange -> PROGRAM_CHANGE_KEY_BASE + event.program
 }
 
 /**
@@ -263,6 +275,10 @@ class MidiFileMappingStore(private val prefs: SharedPreferences) {
         if (ccNumber !in 0..127) return@synchronized null
         _cells.find { it.triggerType == TRIGGER_CC && it.ccNumber == ccNumber }
     }
+    fun findByProgramChange(program: Int): SequencerCell? = synchronized(lock) {
+        if (program !in 0..127) return@synchronized null
+        _cells.find { it.triggerType == TRIGGER_PROGRAM_CHANGE && it.programNumber == program }
+    }
 
     /** Find first cell mapped to pitch bend; null when absent. */
     fun findByPitchBend(): SequencerCell? = synchronized(lock) {
@@ -273,6 +289,7 @@ class MidiFileMappingStore(private val prefs: SharedPreferences) {
     fun findByTrigger(type: String, data: Int): SequencerCell? = when (type) {
         TRIGGER_CC -> findByCC(data)
         TRIGGER_PITCH_BEND -> findByPitchBend()
+        TRIGGER_PROGRAM_CHANGE -> findByProgramChange(data)
         else -> findByNote(data)
     }
 
@@ -288,16 +305,17 @@ class MidiFileMappingStore(private val prefs: SharedPreferences) {
         val key = triggerKeyOf(event)
         for (c2 in all()) {
             if (c2.id != cellId && c2.hasTrigger() && c2.triggerKey() == key) {
-                set(c2.copy(triggerType = TRIGGER_NOTE, ccNumber = null, note = -1))
+                set(c2.copy(triggerType = TRIGGER_NOTE, ccNumber = null, programNumber = null, note = -1))
             }
         }
         val updated = when (event) {
             is LearnedEvent.Note ->
-                cur.copy(note = event.note, triggerType = TRIGGER_NOTE, ccNumber = null)
+                cur.copy(note = event.note, triggerType = TRIGGER_NOTE, ccNumber = null, programNumber = null)
             is LearnedEvent.CC ->
-                cur.copy(note = -1, triggerType = TRIGGER_CC, ccNumber = event.ccNumber)
+                cur.copy(note = -1, triggerType = TRIGGER_CC, ccNumber = event.ccNumber, programNumber = null)
             is LearnedEvent.PitchBend ->
-                cur.copy(note = -1, triggerType = TRIGGER_PITCH_BEND, ccNumber = null)
+                cur.copy(note = -1, triggerType = TRIGGER_PITCH_BEND, ccNumber = null, programNumber = null)
+            is LearnedEvent.ProgramChange -> cur.copy(note = -1, triggerType = TRIGGER_PROGRAM_CHANGE, ccNumber = null, programNumber = event.program)
         }
         set(updated)
         return updated
@@ -361,6 +379,7 @@ object MidiFileLearnState {
     fun captureCC(ccNumber: Int) = capture(LearnedEvent.CC(ccNumber))
 
     fun capturePitchBend() = capture(LearnedEvent.PitchBend)
+    fun captureProgramChange(program: Int) = capture(LearnedEvent.ProgramChange(program))
 
     private fun capture(event: LearnedEvent) {
         if (_state != State.LEARNING) return

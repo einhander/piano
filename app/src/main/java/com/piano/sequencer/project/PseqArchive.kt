@@ -42,7 +42,8 @@ data class PseqCell(
     val tempo: Double = 120.0,
     val channel: Int = -1,
     val triggerType: String = "NOTE", // "NOTE" / "CC" / "PITCH_BEND" (B4; old archives → NOTE)
-    val ccNumber: Int? = null        // set for triggerType == "CC", null otherwise
+    val ccNumber: Int? = null,
+    val programNumber: Int? = null
 )
 
 @Serializable
