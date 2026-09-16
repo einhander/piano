@@ -3,6 +3,7 @@ package com.piano.sequencer.midi
 import android.media.midi.MidiReceiver
 
 class MidiInputReceiver : MidiReceiver() {
+    private val parser = MidiMessageParser.StreamParser()
     interface Callback {
         fun onNoteOn(channel: Int, note: Int, velocity: Int)
         fun onNoteOff(channel: Int, note: Int, velocity: Int)
@@ -33,7 +34,7 @@ class MidiInputReceiver : MidiReceiver() {
     override fun onSend(data: ByteArray, offset: Int, length: Int, timestamp: Long) {
         val cb = callback ?: return
         try {
-            MidiMessageParser.parse(data, offset, length, object : MidiMessageParser.Handler {
+            parser.parse(data, offset, length, object : MidiMessageParser.Handler {
                 override fun onNoteOn(channel: Int, note: Int, velocity: Int) {
                     safe { cb.onNoteOn(channel, note, velocity) }
                 }
