@@ -1155,4 +1155,18 @@ class MidiFileMappingTest {
         data["midi_file_map"] = "[{\"id\":1,\"note\":60,\"filePath\":\"x.mid\"}]"
         assertNull(MidiFileMappingStore(SharedPrefsStub(data)).get(1)!!.programNumber)
     }
+
+    @Test
+    fun malformedProgramPrefsAreSanitizedToUnlearned() {
+        for (value in listOf<Int?>(null, -1, 128)) {
+            val data = mutableMapOf<String?, Any?>("midi_file_map" to
+                if (value == null) "[{\"id\":1,\"triggerType\":\"PROGRAM_CHANGE\"}]"
+                else "[{\"id\":1,\"triggerType\":\"PROGRAM_CHANGE\",\"programNumber\":$value}]")
+            val cell = MidiFileMappingStore(SharedPrefsStub(data)).get(1)!!
+            assertFalse(cell.hasTrigger())
+            assertEquals(TRIGGER_NOTE, cell.triggerType)
+            assertNotNull(cell.triggerKey())
+            assertEquals(Int.MIN_VALUE, SequencerCell(1, triggerType = TRIGGER_PROGRAM_CHANGE, programNumber = value).triggerKey())
+        }
+    }
 }

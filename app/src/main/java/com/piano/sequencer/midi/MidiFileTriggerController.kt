@@ -266,7 +266,10 @@ class MidiFileTriggerController private constructor(appContext: Context) {
 
     fun onProgramChange(channel: Int, program: Int): Boolean {
         if (service?.isRecording() == true) return false
-        if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) { MidiFileLearnState.captureProgramChange(program); return true }
+        if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+            MidiFileLearnState.captureProgramChange(program)
+            return true
+        }
         if (program !in 0..127) return false
         val cell = store?.findByProgramChange(program) ?: return false
         val key = PROGRAM_CHANGE_KEY_BASE + program

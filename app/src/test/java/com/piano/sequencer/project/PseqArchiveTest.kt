@@ -201,10 +201,20 @@ class PseqArchiveTest {
     @Test
     fun oldArchiveWithoutProgramNumberStillLoads() {
         val pseq = tempFile("pseq_oldpc_", ".pseq")
-        writeJsonZip(pseq, """{"formatVersion":1,"name":"Old","createdAt":"2026-08-19T12:00:00Z","cells":[{"id":1,"note":-1,"filePath":"midi/pc.mid","triggerType":"PROGRAM_CHANGE"}]}""")
+        writeJsonZip(pseq, """{"formatVersion":1,"name":"Old","createdAt":"2026-08-19T12:00:00Z","cells":[{"id":1,"note":48,"filePath":"midi/old.mid","triggerType":"NOTE"}]}""")
         val cell = PseqArchive.readDocument(pseq.inputStream()).cells.single()
-        assertEquals("PROGRAM_CHANGE", cell.triggerType)
+        assertEquals("NOTE", cell.triggerType)
         assertNull(cell.programNumber)
+    }
+
+    @Test
+    fun malformedProgramChangeArchivesAreRejected() {
+        for (field in listOf<String?>(null, "-1", "128")) {
+            val pseq = tempFile("pseq_badpc_", ".pseq")
+            val property = field?.let { "\"programNumber\":$it" } ?: "\"programNumber\":null"
+            writeJsonZip(pseq, """{"formatVersion":1,"name":"Bad","createdAt":"now","cells":[{"id":1,"triggerType":"PROGRAM_CHANGE",$property}]}""")
+            assertThrows(PseqFormatException::class.java) { PseqArchive.readDocument(pseq.inputStream()) }
+        }
     }
 
     // ── malformed archives ──

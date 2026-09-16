@@ -42,8 +42,8 @@ data class ChordNote(
  *
  * B4: `triggerType`/`ccNumber` were added later — old saved JSON lacks them and
  * deserializes as NOTE with the existing `note` (kotlinx default values).
- * For CC / PITCH_BEND cells `note` is -1 (no note); the trigger is fully
- * described by `triggerType` + `ccNumber`.
+ * For CC / PITCH_BEND / PROGRAM_CHANGE cells `note` is -1 (no note); trigger
+ * is fully described by its type-specific field.
  *
  * Chord mode: `mode == MODE_CHORD` → the cell holds a single chord in
  * `chordNotes` (no MIDI file). While the trigger is held the chord sounds
@@ -64,7 +64,7 @@ data class SequencerCell(
     // FILE: -1 = from file, 0-15 = remap all events; CHORD: -1 = as recorded,
     // 0-15 = remap all chord notes.
     val channel: Int = -1,
-    val triggerType: String = TRIGGER_NOTE, // "NOTE" / "CC" / "PITCH_BEND"
+    val triggerType: String = TRIGGER_NOTE, // "NOTE" / "CC" / "PITCH_BEND" / "PROGRAM_CHANGE"
     val ccNumber: Int? = null, // CC number; set for triggerType == "CC", null otherwise
     val programNumber: Int? = null,
     val mode: String = MODE_FILE,           // "FILE" / "CHORD"
@@ -90,17 +90,20 @@ data class SequencerCell(
     fun triggerKey(): Int = when (triggerType) {
         TRIGGER_CC -> CC_KEY_BASE + (ccNumber ?: 0)
         TRIGGER_PITCH_BEND -> PITCH_BEND_KEY
-        TRIGGER_PROGRAM_CHANGE -> PROGRAM_CHANGE_KEY_BASE + (programNumber ?: 0)
+        TRIGGER_PROGRAM_CHANGE -> if (programNumber in 0..127) PROGRAM_CHANGE_KEY_BASE + programNumber!! else INVALID_TRIGGER_KEY
         else -> note
     }
 
     /** Trigger data for store lookups: note for NOTE, ccNumber for CC, 0 for PITCH_BEND. */
     fun triggerData(): Int = when (triggerType) {
         TRIGGER_CC -> ccNumber ?: 0
-        TRIGGER_PROGRAM_CHANGE -> programNumber ?: 0
+        TRIGGER_PROGRAM_CHANGE -> if (programNumber in 0..127) programNumber!! else INVALID_TRIGGER_DATA
         else -> note
     }
 }
+
+private const val INVALID_TRIGGER_KEY = Int.MIN_VALUE
+private const val INVALID_TRIGGER_DATA = Int.MIN_VALUE
 
 /** A learned MIDI event: the first event of ANY type wins during learn mode. */
 sealed class LearnedEvent {
@@ -191,7 +194,11 @@ class MidiFileMappingStore(private val prefs: SharedPreferences) {
                 if (trimmed.startsWith('[')) {
                     // New format: array of SequencerCell
                     val list: List<SequencerCell> = JSON.decodeFromString(json)
-                    _cells = list.toMutableList()
+                    _cells = list.map { cell ->
+                        if (cell.triggerType == TRIGGER_PROGRAM_CHANGE && cell.programNumber !in 0..127) {
+                            cell.copy(note = -1, triggerType = TRIGGER_NOTE, ccNumber = null, programNumber = null)
+                        } else cell
+                    }.toMutableList()
                     legacyLoad = false
                 } else if (trimmed.startsWith('{')) {
                     // Legacy format: map keyed by note string

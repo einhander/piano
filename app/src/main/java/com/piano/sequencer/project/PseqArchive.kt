@@ -41,7 +41,7 @@ data class PseqCell(
     val loop: Boolean = false,
     val tempo: Double = 120.0,
     val channel: Int = -1,
-    val triggerType: String = "NOTE", // "NOTE" / "CC" / "PITCH_BEND" (B4; old archives → NOTE)
+    val triggerType: String = "NOTE", // NOTE / CC / PITCH_BEND / PROGRAM_CHANGE
     val ccNumber: Int? = null,
     val programNumber: Int? = null
 )
@@ -169,6 +169,9 @@ object PseqArchive {
                 throw PseqFormatException(
                     "Invalid document: cell ${cell.id} has invalid midi path '${cell.filePath}'"
                 )
+            }
+            if (cell.triggerType == "PROGRAM_CHANGE" && cell.programNumber !in 0..127) {
+                throw PseqFormatException("Invalid document: cell ${cell.id} has invalid program number ${cell.programNumber}")
             }
         }
     }
