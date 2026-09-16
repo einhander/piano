@@ -149,6 +149,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         if (service?.isRecording() == true || ChordRecorder.isActive()) return false
         // Learn state active → capture
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+            logLearnNote(channel, note, velocity)
             MidiFileLearnState.captureNote(note)
             return true
         }
@@ -215,6 +216,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         if (service?.isRecording() == true) return false
         // Learn state active → capture (first event of any type wins)
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+            logLearnCc(channel, ccNumber, value)
             MidiFileLearnState.captureCC(ccNumber)
             return true
         }
@@ -246,6 +248,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         if (service?.isRecording() == true) return false
         // Learn state active → capture (first event of any type wins)
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+            logLearnPitchBend(channel, value)
             MidiFileLearnState.capturePitchBend()
             return true
         }
@@ -267,6 +270,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     fun onProgramChange(channel: Int, program: Int): Boolean {
         if (service?.isRecording() == true) return false
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+            logLearnProgramChange(channel, program)
             MidiFileLearnState.captureProgramChange(program)
             return true
         }
@@ -279,6 +283,22 @@ class MidiFileTriggerController private constructor(appContext: Context) {
             NoteToggleStateMachine.Result.IGNORED -> {}
         }
         return true
+    }
+
+    private fun logLearnNote(channel: Int, note: Int, velocity: Int) {
+        AppLogger.info("MIDI", "MIDI IN NOTE ch=${channel + 1} note=$note velocity=$velocity")
+    }
+
+    private fun logLearnCc(channel: Int, cc: Int, value: Int) {
+        AppLogger.info("MIDI", "MIDI IN CC ch=${channel + 1} cc=$cc value=$value")
+    }
+
+    private fun logLearnProgramChange(channel: Int, program: Int) {
+        AppLogger.info("MIDI", "MIDI IN PC ch=${channel + 1} program=$program")
+    }
+
+    private fun logLearnPitchBend(channel: Int, value: Int) {
+        AppLogger.info("MIDI", "MIDI IN PB ch=${channel + 1} value=$value")
     }
 
     // ── Trigger logic ──
