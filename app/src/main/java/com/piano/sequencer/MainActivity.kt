@@ -35,6 +35,7 @@ import com.piano.sequencer.midi.MidiInputReceiver
 import com.piano.sequencer.midi.MidiFileTriggerController
 import com.piano.sequencer.midi.PitchBendChannelResolver
 import com.piano.sequencer.midi.MultiChannelResolver
+import com.piano.sequencer.midi.MidiIngressRouter
 import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.midi.noteToName
 import com.piano.sequencer.project.PseqArchive
@@ -49,8 +50,12 @@ import java.io.IOException
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.LinkedHashMap
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
+    private val midiWorker = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "MainMidiWorker").apply { isDaemon = true }
+    }
 
     private lateinit var layout: LinearLayout
     private lateinit var statusText: TextView
@@ -83,6 +88,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var midiManager: MidiDeviceManager
     private lateinit var midiInputReceiver: MidiInputReceiver
+    private lateinit var midiIngress: MidiIngressRouter
 
     // Channel of the last note played — pitch bend / mod / breath follow this
     // channel. -1 until the first note. MIDI input callbacks run on binder
@@ -137,6 +143,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @Volatile
     private var playbackService: PlaybackService? = null
     private var serviceBound = false
 
@@ -343,14 +350,32 @@ class MainActivity : AppCompatActivity() {
         if (serviceBound && playbackService != null) {
             action(playbackService!!)
         } else {
-            Toast.makeText(this, "Service not connected", Toast.LENGTH_SHORT).show()
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    Toast.makeText(this, "Service not connected", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
     /** Sends one keyboard message to every target channel of multi-channel broadcast. */
     private fun sendToTargets(statusBase: Int, d1: Int, d2: Int, base: IntArray) {
         val targets = MultiChannelResolver.resolve(base, multiChannelMask, multiChannelEnabled)
-        withService { svc -> for (t in targets) svc.sendMidiMessage(statusBase or t, d1, d2) }
+        val service = playbackService
+        if (service == null) {
+            uiToast("Service not connected")
+            return
+        }
+        midiWorker.execute { for (t in targets) service.sendMidiMessage(statusBase or t, d1, d2) }
+    }
+
+    private fun dispatchMidi(action: (PlaybackService) -> Unit) {
+        val service = playbackService
+        if (service == null) {
+            uiToast("Service not connected")
+            return
+        }
+        midiWorker.execute { action(service) }
     }
 
     /** Toast on the main thread; no-op if the activity is finishing/destroyed. */
@@ -427,37 +452,37 @@ class MainActivity : AppCompatActivity() {
         c4Button = Button(this).apply {
             text = "C4 (60)"
             setOnClickListener {
-                withService { it.noteOn(0, 60, 100) }
+                midiIngress.noteOn(0, 60, 100)
             }
             setOnLongClickListener {
-                withService { it.noteOff(0, 60) }
+                midiIngress.noteOff(0, 60, 0)
                 true
             }
         }
         d4Button = Button(this).apply {
             text = "D4 (62)"
             setOnClickListener {
-                withService { it.noteOn(0, 62, 100) }
+                midiIngress.noteOn(0, 62, 100)
             }
             setOnLongClickListener {
-                withService { it.noteOff(0, 62) }
+                midiIngress.noteOff(0, 62, 0)
                 true
             }
         }
         e4Button = Button(this).apply {
             text = "E4 (64)"
             setOnClickListener {
-                withService { it.noteOn(0, 64, 100) }
+                midiIngress.noteOn(0, 64, 100)
             }
             setOnLongClickListener {
-                withService { it.noteOff(0, 64) }
+                midiIngress.noteOff(0, 64, 0)
                 true
             }
         }
         panicButton = Button(this).apply {
             text = "PANIC"
             setOnClickListener {
-                withService { it.panic() }
+                dispatchMidi { it.panic() }
                 Toast.makeText(this@MainActivity, "Panic!", Toast.LENGTH_SHORT).show()
             }
         }
@@ -575,27 +600,21 @@ class MainActivity : AppCompatActivity() {
 
         // Setup MIDI receiver callback
         midiInputReceiver = MidiInputReceiver()
+        midiIngress = MidiIngressRouter(
+            MidiFileTriggerController.get(this)::onNoteOn,
+            MidiFileTriggerController.get(this)::onNoteOff,
+            { status, d1, d2, channel -> sendToTargets(status, d1, d2, intArrayOf(channel)) },
+            { channel, note, velocity ->
+                lastNoteChannel = channel
+                if (ChordRecorder.isActive()) ChordRecorder.onNoteOn(channel, note, velocity)
+            }
+        )
         midiInputReceiver.setCallback(object : MidiInputReceiver.Callback {
             override fun onNoteOn(channel: Int, note: Int, velocity: Int) {
-                // Keyboard is using this channel regardless of file triggering
-                lastNoteChannel = channel
-                // Chord recording window: collect the note into the chord
-                // (regardless of trigger mapping). The note still reaches the
-                // engine below so the user hears it while building the chord.
-                if (ChordRecorder.isActive()) {
-                    ChordRecorder.onNoteOn(channel, note, velocity)
-                }
-                // Delegate to trigger controller — consumed if mapped
-                if (MidiFileTriggerController.get(this@MainActivity).onNoteOn(channel, note, velocity)) return
-                // Unmapped note → forward to selected channels and keyboard channel
-                sendToTargets(0x90, note, velocity, intArrayOf(channel))
+                midiIngress.noteOn(channel, note, velocity)
             }
             override fun onNoteOff(channel: Int, note: Int, velocity: Int) {
-                // Delegate to trigger controller — consumed if mapped
-                if (!MidiFileTriggerController.get(this@MainActivity).onNoteOff(channel, note, velocity)) {
-                    // Unmapped note → forward to selected channels and keyboard channel
-                    sendToTargets(0x80, note, velocity, intArrayOf(channel))
-                }
+                midiIngress.noteOff(channel, note, velocity)
             }
             override fun onControlChange(channel: Int, controller: Int, value: Int) {
                 // Delegate to trigger controller — consumed while learning (first CC
@@ -611,6 +630,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             override fun onProgramChange(channel: Int, program: Int) {
+                if (MidiFileTriggerController.get(this@MainActivity).onProgramChange(channel, program)) return
                 sendToTargets(0xC0, program, 0, intArrayOf(channel))
             }
             override fun onPitchBend(channel: Int, value: Int) {
@@ -1003,7 +1023,7 @@ class MainActivity : AppCompatActivity() {
                     soundFont = soundFont,
                     channels = channels,
                     cells = cells.map {
-                         PseqCell(it.id, it.note, it.filePath, it.loop, it.tempo, it.channel, it.triggerType, it.ccNumber)
+                         PseqCell(id = it.id, note = it.note, filePath = it.filePath, loop = it.loop, tempo = it.tempo, channel = it.channel, triggerType = it.triggerType, ccNumber = it.ccNumber, programNumber = it.programNumber)
                      }
                 )
 
@@ -1086,7 +1106,8 @@ class MainActivity : AppCompatActivity() {
                             tempo = cell.tempo,
                             channel = cell.channel,
                             triggerType = cell.triggerType,
-                            ccNumber = cell.ccNumber
+                            ccNumber = cell.ccNumber,
+                            programNumber = cell.programNumber
                         )
                     )
                 }
@@ -1374,6 +1395,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        midiWorker.shutdown()
         super.onDestroy()
         if (serviceBound) {
             unbindService(serviceConnection)

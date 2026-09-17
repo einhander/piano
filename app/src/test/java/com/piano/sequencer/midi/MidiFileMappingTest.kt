@@ -758,6 +758,19 @@ class MidiFileMappingTest {
     }
 
     @Test
+    fun concurrentLearnCapturesInvokeOnlyOneCallback() {
+        MidiFileLearnState.cancel()
+        val callbacks = java.util.concurrent.atomic.AtomicInteger()
+        MidiFileLearnState.startLearning { callbacks.incrementAndGet() }
+        val executor = Executors.newFixedThreadPool(8)
+        repeat(100) { i -> executor.submit { MidiFileLearnState.captureNote(i and 127) } }
+        executor.shutdown()
+        assertTrue(executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS))
+        assertEquals(1, callbacks.get())
+        assertEquals(MidiFileLearnState.State.IDLE, MidiFileLearnState.getState())
+    }
+
+    @Test
     fun cancelResetsToIdle() {
         MidiFileLearnState.cancel()
         MidiFileLearnState.startLearning { }
@@ -1104,5 +1117,69 @@ class MidiFileMappingTest {
         assertEquals("C#-1", noteToName(1))
         assertEquals("F#4", noteToName(66))
         assertEquals("G#4", noteToName(68))
+    }
+
+    @Test
+    fun programChangeKeysAreDistinctAndBounded() {
+        assertEquals(PROGRAM_CHANGE_KEY_BASE, triggerKeyOf(LearnedEvent.ProgramChange(0)))
+        assertEquals(384, triggerKeyOf(LearnedEvent.ProgramChange(127)))
+        assertEquals(setOf(0..127, 128..255, 256..256, 257..384).flatten().size, 385)
+    }
+
+    @Test
+    fun programCellValidityAndEncoding() {
+        assertTrue(SequencerCell(1, triggerType = TRIGGER_PROGRAM_CHANGE, programNumber = 0).hasTrigger())
+        assertTrue(SequencerCell(1, triggerType = TRIGGER_PROGRAM_CHANGE, programNumber = 127).hasTrigger())
+        assertFalse(SequencerCell(1, triggerType = TRIGGER_PROGRAM_CHANGE, programNumber = -1).hasTrigger())
+        assertFalse(SequencerCell(1, triggerType = TRIGGER_PROGRAM_CHANGE, programNumber = 128).hasTrigger())
+        assertEquals(257, SequencerCell(1, triggerType = TRIGGER_PROGRAM_CHANGE, programNumber = 0).triggerKey())
+    }
+
+    @Test
+    fun programLookupAndLearnClearsStaleFieldsAndDisplaces() {
+        val store = createStore()
+        store.set(SequencerCell(1, note = 60, triggerType = TRIGGER_NOTE, ccNumber = 7, programNumber = 9))
+        store.set(SequencerCell(2, triggerType = TRIGGER_PROGRAM_CHANGE, programNumber = 12))
+        assertEquals(2, store.findByProgramChange(12)!!.id)
+        assertNull(store.findByProgramChange(-1)); assertNull(store.findByProgramChange(128))
+        assertEquals(2, store.findByTrigger(TRIGGER_PROGRAM_CHANGE, 12)!!.id)
+        store.applyLearnedTrigger(1, LearnedEvent.ProgramChange(12))
+        val displaced = store.get(2)!!
+        assertFalse(displaced.hasTrigger()); assertEquals(-1, displaced.note)
+        assertNull(displaced.ccNumber); assertNull(displaced.programNumber)
+        assertEquals(12, store.get(1)!!.programNumber)
+    }
+
+    @Test
+    fun relearningBetweenTypesClearsStaleFields() {
+        val store = createStore(); store.set(SequencerCell(1, note = 60, ccNumber = 4, programNumber = 8))
+        store.applyLearnedTrigger(1, LearnedEvent.ProgramChange(3))
+        assertEquals(-1, store.get(1)!!.note); assertNull(store.get(1)!!.ccNumber)
+        store.applyLearnedTrigger(1, LearnedEvent.Note(61)); assertNull(store.get(1)!!.programNumber)
+        store.applyLearnedTrigger(1, LearnedEvent.CC(5)); assertEquals(-1, store.get(1)!!.note)
+        store.applyLearnedTrigger(1, LearnedEvent.ProgramChange(6)); assertNull(store.get(1)!!.ccNumber)
+    }
+
+    @Test
+    fun programMappingPersistsAndOldJsonLoads() {
+        val data = mutableMapOf<String?, Any?>(); val prefs = SharedPrefsStub(data)
+        MidiFileMappingStore(prefs).set(SequencerCell(1, triggerType = TRIGGER_PROGRAM_CHANGE, programNumber = 127))
+        assertEquals(127, MidiFileMappingStore(SharedPrefsStub(data)).get(1)!!.programNumber)
+        data["midi_file_map"] = "[{\"id\":1,\"note\":60,\"filePath\":\"x.mid\"}]"
+        assertNull(MidiFileMappingStore(SharedPrefsStub(data)).get(1)!!.programNumber)
+    }
+
+    @Test
+    fun malformedProgramPrefsAreSanitizedToUnlearned() {
+        for (value in listOf<Int?>(null, -1, 128)) {
+            val data = mutableMapOf<String?, Any?>("midi_file_map" to
+                if (value == null) "[{\"id\":1,\"triggerType\":\"PROGRAM_CHANGE\"}]"
+                else "[{\"id\":1,\"triggerType\":\"PROGRAM_CHANGE\",\"programNumber\":$value}]")
+            val cell = MidiFileMappingStore(SharedPrefsStub(data)).get(1)!!
+            assertFalse(cell.hasTrigger())
+            assertEquals(TRIGGER_NOTE, cell.triggerType)
+            assertNotNull(cell.triggerKey())
+            assertEquals(Int.MIN_VALUE, SequencerCell(1, triggerType = TRIGGER_PROGRAM_CHANGE, programNumber = value).triggerKey())
+        }
     }
 }

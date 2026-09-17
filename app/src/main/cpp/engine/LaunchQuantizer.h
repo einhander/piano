@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <atomic>
 
-struct TransportState;
+struct TransportSnapshot { double tick; double tpf; int64_t frame; int32_t ppq; int16_t numerator; };
 
 enum class QuantizationGrid : int32_t {
     Immediate = 0,
@@ -21,12 +21,11 @@ public:
     ~LaunchQuantizer();
 
     // Initialize with transport reference
-    void init(TransportState* transport);
 
     // Schedule a launch command to fire at the next quantization boundary.
     // Returns the target frame when the command will fire.
     // If Immediate, returns current frame.
-    int64_t scheduleLaunch(QuantizationGrid grid, int64_t currentFrame);
+    int64_t scheduleLaunch(QuantizationGrid grid, int64_t currentFrame, TransportSnapshot snapshot);
 
     // Get the current quantization grid setting
     QuantizationGrid getGrid() const { return mGrid.load(std::memory_order_acquire); }
@@ -41,7 +40,6 @@ public:
     void acknowledgeLaunch() { mPending.store(false, std::memory_order_release); }
 
 private:
-    TransportState* mTransport = nullptr;
     std::atomic<QuantizationGrid> mGrid{QuantizationGrid::Immediate};
     std::atomic<bool> mPending{false};
 };

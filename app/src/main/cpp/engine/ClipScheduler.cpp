@@ -2,158 +2,54 @@
 #include <cmath>
 #include <cstring>
 
-ClipScheduler::ClipScheduler() {
-    // Initialize atomic clip pointers — cannot use memset on std::atomic
-    for (int32_t i = 0; i < kMaxClips; i++) {
-        mClips[i].clip.store(nullptr, std::memory_order_relaxed);
-    }
-    std::memset(mLastFiredEventIndex, -1, sizeof(mLastFiredEventIndex));
-}
-
+ClipScheduler::ClipScheduler() { for (auto& s : mClips) s.clip.store(nullptr); std::memset(mLastFiredEventIndex, -1, sizeof mLastFiredEventIndex); }
 ClipScheduler::~ClipScheduler() = default;
-
-void ClipScheduler::init(TransportState* transport, MidiQueue* midiQueue) {
-    mTransport = transport;
-    mMidiQueue = midiQueue;
+void ClipScheduler::init(TransportState* transport) { mTransport = transport; }
+void ClipScheduler::activateSlot(int32_t slot, ClipData* clip) {
+    if (!clip || slot < 0 || slot >= kMaxClips) return;
+    if (!mClips[slot].clip.load()) { mRuntime[slot] = ClipRuntime{}; mClips[slot].clip.store(clip); mClipCount.fetch_add(1); }
 }
-
-void ClipScheduler::addClip(ClipData* clip) {
-    if (!clip) return;
-
-    int32_t count = mClipCount.load(std::memory_order_acquire);
-    if (count >= kMaxClips) return;
-
-    for (int32_t i = 0; i < kMaxClips; i++) {
-        if (mClips[i].clip.load(std::memory_order_acquire) == nullptr) {
-            mClips[i].clip.store(clip, std::memory_order_release);
-            mClipCount.fetch_add(1, std::memory_order_release);
-            // Initialize active note tracking
-            std::memset(clip->mActiveNotes, 0, sizeof(clip->mActiveNotes));
-            clip->mActiveNoteCount = 0;
-            return;
-        }
-    }
+void ClipScheduler::deactivateSlot(int32_t slot) {
+    if (slot >= 0 && slot < kMaxClips && mClips[slot].clip.exchange(nullptr)) mClipCount.fetch_sub(1);
 }
-
-void ClipScheduler::removeClip(int32_t clipId) {
-    for (int32_t i = 0; i < kMaxClips; i++) {
-        ClipData* current = mClips[i].clip.load(std::memory_order_acquire);
-        if (current && current->clipId == clipId) {
-            mClips[i].clip.store(nullptr, std::memory_order_release);
-            mClipCount.fetch_sub(1, std::memory_order_release);
-            return;
-        }
-    }
-}
-
-static inline void fireMidiMessage(MidiQueue* midiQueue,
-                                    const ClipData::Event& evt,
-                                    double currentTick,
-                                    int ticksPerFrame) {
-    MidiMessage msg;
-    msg.status = evt.status;
-    msg.data1 = evt.data1;
-    msg.data2 = evt.data2;
-    msg.timestamp = static_cast<int64_t>(currentTick / ticksPerFrame);
-    midiQueue->push(msg);
-}
-
-void ClipScheduler::process() {
-    if (!mRunning.load(std::memory_order_acquire)) return;
-    if (!mTransport || !mMidiQueue) return;
-
-    double currentTick = mTransport->currentTick();
-    int ticksPerFrame = mTransport->ticksPerFrame;
-
-    // For each active clip, check if any events should fire at current tick
-    for (int32_t i = 0; i < kMaxClips; i++) {
-        ClipData* clip = mClips[i].clip.load(std::memory_order_acquire);
-        if (!clip) continue;
-
-        // Calculate clip-relative tick position
-        double clipStartTick = static_cast<double>(clip->startTick);
-        double clipRelativeTick = currentTick - clipStartTick;
-
-        if (clipRelativeTick < 0) continue;  // Clip hasn't started yet
-
-        // Check for loop boundary
-        double lengthTicks = static_cast<double>(clip->lengthTicks);
-        if (clipRelativeTick >= lengthTicks) {
-            // Clip has looped — send Note Off for all active notes
-            for (int32_t n = 0; n < clip->mActiveNoteCount; n++) {
-                uint8_t note = clip->mActiveNotes[n];
-                // Send Note Off on the same channel as the Note On (status byte)
-                // We don't have the original status byte stored, so use 0x80 (Note Off, channel 1)
-                // Actually, we need to track the channel. For now, use channel 1 (0x80).
-                // Better approach: store status in a parallel array.
-                // For MVP: send Note Off on all channels is too noisy.
-                // Let's use a parallel array for status bytes.
-                MidiMessage msg;
-                msg.status = 0x80;  // Note Off, channel 1 — placeholder
-                msg.data1 = note;
-                msg.data2 = 0;
-                msg.timestamp = static_cast<int64_t>(currentTick / ticksPerFrame);
-                mMidiQueue->push(msg);
+int32_t ClipScheduler::collectDueEvents(int64_t begin, int64_t end, TimedMidiEvent* out, int32_t cap) {
+    if (!mRunning.load() || !mTransport || !out || cap <= 0 || end <= begin) return 0;
+    double tpf = mTransport->tpf; if (!(tpf > 0.0)) return 0;
+    int n = 0;
+    for (int s=0; s<kMaxClips && n<cap; ++s) {
+        ClipData* c=mClips[s].clip.load(); auto& r=mRuntime[s]; if (!c || c->lengthTicks<=0) continue;
+        for (int pass = 0; pass < 64 && n < cap; ++pass) {
+            while (r.nextEventIndex < c->eventCount) {
+            auto& e=c->events[r.nextEventIndex];
+            int64_t tick=c->startTick + r.loopIndex*c->lengthTicks + e.tick;
+            int64_t frame=static_cast<int64_t>(std::ceil(tick/tpf));
+            if (frame >= end) break;
+            if (n >= cap) break;
+            auto& x=out[n++]; x.targetFrame=frame; x.sourceSlot=static_cast<uint16_t>(s+1); x.order=r.nextOrder++; x.phase=TimedMidiEvent::Scheduled;
+            x.targetFrame = frame < begin ? begin : frame;
+            x.message={e.status,e.data1,e.data2,x.targetFrame ? x.targetFrame : 1};
+            ++r.nextEventIndex;
+            uint8_t type=e.status&0xf0, ch=e.status&0x0f;
+            if (type==0x90 && e.data2) { if(r.activeNoteCount<128) r.activeNotes[r.activeNoteCount++]={ch,e.data1}; }
+            else if(type==0x80 || (type==0x90&&!e.data2)) for(int i=0;i<r.activeNoteCount;++i) if(r.activeNotes[i].channel==ch&&r.activeNotes[i].note==e.data1){r.activeNotes[i]=r.activeNotes[--r.activeNoteCount];break;}
             }
-            // Clear active note list
-            clip->mActiveNoteCount = 0;
-            std::memset(clip->mActiveNotes, 0, sizeof(clip->mActiveNotes));
-
-            // Wrap tick position
-            clipRelativeTick = std::fmod(clipRelativeTick, lengthTicks);
-        }
-
-        // Scan events for ones that should fire — start from last fired index
-        for (int32_t j = mLastFiredEventIndex[i] + 1; j < clip->eventCount; j++) {
-            int64_t eventTick = clip->events[j].tick;
-            if (eventTick > static_cast<int64_t>(clipRelativeTick + 1)) break;  // Events sorted by tick
-
-            // Fire this event
-            fireMidiMessage(mMidiQueue, clip->events[j], currentTick, ticksPerFrame);
-
-            // Track active notes for loop boundary cleanup
-            uint8_t status = clip->events[j].status;
-            uint8_t type = status & 0xF0;
-            if (type == 0x90 && clip->events[j].data2 > 0) {
-                // Note On with non-zero velocity
-                uint8_t note = clip->events[j].data1;
-                if (clip->mActiveNoteCount < 128) {
-                    // Check if note already tracked
-                    bool alreadyActive = false;
-                    for (int32_t n = 0; n < clip->mActiveNoteCount; n++) {
-                        if (clip->mActiveNotes[n] == note) {
-                            alreadyActive = true;
-                            break;
-                        }
-                    }
-                    if (!alreadyActive) {
-                        clip->mActiveNotes[clip->mActiveNoteCount] = note;
-                        clip->mActiveNoteCount++;
-                    }
+        if (r.nextEventIndex >= c->eventCount) {
+            const int64_t loopFrame = static_cast<int64_t>(std::ceil((c->startTick + (r.loopIndex + 1) * c->lengthTicks) / tpf));
+            if (loopFrame >= end) break;
+            if (loopFrame < end) {
+                if (r.activeNoteCount > cap - n) break;
+                while (r.activeNoteCount > 0) {
+                    auto note = r.activeNotes[--r.activeNoteCount]; auto& x=out[n++];
+                    x.targetFrame=loopFrame < begin ? begin : loopFrame; x.sourceSlot=static_cast<uint16_t>(s+1); x.order=r.nextOrder++; x.phase=TimedMidiEvent::Cleanup;
+                    x.message={static_cast<uint8_t>(0x80 | note.channel), note.note, 0, x.targetFrame ? x.targetFrame : 1};
                 }
-            } else if (type == 0x80 || (type == 0x90 && clip->events[j].data2 == 0)) {
-                // Note Off
-                uint8_t note = clip->events[j].data1;
-                // Remove from active list
-                for (int32_t n = 0; n < clip->mActiveNoteCount; n++) {
-                    if (clip->mActiveNotes[n] == note) {
-                        // Swap with last and decrement
-                        clip->mActiveNotes[n] = clip->mActiveNotes[clip->mActiveNoteCount - 1];
-                        clip->mActiveNoteCount--;
-                        break;
-                    }
-                }
+                if (r.activeNoteCount != 0) break;
             }
-
-            mLastFiredEventIndex[i] = j;
+            r.nextEventIndex=0; ++r.loopIndex;
+            if (n >= cap) break;
+        }
         }
     }
+    return n;
 }
-
-void ClipScheduler::start() {
-    mRunning.store(true, std::memory_order_release);
-}
-
-void ClipScheduler::stop() {
-    mRunning.store(false, std::memory_order_release);
-}
+void ClipScheduler::start(){mRunning.store(true);} void ClipScheduler::stop(){mRunning.store(false);}

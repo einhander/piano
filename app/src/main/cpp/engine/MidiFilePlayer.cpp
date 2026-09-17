@@ -16,40 +16,40 @@
 // Monotonic counters: w >= r always holds, so (w - r) is the correct occupied count.
 // No masking needed for the full-check — masking is only for array indexing.
 
-static bool cmdQueuePush(MidiFileCmd* buffer, std::atomic<uint32_t>* writePos,
+static bool cmdQueuePush(MidiFileCmd* buffer, std::atomic<uint32_t>* sequence, std::atomic<uint32_t>* writePos,
                          std::atomic<uint32_t>* readPos, std::atomic<int32_t>* dropped,
                          const MidiFileCmd& cmd) {
     while (true) {
         uint32_t w = writePos->load(std::memory_order_relaxed);
-        uint32_t r = readPos->load(std::memory_order_acquire);
-        // Monotonic subtraction: no wrap-around false-drops
-        if (w - r >= static_cast<uint32_t>(MidiFilePlayer::kCmdQueueCapacity)) {
-            dropped->fetch_add(1, std::memory_order_relaxed);
-            return false; // drop on overflow
-        }
+        auto& seq = sequence[w & (MidiFilePlayer::kCmdQueueCapacity - 1)];
+        int32_t dif = static_cast<int32_t>(seq.load(std::memory_order_acquire) - w);
+        if (dif < 0) { dropped->fetch_add(1, std::memory_order_relaxed); return false; }
+        if (dif != 0) continue;
         // M3: write the data BEFORE the release store (the CAS) so the data
         // write is happens-before the publish. On weakly-ordered CPUs (ARM),
         // the audio consumer (acquire-load of writePos) might otherwise see the
         // new position but read stale command data. Same fix as MidiQueue.cpp /
         // SynthCmdQueue.cpp. If the CAS fails (another producer claimed the slot
         // first), that producer overwrites our write — our push failed, so fine.
-        buffer[w & (MidiFilePlayer::kCmdQueueCapacity - 1)] = cmd;
         uint32_t expected = w;
         if (!writePos->compare_exchange_weak(expected, w + 1,
-                std::memory_order_release, std::memory_order_relaxed)) {
+                std::memory_order_relaxed, std::memory_order_relaxed)) {
             continue;
         }
+        buffer[w & (MidiFilePlayer::kCmdQueueCapacity - 1)] = cmd;
+        seq.store(w + 1, std::memory_order_release);
         return true;
     }
 }
 
-static bool cmdQueuePop(MidiFileCmd* buffer, std::atomic<uint32_t>* writePos,
+static bool cmdQueuePop(MidiFileCmd* buffer, std::atomic<uint32_t>* sequence, std::atomic<uint32_t>* writePos,
                         std::atomic<uint32_t>* readPos, MidiFileCmd& out) {
-    uint32_t w = writePos->load(std::memory_order_acquire);
     uint32_t r = readPos->load(std::memory_order_relaxed);
-    if (r >= w) return false;
+    auto& seq = sequence[r & (MidiFilePlayer::kCmdQueueCapacity - 1)];
+    if (static_cast<int32_t>(seq.load(std::memory_order_acquire) - (r + 1)) != 0) return false;
     out = buffer[r & (MidiFilePlayer::kCmdQueueCapacity - 1)];
     readPos->store(r + 1, std::memory_order_release);
+    seq.store(r + MidiFilePlayer::kCmdQueueCapacity, std::memory_order_release);
     return true;
 }
 
@@ -57,6 +57,7 @@ MidiFilePlayer::MidiFilePlayer() {
     // mSlots: in-class initializers cover all fields. The events[]/activeNotes[]
     // arrays are only read after the LOAD/START/FREE handlers have written them.
     std::memset(mCmdBuffer, 0, sizeof(mCmdBuffer));
+    for (uint32_t i = 0; i < kCmdQueueCapacity; ++i) mCmdSequence[i].store(i, std::memory_order_relaxed);
 }
 
 MidiFilePlayer::~MidiFilePlayer() = default;
@@ -280,7 +281,7 @@ int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop,
         std::memset(&freeCmd, 0, sizeof(freeCmd));
         freeCmd.type = MidiFileCmdType::FREE;
         freeCmd.slot = slot;
-        cmdQueuePush(mCmdBuffer, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, freeCmd);
+        cmdQueuePush(mCmdBuffer, mCmdSequence, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, freeCmd);
 
         // Wait for the audio thread to consume the FREE (bounded spin)
         if (!waitForFree(slot, 50)) {
@@ -351,7 +352,7 @@ int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop,
         std::memset(&freeCmd, 0, sizeof(freeCmd));
         freeCmd.type = MidiFileCmdType::FREE;
         freeCmd.slot = slot;
-        cmdQueuePush(mCmdBuffer, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, freeCmd);
+        cmdQueuePush(mCmdBuffer, mCmdSequence, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, freeCmd);
         if (!waitForFree(slot, 50)) {
             return -4;
         }
@@ -398,7 +399,7 @@ int MidiFilePlayer::load(int slot, const char* filePath, float bpm, bool loop,
     s->lengthTicks = lengthTicks;
     s->ppq = ppq;
 
-    if (!cmdQueuePush(mCmdBuffer, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd)) {
+    if (!cmdQueuePush(mCmdBuffer, mCmdSequence, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd)) {
         s->events.clear();
         std::vector<MidiFileEvent>().swap(s->events);
         s->eventCount = 0;
@@ -418,7 +419,7 @@ void MidiFilePlayer::process(int frameCount, int sampleRate, int64_t framePos, M
 
     // Drain commands from the queue (worker thread pushes, audio thread consumes)
     MidiFileCmd cmd;
-    while (cmdQueuePop(mCmdBuffer, &mCmdWritePos, &mCmdReadPos, cmd)) {
+    while (cmdQueuePop(mCmdBuffer, mCmdSequence, &mCmdWritePos, &mCmdReadPos, cmd)) {
         switch (cmd.type) {
             case MidiFileCmdType::LOAD: {
                 if (cmd.slot < 0 || cmd.slot >= kMaxSlots) continue;
@@ -664,7 +665,7 @@ void MidiFilePlayer::start(int slot) {
     std::memset(&cmd, 0, sizeof(cmd));
     cmd.type = MidiFileCmdType::START;
     cmd.slot = slot;
-    cmdQueuePush(mCmdBuffer, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd);
+    cmdQueuePush(mCmdBuffer, mCmdSequence, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd);
 }
 
 void MidiFilePlayer::stop(int slot) {
@@ -674,7 +675,7 @@ void MidiFilePlayer::stop(int slot) {
     std::memset(&cmd, 0, sizeof(cmd));
     cmd.type = MidiFileCmdType::STOP;
     cmd.slot = slot;
-    cmdQueuePush(mCmdBuffer, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd);
+    cmdQueuePush(mCmdBuffer, mCmdSequence, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd);
 }
 
 void MidiFilePlayer::setLoop(int slot, bool loop) {
@@ -684,7 +685,7 @@ void MidiFilePlayer::setLoop(int slot, bool loop) {
     cmd.type = MidiFileCmdType::SET_LOOP;
     cmd.slot = slot;
     cmd.loop = loop;
-    cmdQueuePush(mCmdBuffer, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd);
+    cmdQueuePush(mCmdBuffer, mCmdSequence, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd);
 }
 
 void MidiFilePlayer::setTempo(int slot, float bpm) {
@@ -694,7 +695,7 @@ void MidiFilePlayer::setTempo(int slot, float bpm) {
     cmd.type = MidiFileCmdType::SET_TEMPO;
     cmd.slot = slot;
     cmd.bpm = bpm;
-    cmdQueuePush(mCmdBuffer, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd);
+    cmdQueuePush(mCmdBuffer, mCmdSequence, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd);
 }
 
 void MidiFilePlayer::freeSlot(int slot) {
@@ -703,7 +704,7 @@ void MidiFilePlayer::freeSlot(int slot) {
     std::memset(&cmd, 0, sizeof(cmd));
     cmd.type = MidiFileCmdType::FREE;
     cmd.slot = slot;
-    cmdQueuePush(mCmdBuffer, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd);
+    cmdQueuePush(mCmdBuffer, mCmdSequence, &mCmdWritePos, &mCmdReadPos, &mCmdDroppedCount, cmd);
 }
 
 bool MidiFilePlayer::isSlotPlaying(int slot) const {

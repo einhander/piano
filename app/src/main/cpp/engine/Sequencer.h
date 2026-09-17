@@ -2,12 +2,14 @@
 
 #include "model/TransportState.h"
 #include "realtime/MidiQueue.h"
+#include "TimedMidiEvent.h"
 #include <cstdint>
 #include <atomic>
 
 // Represents a scheduled MIDI event from a clip
 struct ScheduledEvent {
-    std::atomic<int64_t> framePosition{-1};  // -1 = empty, >=0 = scheduled frame
+    // -1 = free, -2 = producer owns slot, >=0 = published scheduled frame.
+    std::atomic<int64_t> framePosition{-1};
     uint8_t status = 0;
     uint8_t data1 = 0;
     uint8_t data2 = 0;
@@ -31,6 +33,12 @@ public:
     // Returns true if any events were processed
     bool processFrame();
 
+    // Collect events in [beginFrame,endFrame). Late events clamp to beginFrame;
+    // events at endFrame remain queued. Returns number collected; uncollected
+    // due events remain queued when capacity is insufficient.
+    int32_t collectDueEvents(int64_t beginFrame, int64_t endFrame,
+                             TimedMidiEvent* output, int32_t capacity);
+
     // Start/stop scheduling
     void start();
     void stop();
@@ -48,4 +56,6 @@ private:
     static constexpr int32_t kMaxScheduledEvents = 256;
     ScheduledEvent mEvents[kMaxScheduledEvents];
     std::atomic<int32_t> mEventCount{0};
+    std::atomic<uint32_t> mNextOrder{0};
+    uint32_t mOrder[kMaxScheduledEvents]{};
 };

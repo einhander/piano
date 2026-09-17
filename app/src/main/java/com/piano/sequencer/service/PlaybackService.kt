@@ -16,16 +16,23 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.widget.Toast
+import java.util.concurrent.Executors
 import com.piano.sequencer.AppLogger
 import com.piano.sequencer.MainActivity
 import com.piano.sequencer.NativeEngineBridge
 
 class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
+    @Volatile private var recordingCache = false
+    @Volatile private var recordingCacheReady = false
 
     private val binder = PlaybackBinder()
     private var audioFocusRequest: AudioFocusRequest? = null
     private var audioManager: AudioManager? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val audioWorker = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "AudioFocusWorker").apply { isDaemon = true }
+    }
+    @Volatile private var resumeAfterFocus = false
 
     inner class PlaybackBinder : Binder() {
         fun getService(): PlaybackService = this@PlaybackService
@@ -118,6 +125,10 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     override fun onCreate() {
         super.onCreate()
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioWorker.execute {
+            recordingCache = NativeEngineBridge.nativeIsRecording()
+            recordingCacheReady = true
+        }
         requestAudioFocus()
         startForeground(NOTIFICATION_ID, buildNotification())
         // Part A: start the 1Hz [perf] logger (daemon; logs while audio plays).
@@ -132,6 +143,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         perfLoggerThread.interrupt()
         stopForeground(true)
         releaseAudioFocus()
+        audioWorker.shutdown()
         NativeEngineBridge.nativeStopAudio()
         super.onDestroy()
     }
@@ -346,9 +358,18 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun getChannelProgram(channel: Int): Int = NativeEngineBridge.nativeGetChannelProgram(channel)
 
     // Recording control
-    fun startRecording() = NativeEngineBridge.nativeStartRecording()
-    fun stopRecording() = NativeEngineBridge.nativeStopRecording()
-    fun isRecording(): Boolean = NativeEngineBridge.nativeIsRecording()
+    fun startRecording() { NativeEngineBridge.nativeStartRecording(); recordingCache = true }
+    fun stopRecording() { NativeEngineBridge.nativeStopRecording(); recordingCache = false }
+    fun isRecording(): Boolean = recordingCache
+    fun recordingSnapshot(): Boolean = recordingCache
+    fun recordingAllowsTriggers(): Boolean = recordingCacheReady && !recordingCache
+    fun refreshRecordingCache() {
+        recordingCacheReady = false
+        audioWorker.execute {
+            recordingCache = NativeEngineBridge.nativeIsRecording()
+            recordingCacheReady = true
+        }
+    }
     fun setRecordArmed(trackId: Int, armed: Boolean) =
         NativeEngineBridge.nativeSetRecordArmed(trackId, armed)
     fun setOverdub(overdub: Boolean) = NativeEngineBridge.nativeSetOverdub(overdub)
@@ -445,7 +466,27 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     }
 
     override fun onAudioFocusChange(focusChange: Int) {
-        // Handle audio focus changes
+        audioWorker.execute {
+            when (focusChange) {
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                    if (NativeEngineBridge.nativeIsAudioPlaying()) {
+                        resumeAfterFocus = true
+                        NativeEngineBridge.nativeStopAudio()
+                    }
+                }
+                AudioManager.AUDIOFOCUS_LOSS -> {
+                    resumeAfterFocus = false
+                    NativeEngineBridge.nativeStopAudio()
+                }
+                AudioManager.AUDIOFOCUS_GAIN -> {
+                    if (resumeAfterFocus) {
+                        resumeAfterFocus = false
+                        NativeEngineBridge.nativeStartAudio()
+                    }
+                }
+            }
+        }
     }
 
     private fun buildNotification(): Notification {

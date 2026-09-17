@@ -193,6 +193,7 @@ private:
     MidiFileCmd mCmdBuffer[kCmdQueueCapacity];
     std::atomic<uint32_t> mCmdWritePos{0};
     std::atomic<uint32_t> mCmdReadPos{0};
+    std::atomic<uint32_t> mCmdSequence[kCmdQueueCapacity]{};
     std::atomic<int32_t> mCmdDroppedCount{0};
 
     // Parsed-file cache (worker-thread-only, std::mutex protected).

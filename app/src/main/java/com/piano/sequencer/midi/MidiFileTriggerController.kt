@@ -71,7 +71,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
 
     // ── Mutable state ──
 
-    /** trigger key (encoded: NOTE 0-127, CC 128-255, PITCH_BEND 256) → slot. */
+    /** trigger key (NOTE 0-127, CC 128-255, PB 256, PC 257-384) → slot. */
     private val triggerSlotMap = ConcurrentHashMap<Int, Int>()
     private val nextSlotIndex = AtomicInteger(0)
 
@@ -97,7 +97,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     private val pbPressDetector = ContinuousPressDetector(1)
 
     private var service: PlaybackService? = null
-    private var store: MidiFileMappingStore? = null
+        private var store: MidiFileMappingStore? = null
 
     // Test-play state (slot 15, generation counter, 3s auto-stop)
     @Volatile
@@ -126,6 +126,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     /** Called from each activity's onServiceConnected. */
     fun bind(activity: android.app.Activity, service: PlaybackService) {
         this.service = service
+        service.refreshRecordingCache()
         // Lazily resolve store from the singleton accessor
         this.store ?: run {
             this.store = MidiFileMappingStore.get(activity.applicationContext)
@@ -133,6 +134,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         // Preload files when cells are saved
         store?.onCellSaved = { cell -> if (cell.filePath.isNotEmpty()) preloadFile(cell.filePath) }
     }
+
 
     // ── MIDI callback delegation ──
 
@@ -146,9 +148,10 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         // file triggering is paused for the duration of the recording.
         // (Chord recording is tracked separately by ChordRecorder and does not
         // gate on service.isRecording(), but the trigger still must not fire.)
-        if (service?.isRecording() == true || ChordRecorder.isActive()) return false
+        if (service?.recordingAllowsTriggers() == false || ChordRecorder.isActive()) return false
         // Learn state active → capture
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+            logLearnNote(channel, note, velocity)
             MidiFileLearnState.captureNote(note)
             return true
         }
@@ -189,7 +192,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     fun onNoteOff(channel: Int, note: Int, velocity: Int): Boolean {
         // While recording, all notes must reach the engine (recorded + synthesized);
         // file triggering is paused for the duration of the recording.
-        if (service?.isRecording() == true || ChordRecorder.isActive()) return false
+        if (service?.recordingAllowsTriggers() == false || ChordRecorder.isActive()) return false
         noteStateMachine.noteOff(note)
         val s = store ?: return false
         val cell = s.findByNote(note) ?: return false // unmapped → caller forwards
@@ -212,9 +215,10 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      *    synth, even on repeat).
      */
     fun onControlChange(channel: Int, ccNumber: Int, value: Int): Boolean {
-        if (service?.isRecording() == true) return false
+        if (service?.recordingAllowsTriggers() == false) return false
         // Learn state active → capture (first event of any type wins)
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+            logLearnCc(channel, ccNumber, value)
             MidiFileLearnState.captureCC(ccNumber)
             return true
         }
@@ -243,9 +247,10 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      * consumed (learn capture or a mapped pitch-bend cell — including repeats).
      */
     fun onPitchBend(channel: Int, value: Int): Boolean {
-        if (service?.isRecording() == true) return false
+        if (service?.recordingAllowsTriggers() == false) return false
         // Learn state active → capture (first event of any type wins)
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+            logLearnPitchBend(channel, value)
             MidiFileLearnState.capturePitchBend()
             return true
         }
@@ -262,6 +267,40 @@ class MidiFileTriggerController private constructor(appContext: Context) {
             NoteToggleStateMachine.Result.IGNORED -> {} // unreachable via press(); keep exhaustive
         }
         return true
+    }
+
+    fun onProgramChange(channel: Int, program: Int): Boolean {
+        if (service?.recordingAllowsTriggers() == false) return false
+        if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+            logLearnProgramChange(channel, program)
+            MidiFileLearnState.captureProgramChange(program)
+            return true
+        }
+        if (program !in 0..127) return false
+        val cell = store?.findByProgramChange(program) ?: return false
+        val key = PROGRAM_CHANGE_KEY_BASE + program
+        when (noteStateMachine.press(key, cell.loop)) {
+            NoteToggleStateMachine.Result.TOGGLE_ON -> triggerSlot(cell)
+            NoteToggleStateMachine.Result.TOGGLE_OFF -> stopSlotForTrigger(key)
+            NoteToggleStateMachine.Result.IGNORED -> {}
+        }
+        return true
+    }
+
+    private fun logLearnNote(channel: Int, note: Int, velocity: Int) {
+        AppLogger.info("MIDI", "MIDI IN NOTE ch=${channel + 1} note=$note velocity=$velocity")
+    }
+
+    private fun logLearnCc(channel: Int, cc: Int, value: Int) {
+        AppLogger.info("MIDI", "MIDI IN CC ch=${channel + 1} cc=$cc value=$value")
+    }
+
+    private fun logLearnProgramChange(channel: Int, program: Int) {
+        AppLogger.info("MIDI", "MIDI IN PC ch=${channel + 1} program=$program")
+    }
+
+    private fun logLearnPitchBend(channel: Int, value: Int) {
+        AppLogger.info("MIDI", "MIDI IN PB ch=${channel + 1} value=$value")
     }
 
     // ── Trigger logic ──
@@ -601,7 +640,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         slotExecutor.execute {
             val svc = service ?: return@execute
             val slot = triggerSlotMap[key] ?: return@execute
-            val (triggerType, triggerData) = decodeTriggerKey(key)
+            val (triggerType, triggerData) = decodeTriggerKey(key) ?: return@execute
             val cell = store?.findByTrigger(triggerType, triggerData) ?: return@execute
             synchronized(slotLocks[slot]) {
                 // Live loop/tempo
@@ -654,10 +693,12 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         }
     }
 
-    private fun decodeTriggerKey(key: Int): Pair<String, Int> = when {
-        key in 0..127 -> TRIGGER_NOTE to key
-        key in 128..255 -> TRIGGER_CC to (key - 128)
-        else -> TRIGGER_PITCH_BEND to 0
+    private fun decodeTriggerKey(key: Int): Pair<String, Int>? = when {
+        key in NOTE_KEY_BASE..127 -> TRIGGER_NOTE to key
+        key in CC_KEY_BASE..255 -> TRIGGER_CC to (key - CC_KEY_BASE)
+        key == PITCH_BEND_KEY -> TRIGGER_PITCH_BEND to 0
+        key in PROGRAM_CHANGE_KEY_BASE..384 -> TRIGGER_PROGRAM_CHANGE to key - PROGRAM_CHANGE_KEY_BASE
+        else -> null
     }
 
     private fun reloadSlotLocked(

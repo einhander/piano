@@ -1,7 +1,6 @@
 package com.piano.sequencer.midi
 
 object MidiMessageParser {
-
     interface Handler {
         fun onNoteOn(channel: Int, note: Int, velocity: Int)
         fun onNoteOff(channel: Int, note: Int, velocity: Int)
@@ -11,100 +10,98 @@ object MidiMessageParser {
         fun onChannelPressure(channel: Int, value: Int)
     }
 
-    fun parse(data: ByteArray, offset: Int, length: Int, handler: Handler) {
-        val end = offset + length
-        var pos = offset
-        while (pos < end) {
-            val statusByte = data[pos].toInt() and 0xFF
-            val channel = statusByte and 0x0F
-            val messageType = statusByte and 0xF0
-            pos++
+    /** Stateful parser. One instance belongs to one MIDI input stream. */
+    class StreamParser {
+        private var runningStatus = -1
+        private var pendingStatus = -1
+        private val pending = ArrayList<Int>(2)
+        private var inSysex = false
 
-            when (messageType) {
-                0x90 -> { // Note On
-                    if (pos < end) {
-                        val data1 = data[pos].toInt() and 0xFF
-                        pos++
-                        if (pos < end) {
-                            val data2 = data[pos].toInt() and 0xFF
-                            pos++
-                            if (data2 > 0) {
-                                handler.onNoteOn(channel, data1, data2)
-                            } else {
-                                handler.onNoteOff(channel, data1, data2)
-                            }
-                        }
+        fun parse(data: ByteArray, offset: Int, length: Int, handler: Handler) {
+            val end = (offset + length).coerceAtMost(data.size)
+            var pos = offset.coerceAtLeast(0)
+            while (pos < end) {
+                val b = data[pos++].toInt() and 0xff
+                if (b >= 0xf8) continue // realtime never affects message state
+                if (inSysex) {
+                    if (b == 0xf7) inSysex = false
+                    continue
+                }
+                if (b >= 0x80) {
+                    if (b == 0xf0) {
+                        inSysex = true
+                        clearMessage(false)
+                    } else if (b >= 0xf1) {
+                        clearMessage(false)
+                        pos = skipSystemCommon(b, data, pos, end)
+                    } else {
+                        startChannelMessage(b)
                     }
+                    continue
                 }
-                0x80 -> { // Note Off
-                    if (pos < end) {
-                        val data1 = data[pos].toInt() and 0xFF
-                        pos++
-                        if (pos < end) {
-                            val data2 = data[pos].toInt() and 0xFF
-                            handler.onNoteOff(channel, data1, data2)
-                        }
-                    }
+                if (pendingStatus < 0) {
+                    if (runningStatus < 0) continue
+                    pendingStatus = runningStatus
                 }
-                0xB0 -> { // Control Change
-                    if (pos < end) {
-                        val data1 = data[pos].toInt() and 0xFF
-                        pos++
-                        if (pos < end) {
-                            val data2 = data[pos].toInt() and 0xFF
-                            handler.onControlChange(channel, data1, data2)
-                        }
-                    }
-                }
-                0xC0 -> { // Program Change
-                    if (pos < end) {
-                        val data1 = data[pos].toInt() and 0xFF
-                        handler.onProgramChange(channel, data1)
-                    }
-                }
-                0xA0 -> { // Polyphonic Aftertouch — note + pressure
-                    if (pos < end) {
-                        val data1 = data[pos].toInt() and 0xFF // note
-                        pos++
-                        if (pos < end) {
-                            val data2 = data[pos].toInt() and 0xFF // pressure
-                            handler.onChannelPressure(channel, data2)
-                        }
-                    }
-                }
-                0xE0 -> { // Pitch Bend
-                    if (pos < end) {
-                        val data1 = data[pos].toInt() and 0xFF
-                        pos++
-                        if (pos < end) {
-                            val data2 = data[pos].toInt() and 0xFF
-                            handler.onPitchBend(channel, (data2 shl 7) or data1)
-                        }
-                    }
-                }
-                0xD0 -> { // Channel Pressure
-                    if (pos < end) {
-                        val data1 = data[pos].toInt() and 0xFF
-                        handler.onChannelPressure(channel, data1)
-                    }
-                }
-                0xF0 -> { // SysEx start — skip until 0xF7
-                    while (pos < end) {
-                        val b = data[pos].toInt() and 0xFF
-                        pos++
-                        // Real-time bytes (0xF8-0xFF) can appear inside SysEx — ignore
-                        if (b >= 0xF8) continue
-                        if (b == 0xF7) break // End of SysEx
-                    }
-                }
-                0xF7 -> { // End of SysEx — already consumed above
-                }
-                in 0xF8..0xFF -> { // Real-time messages — ignore
-                }
-                else -> {
-                    // Unknown message, skip remaining data bytes for this status
+                pending.add(b)
+                if (pending.size == dataLength(pendingStatus)) {
+                    emit(pendingStatus, pending, handler)
+                    runningStatus = pendingStatus
+                    pendingStatus = -1
+                    pending.clear()
                 }
             }
         }
+
+        private fun startChannelMessage(status: Int) {
+            if (status in 0x80..0xef) {
+                runningStatus = status
+                pendingStatus = status
+                pending.clear()
+            } else {
+                clearMessage(false)
+            }
+        }
+
+        private fun clearMessage(keepRunning: Boolean) {
+            pendingStatus = -1
+            pending.clear()
+            if (!keepRunning) runningStatus = -1
+        }
+
+        private fun skipSystemCommon(status: Int, bytes: ByteArray, start: Int, end: Int): Int {
+            val count = when (status) { 0xf1, 0xf3 -> 1; 0xf2 -> 2; else -> 0 }
+            var pos = start
+            var left = count
+            while (pos < end && left > 0) {
+                val b = bytes[pos++].toInt() and 0xff
+                if (b >= 0x80) return pos - 1 // next status starts next message
+                left--
+            }
+            return pos
+        }
+
+        private fun dataLength(status: Int) = if ((status and 0xf0) == 0xc0 ||
+            (status and 0xf0) == 0xd0) 1 else 2
+
+        private fun emit(status: Int, values: List<Int>, handler: Handler) {
+            val channel = status and 0x0f
+            when (status and 0xf0) {
+                0x80 -> handler.onNoteOff(channel, values[0], values[1])
+                0x90 -> if (values[1] == 0) handler.onNoteOff(channel, values[0], 0)
+                         else handler.onNoteOn(channel, values[0], values[1])
+                // Handler has no per-note pressure callback; never relabel
+                // polyphonic aftertouch as channel pressure.
+                0xa0 -> Unit
+                0xb0 -> handler.onControlChange(channel, values[0], values[1])
+                0xc0 -> handler.onProgramChange(channel, values[0])
+                0xd0 -> handler.onChannelPressure(channel, values[0])
+                0xe0 -> handler.onPitchBend(channel, (values[1] shl 7) or values[0])
+            }
+        }
+    }
+
+    fun parse(data: ByteArray, offset: Int, length: Int, handler: Handler) {
+        StreamParser().parse(data, offset, length, handler)
     }
 }

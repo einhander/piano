@@ -42,6 +42,16 @@ class MidiMessageParserTest {
         return handler.events
     }
 
+    private fun streamParse(vararg chunks: IntArray): List<String> {
+        val handler = RecordingHandler()
+        val parser = MidiMessageParser.StreamParser()
+        chunks.forEach { chunk ->
+            val data = ByteArray(chunk.size) { chunk[it].toByte() }
+            parser.parse(data, 0, data.size, handler)
+        }
+        return handler.events
+    }
+
     @Test
     fun noteOn() {
         assertEquals(listOf("noteOn:0:60:100"), parse(0x90, 60, 100))
@@ -68,6 +78,23 @@ class MidiMessageParserTest {
     }
 
     @Test
+    fun programChangesAndFollowingMessagesAdvanceCorrectly() {
+        assertEquals(listOf("pc:2:10", "noteOn:2:60:100", "pc:2:11", "pc:2:12"),
+            parse(0xC2, 10, 0x92, 60, 100, 0xC2, 11, 0xC2, 12))
+    }
+
+    @Test
+    fun controlChangeFollowedByProgramChange() {
+        assertEquals(listOf("cc:1:7:64", "pc:1:9"), parse(0xB1, 7, 64, 0xC1, 9))
+    }
+
+    @Test
+    fun channelPressureFollowedByNote() {
+        assertEquals(listOf("chPress:4:77", "noteOn:4:60:90"),
+            parse(0xD4, 77, 0x94, 60, 90))
+    }
+
+    @Test
     fun pitchBendLowHigh() {
         // value = (hi shl 7) or lo
         assertEquals(listOf("pitch:0:16256"), parse(0xE0, 0x00, 0x7F)) // (0x7F shl 7) or 0
@@ -82,9 +109,8 @@ class MidiMessageParserTest {
     }
 
     @Test
-    fun polyphonicAftertouchMapsToChannelPressure() {
-        // 0xA0 note pressure: note=60 (ignored), pressure=90 -> onChannelPressure(90)
-        assertEquals(listOf("chPress:0:90"), parse(0xA0, 60, 90))
+    fun polyphonicAftertouchIsIgnoredWithoutPerNoteCallback() {
+        assertTrue(parse(0xA0, 60, 90).isEmpty())
     }
 
     @Test
@@ -101,6 +127,36 @@ class MidiMessageParserTest {
     fun realTimeBytesProduceNoEvents() {
         assertTrue(parse(0xF8).isEmpty())
         assertTrue(parse(0xFE).isEmpty())
+    }
+
+    @Test
+    fun realtimeBeforeAndBetweenMessagesIsIgnored() {
+        assertEquals(listOf("noteOn:0:60:100"), parse(0xF8, 0xFE, 0x90, 60, 100))
+        assertEquals(listOf("noteOn:0:60:100", "noteOff:0:60:0"),
+            parse(0x90, 60, 100, 0xF8, 0x80, 60, 0))
+    }
+
+    @Test
+    fun sysexAndSystemCommonMessagesDoNotSwallowFollowingNote() {
+        assertEquals(listOf("noteOn:0:60:100"), parse(0xF0, 1, 2, 0xF8, 3, 0xF7, 0x90, 60, 100))
+        assertEquals(listOf("noteOn:0:60:100"), parse(0xF1, 1, 0x90, 60, 100))
+        assertEquals(listOf("noteOn:0:60:100"), parse(0xF2, 1, 2, 0x90, 60, 100))
+        assertEquals(listOf("noteOn:0:60:100"), parse(0xF3, 1, 0x90, 60, 100))
+        assertEquals(listOf("noteOn:0:60:100"), parse(0xF6, 0x90, 60, 100))
+    }
+
+    @Test
+    fun runningStatusSupportsNoteAndControlChangeAcrossBuffers() {
+        assertEquals(listOf("noteOn:0:60:100", "noteOn:0:61:90"),
+            streamParse(intArrayOf(0x90, 60, 100), intArrayOf(61, 90)))
+        assertEquals(listOf("cc:0:7:64", "cc:0:10:32"),
+            streamParse(intArrayOf(0xB0, 7, 64), intArrayOf(0xF8, 10, 32)))
+    }
+
+    @Test
+    fun runningStatusCanSpanTruncatedMessageAndRealtime() {
+        assertEquals(listOf("noteOn:0:60:100"),
+            streamParse(intArrayOf(0x90, 60), intArrayOf(0xFE, 100)))
     }
 
     @Test
