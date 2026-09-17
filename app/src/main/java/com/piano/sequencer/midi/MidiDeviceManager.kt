@@ -53,7 +53,12 @@ class MidiDeviceManager(
     }
 
     fun listDevices(): List<MidiDeviceInfo> {
-        return midiManager.devices.filter { it.outputPortCount > 0 }.toList()
+        val devices = midiManager.devices.filter { it.outputPortCount > 0 }.toList()
+        AppLogger.info("MidiDeviceManager", "Eligible MIDI devices=${devices.size}")
+        devices.forEach { device ->
+            AppLogger.info("MidiDeviceManager", "Device id=${device.id} name=${deviceName(device)} outputPorts=${device.outputPortCount}")
+        }
+        return devices
     }
 
     fun deviceName(info: MidiDeviceInfo): String =
@@ -82,6 +87,7 @@ class MidiDeviceManager(
 
     fun connect(deviceInfo: MidiDeviceInfo) {
         if (closed) return
+        AppLogger.info("MidiDeviceManager", "Selected MIDI device id=${deviceInfo.id} name=${deviceName(deviceInfo)} outputPorts=${deviceInfo.outputPortCount}")
         midiHandler.post {
             val current = snapshot
             if (current.device != null && stableKey(current.device) == stableKey(deviceInfo)) return@post
@@ -114,11 +120,12 @@ class MidiDeviceManager(
     }
 
     private fun installOpenedDevice(gen: Long, deviceInfo: MidiDeviceInfo, device: MidiDevice) {
-                if (closed || gen != connectGeneration) {
-                    try { device.close() } catch (_: Exception) {}
-                    return
-                }
-                val port = try {
+        if (closed || gen != connectGeneration) {
+            try { device.close() } catch (_: Exception) {}
+            return
+        }
+        AppLogger.info("MidiDeviceManager", "Opening output port 0/${deviceInfo.outputPortCount} for device ${deviceInfo.id}")
+        val port = try {
                     device.openOutputPort(0)
                 } catch (e: Exception) {
                     AppLogger.warn("MidiDeviceManager", "openOutputPort failed: ${e.message}")

@@ -36,6 +36,7 @@ import com.piano.sequencer.midi.MidiFileTriggerController
 import com.piano.sequencer.midi.PitchBendChannelResolver
 import com.piano.sequencer.midi.MultiChannelResolver
 import com.piano.sequencer.midi.MidiIngressRouter
+import com.piano.sequencer.midi.MidiInputTrace
 import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.midi.noteToName
 import com.piano.sequencer.project.PseqArchive
@@ -363,6 +364,7 @@ class MainActivity : AppCompatActivity() {
         val targets = MultiChannelResolver.resolve(base, multiChannelMask, multiChannelEnabled)
         val service = playbackService
         if (service == null) {
+            AppLogger.warn("MIDI", "MIDI send unavailable: service not connected status=0x${statusBase.toString(16)} d1=$d1 d2=$d2")
             uiToast("Service not connected")
             return
         }
@@ -620,7 +622,14 @@ class MainActivity : AppCompatActivity() {
                 // Delegate to trigger controller — consumed while learning (first CC
                 // of the session is captured) or when a cell is mapped to this CC
                 // (press toggles the cell's file; repeats are consumed too).
-                if (MidiFileTriggerController.get(this@MainActivity).onControlChange(channel, controller, value)) return
+                val consumed = MidiFileTriggerController.get(this@MainActivity).onControlChange(channel, controller, value)
+                if (consumed) {
+                    AppLogger.info("MIDI", "CC ch=${channel + 1} controller=$controller value=$value outcome=consumed")
+                    return
+                }
+                MidiInputTrace.routine("cc-outcome-$channel-$controller", value.toString()) {
+                    "CC ch=${channel + 1} controller=$controller value=$value outcome=not-consumed/forwarded"
+                }
                 if (controller in 0..1) {
                     // Modulation / breath follow the keyboard's current channel
                     val base = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
@@ -630,14 +639,23 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             override fun onProgramChange(channel: Int, program: Int) {
-                if (MidiFileTriggerController.get(this@MainActivity).onProgramChange(channel, program)) return
+                val consumed = MidiFileTriggerController.get(this@MainActivity).onProgramChange(channel, program)
+                AppLogger.info("MIDI", "PROGRAM ch=${channel + 1} program=$program outcome=${if (consumed) "consumed" else "not-consumed/forwarded"}")
+                if (consumed) return
                 sendToTargets(0xC0, program, 0, intArrayOf(channel))
             }
             override fun onPitchBend(channel: Int, value: Int) {
                 // Delegate to trigger controller — consumed while learning (first
                 // pitch bend of the session is captured) or when a cell is mapped
                 // to pitch bend (press toggles the cell's file; repeats consumed).
-                if (MidiFileTriggerController.get(this@MainActivity).onPitchBend(channel, value)) return
+                val consumed = MidiFileTriggerController.get(this@MainActivity).onPitchBend(channel, value)
+                if (consumed) {
+                    AppLogger.info("MIDI", "PITCH BEND ch=${channel + 1} value=$value outcome=consumed")
+                    return
+                }
+                MidiInputTrace.routine("bend-outcome-$channel", value.toString()) {
+                    "PITCH BEND ch=${channel + 1} value=$value outcome=not-consumed/forwarded"
+                }
                 // Pitch bend follows the keyboard's current channel
                 val base = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
                 sendToTargets(0xE0, value and 0x7F, (value shr 7) and 0x7F, base)
