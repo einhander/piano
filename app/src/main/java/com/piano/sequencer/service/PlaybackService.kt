@@ -22,6 +22,8 @@ import com.piano.sequencer.MainActivity
 import com.piano.sequencer.NativeEngineBridge
 
 class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
+    @Volatile private var recordingCache = false
+    @Volatile private var recordingCacheReady = false
 
     private val binder = PlaybackBinder()
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -123,6 +125,10 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     override fun onCreate() {
         super.onCreate()
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioWorker.execute {
+            recordingCache = NativeEngineBridge.nativeIsRecording()
+            recordingCacheReady = true
+        }
         requestAudioFocus()
         startForeground(NOTIFICATION_ID, buildNotification())
         // Part A: start the 1Hz [perf] logger (daemon; logs while audio plays).
@@ -352,9 +358,18 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun getChannelProgram(channel: Int): Int = NativeEngineBridge.nativeGetChannelProgram(channel)
 
     // Recording control
-    fun startRecording() = NativeEngineBridge.nativeStartRecording()
-    fun stopRecording() = NativeEngineBridge.nativeStopRecording()
-    fun isRecording(): Boolean = NativeEngineBridge.nativeIsRecording()
+    fun startRecording() { NativeEngineBridge.nativeStartRecording(); recordingCache = true }
+    fun stopRecording() { NativeEngineBridge.nativeStopRecording(); recordingCache = false }
+    fun isRecording(): Boolean = recordingCache
+    fun recordingSnapshot(): Boolean = recordingCache
+    fun recordingAllowsTriggers(): Boolean = recordingCacheReady && !recordingCache
+    fun refreshRecordingCache() {
+        recordingCacheReady = false
+        audioWorker.execute {
+            recordingCache = NativeEngineBridge.nativeIsRecording()
+            recordingCacheReady = true
+        }
+    }
     fun setRecordArmed(trackId: Int, armed: Boolean) =
         NativeEngineBridge.nativeSetRecordArmed(trackId, armed)
     fun setOverdub(overdub: Boolean) = NativeEngineBridge.nativeSetOverdub(overdub)

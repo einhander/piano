@@ -97,7 +97,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     private val pbPressDetector = ContinuousPressDetector(1)
 
     private var service: PlaybackService? = null
-    private var store: MidiFileMappingStore? = null
+        private var store: MidiFileMappingStore? = null
 
     // Test-play state (slot 15, generation counter, 3s auto-stop)
     @Volatile
@@ -126,6 +126,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     /** Called from each activity's onServiceConnected. */
     fun bind(activity: android.app.Activity, service: PlaybackService) {
         this.service = service
+        service.refreshRecordingCache()
         // Lazily resolve store from the singleton accessor
         this.store ?: run {
             this.store = MidiFileMappingStore.get(activity.applicationContext)
@@ -133,6 +134,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         // Preload files when cells are saved
         store?.onCellSaved = { cell -> if (cell.filePath.isNotEmpty()) preloadFile(cell.filePath) }
     }
+
 
     // ── MIDI callback delegation ──
 
@@ -146,7 +148,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         // file triggering is paused for the duration of the recording.
         // (Chord recording is tracked separately by ChordRecorder and does not
         // gate on service.isRecording(), but the trigger still must not fire.)
-        if (service?.isRecording() == true || ChordRecorder.isActive()) return false
+        if (service?.recordingAllowsTriggers() == false || ChordRecorder.isActive()) return false
         // Learn state active → capture
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
             logLearnNote(channel, note, velocity)
@@ -190,7 +192,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     fun onNoteOff(channel: Int, note: Int, velocity: Int): Boolean {
         // While recording, all notes must reach the engine (recorded + synthesized);
         // file triggering is paused for the duration of the recording.
-        if (service?.isRecording() == true || ChordRecorder.isActive()) return false
+        if (service?.recordingAllowsTriggers() == false || ChordRecorder.isActive()) return false
         noteStateMachine.noteOff(note)
         val s = store ?: return false
         val cell = s.findByNote(note) ?: return false // unmapped → caller forwards
@@ -213,7 +215,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      *    synth, even on repeat).
      */
     fun onControlChange(channel: Int, ccNumber: Int, value: Int): Boolean {
-        if (service?.isRecording() == true) return false
+        if (service?.recordingAllowsTriggers() == false) return false
         // Learn state active → capture (first event of any type wins)
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
             logLearnCc(channel, ccNumber, value)
@@ -245,7 +247,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      * consumed (learn capture or a mapped pitch-bend cell — including repeats).
      */
     fun onPitchBend(channel: Int, value: Int): Boolean {
-        if (service?.isRecording() == true) return false
+        if (service?.recordingAllowsTriggers() == false) return false
         // Learn state active → capture (first event of any type wins)
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
             logLearnPitchBend(channel, value)
@@ -268,7 +270,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     }
 
     fun onProgramChange(channel: Int, program: Int): Boolean {
-        if (service?.isRecording() == true) return false
+        if (service?.recordingAllowsTriggers() == false) return false
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
             logLearnProgramChange(channel, program)
             MidiFileLearnState.captureProgramChange(program)

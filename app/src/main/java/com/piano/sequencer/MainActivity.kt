@@ -35,6 +35,7 @@ import com.piano.sequencer.midi.MidiInputReceiver
 import com.piano.sequencer.midi.MidiFileTriggerController
 import com.piano.sequencer.midi.PitchBendChannelResolver
 import com.piano.sequencer.midi.MultiChannelResolver
+import com.piano.sequencer.midi.MidiIngressRouter
 import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.midi.noteToName
 import com.piano.sequencer.project.PseqArchive
@@ -87,6 +88,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var midiManager: MidiDeviceManager
     private lateinit var midiInputReceiver: MidiInputReceiver
+    private lateinit var midiIngress: MidiIngressRouter
 
     // Channel of the last note played — pitch bend / mod / breath follow this
     // channel. -1 until the first note. MIDI input callbacks run on binder
@@ -450,30 +452,30 @@ class MainActivity : AppCompatActivity() {
         c4Button = Button(this).apply {
             text = "C4 (60)"
             setOnClickListener {
-                dispatchMidi { it.noteOn(0, 60, 100) }
+                midiIngress.noteOn(0, 60, 100)
             }
             setOnLongClickListener {
-                dispatchMidi { it.noteOff(0, 60) }
+                midiIngress.noteOff(0, 60, 0)
                 true
             }
         }
         d4Button = Button(this).apply {
             text = "D4 (62)"
             setOnClickListener {
-                dispatchMidi { it.noteOn(0, 62, 100) }
+                midiIngress.noteOn(0, 62, 100)
             }
             setOnLongClickListener {
-                dispatchMidi { it.noteOff(0, 62) }
+                midiIngress.noteOff(0, 62, 0)
                 true
             }
         }
         e4Button = Button(this).apply {
             text = "E4 (64)"
             setOnClickListener {
-                dispatchMidi { it.noteOn(0, 64, 100) }
+                midiIngress.noteOn(0, 64, 100)
             }
             setOnLongClickListener {
-                dispatchMidi { it.noteOff(0, 64) }
+                midiIngress.noteOff(0, 64, 0)
                 true
             }
         }
@@ -598,27 +600,21 @@ class MainActivity : AppCompatActivity() {
 
         // Setup MIDI receiver callback
         midiInputReceiver = MidiInputReceiver()
+        midiIngress = MidiIngressRouter(
+            MidiFileTriggerController.get(this)::onNoteOn,
+            MidiFileTriggerController.get(this)::onNoteOff,
+            { status, d1, d2, channel -> sendToTargets(status, d1, d2, intArrayOf(channel)) },
+            { channel, note, velocity ->
+                lastNoteChannel = channel
+                if (ChordRecorder.isActive()) ChordRecorder.onNoteOn(channel, note, velocity)
+            }
+        )
         midiInputReceiver.setCallback(object : MidiInputReceiver.Callback {
             override fun onNoteOn(channel: Int, note: Int, velocity: Int) {
-                // Keyboard is using this channel regardless of file triggering
-                lastNoteChannel = channel
-                // Chord recording window: collect the note into the chord
-                // (regardless of trigger mapping). The note still reaches the
-                // engine below so the user hears it while building the chord.
-                if (ChordRecorder.isActive()) {
-                    ChordRecorder.onNoteOn(channel, note, velocity)
-                }
-                // Delegate to trigger controller — consumed if mapped
-                if (MidiFileTriggerController.get(this@MainActivity).onNoteOn(channel, note, velocity)) return
-                // Unmapped note → forward to selected channels and keyboard channel
-                sendToTargets(0x90, note, velocity, intArrayOf(channel))
+                midiIngress.noteOn(channel, note, velocity)
             }
             override fun onNoteOff(channel: Int, note: Int, velocity: Int) {
-                // Delegate to trigger controller — consumed if mapped
-                if (!MidiFileTriggerController.get(this@MainActivity).onNoteOff(channel, note, velocity)) {
-                    // Unmapped note → forward to selected channels and keyboard channel
-                    sendToTargets(0x80, note, velocity, intArrayOf(channel))
-                }
+                midiIngress.noteOff(channel, note, velocity)
             }
             override fun onControlChange(channel: Int, controller: Int, value: Int) {
                 // Delegate to trigger controller — consumed while learning (first CC
