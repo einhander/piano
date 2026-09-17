@@ -14,7 +14,7 @@ void ClipScheduler::deactivateSlot(int32_t slot) {
 }
 int32_t ClipScheduler::collectDueEvents(int64_t begin, int64_t end, TimedMidiEvent* out, int32_t cap) {
     if (!mRunning.load() || !mTransport || !out || cap <= 0 || end <= begin) return 0;
-    double tpf = mTransport->ticksPerFrame; if (!(tpf > 0.0)) return 0;
+    double tpf = mTransport->tpf; if (!(tpf > 0.0)) return 0;
     int n = 0;
     for (int s=0; s<kMaxClips && n<cap; ++s) {
         ClipData* c=mClips[s].clip.load(); auto& r=mRuntime[s]; if (!c || c->lengthTicks<=0) continue;

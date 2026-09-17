@@ -42,6 +42,8 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     }
 
     mSampleRate = sampleRate;
+    mPublishedSampleRate.store(sampleRate, std::memory_order_release);
+    mRequestedSampleRate.store(sampleRate, std::memory_order_release);
     mBufferSize = bufferSize;
 
     bool ok = mSynth->init(sampleRate, bufferSize);
@@ -50,11 +52,16 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     }
 
     // Wire up transport + sequencer
-    mTransport.sampleRate = sampleRate;
-    mTransport.updateTicksPerFrame();
+    mTransport.initializeAudio(sampleRate);
+    mAppliedBpmMicros.store(mTransport.bpmMicros, std::memory_order_release);
+    mAppliedTpfFixed.store(static_cast<uint32_t>(mTransport.tpf * 1000000000.0 + 0.5),
+                           std::memory_order_release);
+    mAppliedTickMicros.store(0, std::memory_order_release);
+    mPublishedSampleRate.store(sampleRate, std::memory_order_release);
     mSequencer.init(&mTransport);
     mClipScheduler.init(&mTransport);
-    mLaunchQuantizer.init(&mTransport);
+    mSnapshotFrame.store(0, std::memory_order_relaxed);
+    mTransportSnapshotSeq.store(2, std::memory_order_release);
 
     // Initialize Mixer and MasterBus
     // M2: size to the larger of kMaxSynthFrames and the ACTUAL Oboe buffer
@@ -285,7 +292,7 @@ bool NativeEngine::getChannelProgram(int channel, int& bank, int& program) const
 }
 
 int NativeEngine::getSampleRate() const {
-    return mSampleRate;
+    return mPublishedSampleRate.load(std::memory_order_acquire);
 }
 
 int NativeEngine::getUnderrunCount() const {
@@ -391,11 +398,12 @@ int NativeEngine::setBufferSizeInFrames(int frames) {
 // creation in this FluidSynth version), so this must be called before the
 // first render; the engine is a process-level singleton initialized once with
 // the actual rate (see MainActivity).
-void NativeEngine::updateSampleRate(int sampleRate) {
-    if (sampleRate <= 0) return;
-    mSampleRate = sampleRate;
-    mTransport.sampleRate = sampleRate;
-    mTransport.updateTicksPerFrame();
+bool NativeEngine::updateSampleRate(int sampleRate) {
+    if (sampleRate <= 0) return false;
+    mRequestedSampleRate.store(sampleRate, std::memory_order_release);
+    if (!mTransportCmdQueue.push({TransportCmdType::SetSampleRate, 0, sampleRate})) return false;
+    mPublishedSampleRate.store(sampleRate, std::memory_order_release);
+    return true;
 }
 
 // M5: handle a mid-session sample-rate change (worker thread). Called after
@@ -413,15 +421,17 @@ void NativeEngine::updateSampleRate(int sampleRate) {
 void NativeEngine::handleSampleRateChange(int newRate) {
     if (newRate <= 0) return;
     if (!mInitialized.load()) return;   // init path handles the first rate
-    if (newRate == mSampleRate) return;  // no change
-    updateSampleRate(newRate);
+    if (newRate == mPublishedSampleRate.load(std::memory_order_acquire)) return;  // no change
+    mPendingSynthReprepareRate.store(newRate, std::memory_order_release);
+    (void)updateSampleRate(newRate);
     if (mSynth) {
         // Reload ALL currently-loaded SF2s into the new synth (multi-SF2).
         std::vector<std::string> sfPaths;
         for (const auto& sf : mSynth->getLoadedSoundFonts()) {
             sfPaths.push_back(sf.path);
         }
-        mSynth->reprepareAtNewRate(newRate, sfPaths);
+        const int32_t requested = mPendingSynthReprepareRate.exchange(0, std::memory_order_acq_rel);
+        if (requested > 0) mSynth->reprepareAtNewRate(requested, sfPaths);
     }
 }
 
@@ -448,6 +458,32 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     // capacity (numFrames > mMaxSynthFrames → silence tail, acceptable).
     int safeFrames = (numFrames > mMaxSynthFrames) ? mMaxSynthFrames : numFrames;
     int64_t framePos = mTransport.framePosition.load(std::memory_order_acquire);
+    const int32_t requestedRate = mRequestedSampleRate.load(std::memory_order_acquire);
+    if (requestedRate > 0 && requestedRate != mTransport.sampleRate)
+        (void)mTransportCmdQueue.push({TransportCmdType::SetSampleRate, 0, requestedRate});
+    TransportCmd transportCmd;
+    while (mTransportCmdQueue.pop(transportCmd)) {
+        if (transportCmd.type == TransportCmdType::SetTempo)
+            mTransport.applyTempo(transportCmd.bpmMicros, framePos);
+        else if (transportCmd.sampleRate > 0)
+        {
+            mTransport.applyRate(transportCmd.sampleRate, framePos);
+            mSampleRate = transportCmd.sampleRate;
+        }
+    }
+    // A producer may have published a newer rate while queue was being drained.
+    // Keep retrying latest request; transition cannot be lost to overflow.
+    const int32_t latestRate = mRequestedSampleRate.load(std::memory_order_acquire);
+    if (latestRate > 0 && latestRate != mTransport.sampleRate)
+        (void)mTransportCmdQueue.push({TransportCmdType::SetSampleRate, 0, latestRate});
+    mTransportSnapshotSeq.fetch_add(1, std::memory_order_release);
+    mSnapshotFrame.store(framePos, std::memory_order_relaxed);
+    mAppliedBpmMicros.store(mTransport.bpmMicros, std::memory_order_release);
+    constexpr double kTpfScale = 1000000000.0;
+    mAppliedTpfFixed.store(static_cast<uint32_t>(mTransport.tpf * kTpfScale + 0.5), std::memory_order_release);
+    mPublishedSampleRate.store(mTransport.sampleRate, std::memory_order_release);
+    mAppliedTickMicros.store(static_cast<int64_t>(mTransport.frameToTickAudio(framePos) * 1000000.0), std::memory_order_release);
+    mTransportSnapshotSeq.fetch_add(1, std::memory_order_release);
 
     // Process MIDI file player (real-time safe: pre-allocated slots, lock-free
     // queues). File events go to mMidiQueue (drained below, fed to the synth).
@@ -490,7 +526,7 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     // Advance recording tick (for MIDI file tick timestamps on recorded events)
     // M5: double accumulator on audio thread + atomic int64_t for MIDI thread to read
     if (mRecorder.isRecording()) {
-        double ticksPerFrame = (mTransport.bpm * mTransport.ppq) / (60.0 * mSampleRate);
+        double ticksPerFrame = mTransport.tpf;
         mRecordTickAccumulator += ticksPerFrame * numFrames;
         mRecordTick.store(static_cast<int64_t>(mRecordTickAccumulator),
                           std::memory_order_relaxed);
@@ -580,8 +616,9 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
 }
 
 void NativeEngine::setBPM(double bpm) {
-    mTransport.bpm = bpm;
-    mTransport.updateTicksPerFrame();
+    if (std::isfinite(bpm) && bpm > 0.0 && bpm <= 1000.0)
+        (void)mTransportCmdQueue.push({TransportCmdType::SetTempo,
+            static_cast<uint32_t>(bpm * 1000000.0 + 0.5), 0});
 }
 
 void NativeEngine::setTransportState(int state) {
@@ -589,7 +626,7 @@ void NativeEngine::setTransportState(int state) {
 }
 
 double NativeEngine::getCurrentTick() const {
-    return mTransport.currentTick();
+    return mAppliedTickMicros.load(std::memory_order_acquire) / 1000000.0;
 }
 
 int64_t NativeEngine::getFramePosition() const {
@@ -597,7 +634,7 @@ int64_t NativeEngine::getFramePosition() const {
 }
 
 double NativeEngine::getBPM() const {
-    return mTransport.bpm;
+    return mAppliedBpmMicros.load(std::memory_order_acquire) / 1000000.0;
 }
 
 int32_t NativeEngine::getPpq() const {
@@ -638,8 +675,16 @@ void NativeEngine::acknowledgeLaunch() {
 }
 
 int64_t NativeEngine::scheduleLaunch(int32_t sceneId, int32_t grid, int64_t currentFrame) {
+    uint32_t seq;
+    TransportSnapshot snapshot;
+    do {
+        seq = mTransportSnapshotSeq.load(std::memory_order_acquire);
+        snapshot = {mAppliedTickMicros.load(std::memory_order_relaxed) / 1000000.0,
+            mAppliedTpfFixed.load(std::memory_order_relaxed) / 1000000000.0,
+            mSnapshotFrame.load(std::memory_order_relaxed), 960, 4};
+    } while ((seq & 1u) || seq != mTransportSnapshotSeq.load(std::memory_order_acquire));
     (void)sceneId; // sceneId is used by queueSceneLaunch, not quantizer
-    return mLaunchQuantizer.scheduleLaunch(static_cast<QuantizationGrid>(grid), currentFrame);
+    return mLaunchQuantizer.scheduleLaunch(static_cast<QuantizationGrid>(grid), currentFrame, snapshot);
 }
 
 // Scene navigation
@@ -934,7 +979,9 @@ int64_t NativeEngine::startCountIn(int beats) {
     mCountInClickIndex = 0;
 
     // Each beat = 60/bpm seconds = 60/bpm * sampleRate frames
-    double framesPerBeat = (60.0 / mTransport.bpm) * mTransport.sampleRate;
+    const double rate = mPublishedSampleRate.load(std::memory_order_acquire);
+    const double bpmMicros = mAppliedBpmMicros.load(std::memory_order_acquire);
+    double framesPerBeat = (60000000.0 / bpmMicros) * rate;
     mCountInEndFrame = mCountInStartFrame + static_cast<int64_t>(framesPerBeat * beats);
 
     return mCountInEndFrame;
@@ -953,11 +1000,12 @@ int64_t NativeEngine::getCountInEndFrame() const {
 void NativeEngine::playCountInClick(int64_t frame) {
     // Generate a short click: ~50ms sine burst at 800Hz
     // Render into synth buffer at the appropriate position
-    int clickFrames = static_cast<int>(0.05 * mTransport.sampleRate);
+    const double rate = mPublishedSampleRate.load(std::memory_order_acquire);
+    int clickFrames = static_cast<int>(0.05 * rate);
     if (clickFrames > kMaxSynthFrames) clickFrames = kMaxSynthFrames;
 
     for (int i = 0; i < clickFrames; i++) {
-        double t = static_cast<double>(i) / mTransport.sampleRate;
+        double t = static_cast<double>(i) / rate;
         float sample = static_cast<float>(sin(2.0 * M_PI * 800.0 * t) * exp(-t * 40.0));
         mSynthBuffer[i * 2] = sample;
         mSynthBuffer[i * 2 + 1] = sample;
@@ -969,7 +1017,9 @@ bool NativeEngine::shouldPlayCountInClick(int64_t frame) const {
     if (frame < mCountInStartFrame) return false;
 
     int64_t elapsed = frame - mCountInStartFrame;
-    double framesPerBeat = (60.0 / mTransport.bpm) * mTransport.sampleRate;
+    const double rate = mPublishedSampleRate.load(std::memory_order_acquire);
+    const double bpmMicros = mAppliedBpmMicros.load(std::memory_order_acquire);
+    double framesPerBeat = (60000000.0 / bpmMicros) * rate;
 
     int currentBeat = static_cast<int>(elapsed / framesPerBeat);
     if (currentBeat >= mCountInBeats) return false;

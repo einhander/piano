@@ -11,6 +11,7 @@
 #include <oboe/Oboe.h>
 #include "realtime/MidiQueue.h"
 #include "model/TransportState.h"
+#include "realtime/TransportCmdQueue.h"
 #include "engine/ClipSlotState.h"
 #include "engine/Sequencer.h"
 #include "engine/SceneManager.h"
@@ -251,7 +252,7 @@ public:
     // this FluidSynth version), so this must be called before the first
     // render; the engine is a process-level singleton initialized once with
     // the actual rate.
-    void updateSampleRate(int sampleRate);
+    bool updateSampleRate(int sampleRate);
 
     // M5: handle a mid-session sample-rate change (worker thread). Called
     // after the Oboe stream is (re)opened at a different rate than the engine
@@ -300,12 +301,21 @@ private:
     // lock-free mLiveMidiQueue (recording only). The audio callback never
     // touches a mutex/condvar (Fix #2: the old notify_one in processMidiQueue
     // is removed; the synth feeding moved into the audio callback).
-    int mSampleRate = 48000;
+    int mSampleRate = 48000; // audio-thread owned after initialization
     int mBufferSize = 512;
     std::atomic<bool> mInitialized{false};
+    std::atomic<uint32_t> mAppliedBpmMicros{120000000};
+    std::atomic<int64_t> mAppliedTickMicros{0};
+    std::atomic<uint32_t> mAppliedTpfFixed{0};
+    std::atomic<int32_t> mPublishedSampleRate{48000};
+    std::atomic<int32_t> mRequestedSampleRate{48000};
+    std::atomic<int32_t> mPendingSynthReprepareRate{0};
+    std::atomic<uint32_t> mTransportSnapshotSeq{0};
+    std::atomic<int64_t> mSnapshotFrame{0};
 
     // Transport + Sequencer (Phase 5)
     TransportState mTransport;
+    TransportCmdQueue mTransportCmdQueue;
     Sequencer mSequencer;
     static constexpr int32_t kSequencerStagingCapacity = 512;
     TimedMidiEvent mSequencerStaging[kSequencerStagingCapacity];

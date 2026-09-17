@@ -36,6 +36,7 @@ add_library(native-lib SHARED
     synth/FluidSynthEngine.cpp
     realtime/MidiQueue.cpp
     realtime/SynthCmdQueue.cpp
+    realtime/TransportCmdQueue.cpp
     engine/MidiRouter.cpp
     engine/MidiRecorder.cpp
     engine/Sequencer.cpp

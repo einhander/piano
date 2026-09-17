@@ -1,7 +1,7 @@
 #include "engine/ClipScheduler.h"
 #include <cassert>
 int main() {
-    TransportState t; t.ticksPerFrame=1.0; ClipScheduler s; s.init(&t); ClipData c{}; c.startTick=0; c.lengthTicks=8; c.eventCount=1; c.events[0]={2,0x90,60,100}; s.activateSlot(0,&c); s.start();
+    TransportState t; t.tpf=1.0; ClipScheduler s; s.init(&t); ClipData c{}; c.startTick=0; c.lengthTicks=8; c.eventCount=1; c.events[0]={2,0x90,60,100}; s.activateSlot(0,&c); s.start();
     TimedMidiEvent e[3]; assert(s.collectDueEvents(0,4,e,2)==1); assert(e[0].targetFrame==2 && e[0].sourceSlot==1 && e[0].message.timestamp!=0);
     assert(e[0].phase == TimedMidiEvent::Scheduled);
     ClipData late{}; late.lengthTicks=8; late.eventCount=2; late.events[0]={1,0x90,61,100}; late.events[1]={3,0x90,62,100};
@@ -22,7 +22,7 @@ int main() {
     ClipData zero{}; zero.lengthTicks=0; zero.eventCount=1; zero.events[0]={0,0x90,1,1};
     ClipScheduler zeroScheduler; zeroScheduler.init(&t); zeroScheduler.activateSlot(0,&zero); zeroScheduler.start();
     assert(zeroScheduler.collectDueEvents(0,8,e,2)==0);
-    TransportState ceilTransport; ceilTransport.ticksPerFrame=0.6; ClipData fractional{}; fractional.lengthTicks=8; fractional.eventCount=1; fractional.events[0]={1,0x90,2,3};
+    TransportState ceilTransport; ceilTransport.tpf=0.6; ClipData fractional{}; fractional.lengthTicks=8; fractional.eventCount=1; fractional.events[0]={1,0x90,2,3};
     ClipScheduler ceilScheduler; ceilScheduler.init(&ceilTransport); ceilScheduler.activateSlot(0,&fractional); ceilScheduler.start();
     assert(ceilScheduler.collectDueEvents(0,3,e,2)==1 && e[0].targetFrame==2);
     ClipData atEnd{}; atEnd.lengthTicks=8; atEnd.eventCount=1; atEnd.events[0]={2,0x90,3,4};
