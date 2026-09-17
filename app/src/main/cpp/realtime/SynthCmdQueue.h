@@ -88,5 +88,6 @@ private:
     int32_t mCapacity = 0;
     std::atomic<uint32_t> mWritePos{0};
     std::atomic<uint32_t> mReadPos{0};
+    std::atomic<uint32_t>* mSequence = nullptr;
     std::atomic<int32_t> mDroppedCount{0};
 };

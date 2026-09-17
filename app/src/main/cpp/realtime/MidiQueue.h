@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <cstring>
 
-// Lock-free SPSC MIDI message queue
-// Single producer (MIDI input thread), single consumer (audio callback)
+// Lock-free MPSC MIDI message queue
+// Multiple producers, single consumer (audio callback)
 struct MidiMessage {
     uint8_t status;
     uint8_t data1;
@@ -52,5 +52,6 @@ private:
     int32_t mCapacity = 0;
     std::atomic<uint32_t> mWritePos{0};
     std::atomic<uint32_t> mReadPos{0};
+    std::atomic<uint32_t>* mSequence = nullptr;
     std::atomic<int32_t> mDroppedCount{0};
 };
