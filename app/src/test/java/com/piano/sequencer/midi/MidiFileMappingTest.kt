@@ -758,6 +758,19 @@ class MidiFileMappingTest {
     }
 
     @Test
+    fun concurrentLearnCapturesInvokeOnlyOneCallback() {
+        MidiFileLearnState.cancel()
+        val callbacks = java.util.concurrent.atomic.AtomicInteger()
+        MidiFileLearnState.startLearning { callbacks.incrementAndGet() }
+        val executor = Executors.newFixedThreadPool(8)
+        repeat(100) { i -> executor.submit { MidiFileLearnState.captureNote(i and 127) } }
+        executor.shutdown()
+        assertTrue(executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS))
+        assertEquals(1, callbacks.get())
+        assertEquals(MidiFileLearnState.State.IDLE, MidiFileLearnState.getState())
+    }
+
+    @Test
     fun cancelResetsToIdle() {
         MidiFileLearnState.cancel()
         MidiFileLearnState.startLearning { }

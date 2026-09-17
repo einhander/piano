@@ -90,7 +90,9 @@ object MidiMessageParser {
                 0x80 -> handler.onNoteOff(channel, values[0], values[1])
                 0x90 -> if (values[1] == 0) handler.onNoteOff(channel, values[0], 0)
                          else handler.onNoteOn(channel, values[0], values[1])
-                0xa0 -> handler.onChannelPressure(channel, values[1])
+                // Handler has no per-note pressure callback; never relabel
+                // polyphonic aftertouch as channel pressure.
+                0xa0 -> Unit
                 0xb0 -> handler.onControlChange(channel, values[0], values[1])
                 0xc0 -> handler.onProgramChange(channel, values[0])
                 0xd0 -> handler.onChannelPressure(channel, values[0])

@@ -109,9 +109,8 @@ class MidiMessageParserTest {
     }
 
     @Test
-    fun polyphonicAftertouchMapsToChannelPressure() {
-        // 0xA0 note pressure: note=60 (ignored), pressure=90 -> onChannelPressure(90)
-        assertEquals(listOf("chPress:0:90"), parse(0xA0, 60, 90))
+    fun polyphonicAftertouchIsIgnoredWithoutPerNoteCallback() {
+        assertTrue(parse(0xA0, 60, 90).isEmpty())
     }
 
     @Test

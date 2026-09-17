@@ -16,6 +16,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.widget.Toast
+import java.util.concurrent.Executors
 import com.piano.sequencer.AppLogger
 import com.piano.sequencer.MainActivity
 import com.piano.sequencer.NativeEngineBridge
@@ -26,6 +27,10 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     private var audioFocusRequest: AudioFocusRequest? = null
     private var audioManager: AudioManager? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val audioWorker = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "AudioFocusWorker").apply { isDaemon = true }
+    }
+    @Volatile private var resumeAfterFocus = false
 
     inner class PlaybackBinder : Binder() {
         fun getService(): PlaybackService = this@PlaybackService
@@ -132,6 +137,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         perfLoggerThread.interrupt()
         stopForeground(true)
         releaseAudioFocus()
+        audioWorker.shutdown()
         NativeEngineBridge.nativeStopAudio()
         super.onDestroy()
     }
@@ -445,7 +451,27 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     }
 
     override fun onAudioFocusChange(focusChange: Int) {
-        // Handle audio focus changes
+        audioWorker.execute {
+            when (focusChange) {
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                    if (NativeEngineBridge.nativeIsAudioPlaying()) {
+                        resumeAfterFocus = true
+                        NativeEngineBridge.nativeStopAudio()
+                    }
+                }
+                AudioManager.AUDIOFOCUS_LOSS -> {
+                    resumeAfterFocus = false
+                    NativeEngineBridge.nativeStopAudio()
+                }
+                AudioManager.AUDIOFOCUS_GAIN -> {
+                    if (resumeAfterFocus) {
+                        resumeAfterFocus = false
+                        NativeEngineBridge.nativeStartAudio()
+                    }
+                }
+            }
+        }
     }
 
     private fun buildNotification(): Notification {

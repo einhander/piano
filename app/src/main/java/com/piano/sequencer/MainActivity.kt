@@ -49,8 +49,12 @@ import java.io.IOException
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.LinkedHashMap
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
+    private val midiWorker = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "MainMidiWorker").apply { isDaemon = true }
+    }
 
     private lateinit var layout: LinearLayout
     private lateinit var statusText: TextView
@@ -137,6 +141,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @Volatile
     private var playbackService: PlaybackService? = null
     private var serviceBound = false
 
@@ -343,14 +348,32 @@ class MainActivity : AppCompatActivity() {
         if (serviceBound && playbackService != null) {
             action(playbackService!!)
         } else {
-            Toast.makeText(this, "Service not connected", Toast.LENGTH_SHORT).show()
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    Toast.makeText(this, "Service not connected", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
     /** Sends one keyboard message to every target channel of multi-channel broadcast. */
     private fun sendToTargets(statusBase: Int, d1: Int, d2: Int, base: IntArray) {
         val targets = MultiChannelResolver.resolve(base, multiChannelMask, multiChannelEnabled)
-        withService { svc -> for (t in targets) svc.sendMidiMessage(statusBase or t, d1, d2) }
+        val service = playbackService
+        if (service == null) {
+            uiToast("Service not connected")
+            return
+        }
+        midiWorker.execute { for (t in targets) service.sendMidiMessage(statusBase or t, d1, d2) }
+    }
+
+    private fun dispatchMidi(action: (PlaybackService) -> Unit) {
+        val service = playbackService
+        if (service == null) {
+            uiToast("Service not connected")
+            return
+        }
+        midiWorker.execute { action(service) }
     }
 
     /** Toast on the main thread; no-op if the activity is finishing/destroyed. */
@@ -427,37 +450,37 @@ class MainActivity : AppCompatActivity() {
         c4Button = Button(this).apply {
             text = "C4 (60)"
             setOnClickListener {
-                withService { it.noteOn(0, 60, 100) }
+                dispatchMidi { it.noteOn(0, 60, 100) }
             }
             setOnLongClickListener {
-                withService { it.noteOff(0, 60) }
+                dispatchMidi { it.noteOff(0, 60) }
                 true
             }
         }
         d4Button = Button(this).apply {
             text = "D4 (62)"
             setOnClickListener {
-                withService { it.noteOn(0, 62, 100) }
+                dispatchMidi { it.noteOn(0, 62, 100) }
             }
             setOnLongClickListener {
-                withService { it.noteOff(0, 62) }
+                dispatchMidi { it.noteOff(0, 62) }
                 true
             }
         }
         e4Button = Button(this).apply {
             text = "E4 (64)"
             setOnClickListener {
-                withService { it.noteOn(0, 64, 100) }
+                dispatchMidi { it.noteOn(0, 64, 100) }
             }
             setOnLongClickListener {
-                withService { it.noteOff(0, 64) }
+                dispatchMidi { it.noteOff(0, 64) }
                 true
             }
         }
         panicButton = Button(this).apply {
             text = "PANIC"
             setOnClickListener {
-                withService { it.panic() }
+                dispatchMidi { it.panic() }
                 Toast.makeText(this@MainActivity, "Panic!", Toast.LENGTH_SHORT).show()
             }
         }
@@ -1376,6 +1399,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        midiWorker.shutdown()
         super.onDestroy()
         if (serviceBound) {
             unbindService(serviceConnection)

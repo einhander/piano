@@ -375,10 +375,12 @@ object MidiFileLearnState {
     fun getState(): State = _state
 
     fun startLearning(callback: (LearnedEvent) -> Unit) {
-        // m7: cancel any previous learn before starting new one
-        cancelLocked()
-        _state = State.LEARNING
-        _callback = callback
+        synchronized(this) {
+            // m7: cancel any previous learn before starting new one
+            cancelLocked()
+            _state = State.LEARNING
+            _callback = callback
+        }
     }
 
     fun captureNote(note: Int) = capture(LearnedEvent.Note(note))
@@ -389,15 +391,21 @@ object MidiFileLearnState {
     fun captureProgramChange(program: Int) = capture(LearnedEvent.ProgramChange(program))
 
     private fun capture(event: LearnedEvent) {
-        if (_state != State.LEARNING) return
-        _callback?.invoke(event)
-        _callback = null
-        _state = State.IDLE
+        val callback = synchronized(this) {
+            if (_state != State.LEARNING) return
+            val result = _callback
+            _callback = null
+            _state = State.IDLE
+            result
+        }
+        callback?.invoke(event)
     }
 
     fun cancel() {
-        _callback = null
-        _state = State.IDLE
+        synchronized(this) {
+            _callback = null
+            _state = State.IDLE
+        }
     }
 
     // Internal cancel without resetting state (used by startLearning)
