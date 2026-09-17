@@ -454,8 +454,8 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     // queues). File events go to mMidiQueue (drained below, fed to the synth).
     mMidiFilePlayer.process(numFrames, mSampleRate, framePos, &mMidiQueue);
 
-    // Process sequencer/clip scheduler events (→ mMidiQueue)
-    mSequencer.processFrame();
+    int32_t sequencerEventCount = mSequencer.collectDueEvents(
+        framePos, framePos + safeFrames, mSequencerStaging, kSequencerStagingCapacity);
     mClipScheduler.process();
 
     // Process queued scene launches
@@ -496,10 +496,22 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
             }
         }
 
-        // Render the synth DIRECTLY into the mixer's track-0 buffer (no extra
-        // full-buffer memcpy — Fix #9). The mixer reads track-0 in mix().
+        // Immediate queue first; sequencer events render at their frame offsets.
         float* track0 = mMixer.getTrackBuffer(0);
-        mSynth->render(track0, safeFrames);
+        int offset = 0;
+        for (int32_t i = 0; i < sequencerEventCount; ++i) {
+            int eventOffset = static_cast<int>(mSequencerStaging[i].targetFrame - framePos);
+            if (eventOffset < offset) eventOffset = offset;
+            if (eventOffset > safeFrames) eventOffset = safeFrames;
+            if (eventOffset > offset) {
+                mSynth->render(track0 + offset * 2, eventOffset - offset);
+            }
+            mSynth->processOneMidi(mSequencerStaging[i].message);
+            offset = eventOffset;
+        }
+        if (offset < safeFrames) {
+            mSynth->render(track0 + offset * 2, safeFrames - offset);
+        }
 
         mSynth->endSynthAccess();
     } else {

@@ -1,5 +1,6 @@
 #include "LaunchQuantizer.h"
 #include "model/TransportState.h"
+#include <cmath>
 
 LaunchQuantizer::LaunchQuantizer() = default;
 LaunchQuantizer::~LaunchQuantizer() = default;
@@ -28,8 +29,7 @@ int64_t LaunchQuantizer::scheduleLaunch(QuantizationGrid grid, int64_t currentFr
     }
 
     // Get current tick position
-    int64_t currentTickFrame = mTransport->framePosition.load(std::memory_order_acquire);
-    double currentTick = mTransport->frameToTick(currentTickFrame);
+    double currentTick = mTransport->frameToTick(currentFrame);
 
     int32_t ppq = mTransport->ppq;
     int16_t numerator = mTransport->numerator;
@@ -69,7 +69,9 @@ int64_t LaunchQuantizer::scheduleLaunch(QuantizationGrid grid, int64_t currentFr
     int64_t nextBoundaryTick = (static_cast<int64_t>(currentTick) / ticksPerUnit + 1) * ticksPerUnit;
 
     // Convert to frame position
-    int64_t targetFrame = mTransport->tickToFrame(static_cast<double>(nextBoundaryTick));
+    // Never fire before boundary: conversion must round up to next frame.
+    int64_t targetFrame = static_cast<int64_t>(
+        std::ceil(static_cast<double>(nextBoundaryTick) / mTransport->ticksPerFrame));
 
     // Ensure we don't schedule in the past
     if (targetFrame <= currentFrame) {

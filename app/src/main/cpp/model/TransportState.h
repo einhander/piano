@@ -25,7 +25,7 @@ struct TransportState {
     enum State { Stopped, Playing, Paused };
     std::atomic<State> state{State::Stopped};
 
-    // Ticks per frame — precomputed: ppq * sampleRate / (bpm * 60)
+    // Ticks per frame — precomputed: ppq * bpm / (sampleRate * 60)
     // Non-atomic: updated from UI thread (infrequent), read from audio thread.
     // On x86: aligned 8-byte read is atomic. On ARM: torn read is negligible risk
     // (one bad tick calculation is harmless — next frame corrects it).
@@ -33,7 +33,7 @@ struct TransportState {
 
     // Update ticksPerFrame when BPM changes (caller must ensure serialization)
     void updateTicksPerFrame() {
-        ticksPerFrame = (ppq * sampleRate) / (bpm * 60.0);
+        ticksPerFrame = (ppq * bpm) / (sampleRate * 60.0);
     }
 
     // Convert frame position to tick position
