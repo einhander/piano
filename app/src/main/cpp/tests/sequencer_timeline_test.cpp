@@ -3,7 +3,7 @@
 
 int main() {
     Sequencer sequencer;
-    DueSequencerEvent events[2];
+    TimedMidiEvent events[2];
     sequencer.scheduleEvent(5, 0x90, 9, 1);
     assert(sequencer.collectDueEvents(0, 10, events, 2) == 0);
     sequencer.start();

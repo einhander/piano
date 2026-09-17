@@ -58,7 +58,7 @@ void Sequencer::scheduleEvent(int64_t framePosition, uint8_t status, uint8_t dat
 }
 
 int32_t Sequencer::collectDueEvents(int64_t beginFrame, int64_t endFrame,
-                                    DueSequencerEvent* output, int32_t capacity) {
+                                    TimedMidiEvent* output, int32_t capacity) {
     if (!mRunning.load(std::memory_order_acquire)) return 0;
     if (!output || capacity <= 0 || endFrame <= beginFrame) return 0;
     int32_t count = 0;
@@ -70,6 +70,8 @@ int32_t Sequencer::collectDueEvents(int64_t beginFrame, int64_t endFrame,
                 expected, -2, std::memory_order_acq_rel, std::memory_order_relaxed)) continue;
         output[count].targetFrame = frame < beginFrame ? beginFrame : frame;
         output[count].order = mOrder[i];
+        output[count].sourceSlot = 0;
+        output[count].phase = TimedMidiEvent::Scheduled;
         output[count].message.status = mEvents[i].status;
         output[count].message.data1 = mEvents[i].data1;
         output[count].message.data2 = mEvents[i].data2;
@@ -81,7 +83,7 @@ int32_t Sequencer::collectDueEvents(int64_t beginFrame, int64_t endFrame,
     }
     // Stable bounded insertion sort by target frame, then producer order.
     for (int32_t i = 1; i < count; ++i) {
-        DueSequencerEvent item = output[i]; int32_t j = i;
+        TimedMidiEvent item = output[i]; int32_t j = i;
         while (j > 0 && (output[j-1].targetFrame > item.targetFrame ||
                (output[j-1].targetFrame == item.targetFrame && output[j-1].order > item.order))) {
             output[j] = output[j-1]; --j;

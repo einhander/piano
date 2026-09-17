@@ -53,8 +53,7 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     mTransport.sampleRate = sampleRate;
     mTransport.updateTicksPerFrame();
     mSequencer.init(&mTransport);
-    mSequencer.setMidiQueue(&mMidiQueue);
-    mClipScheduler.init(&mTransport, &mMidiQueue);
+    mClipScheduler.init(&mTransport);
     mLaunchQuantizer.init(&mTransport);
 
     // Initialize Mixer and MasterBus
@@ -454,9 +453,6 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     // queues). File events go to mMidiQueue (drained below, fed to the synth).
     mMidiFilePlayer.process(numFrames, mSampleRate, framePos, &mMidiQueue);
 
-    int32_t sequencerEventCount = mSequencer.collectDueEvents(
-        framePos, framePos + safeFrames, mSequencerStaging, kSequencerStagingCapacity);
-
     // Clip removal is control-thread intent; scheduler detachment and retired
     // acknowledgement happen only at callback boundary.
     for (int32_t i = 0; i < kMaxClips; ++i) {
@@ -474,7 +470,16 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
                 std::memory_order_relaxed);
         }
     }
-    mClipScheduler.process();
+    int32_t sequencerEventCount = mSequencer.collectDueEvents(
+        framePos, framePos + safeFrames, mSequencerStaging, kSequencerStagingCapacity);
+    sequencerEventCount += mClipScheduler.collectDueEvents(
+        framePos, framePos + safeFrames, mSequencerStaging + sequencerEventCount,
+        kSequencerStagingCapacity - sequencerEventCount);
+    for (int32_t i = 1; i < sequencerEventCount; ++i) {
+        TimedMidiEvent item = mSequencerStaging[i]; int32_t j = i;
+        while (j > 0 && timedMidiEventLess(item, mSequencerStaging[j - 1])) { mSequencerStaging[j] = mSequencerStaging[j - 1]; --j; }
+        mSequencerStaging[j] = item;
+    }
 
     // Process queued scene launches
     mSceneManager.processLaunchQueue(framePos);

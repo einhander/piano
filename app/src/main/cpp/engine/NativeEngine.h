@@ -307,8 +307,8 @@ private:
     // Transport + Sequencer (Phase 5)
     TransportState mTransport;
     Sequencer mSequencer;
-    static constexpr int32_t kSequencerStagingCapacity = 256;
-    DueSequencerEvent mSequencerStaging[kSequencerStagingCapacity];
+    static constexpr int32_t kSequencerStagingCapacity = 512;
+    TimedMidiEvent mSequencerStaging[kSequencerStagingCapacity];
     SceneManager mSceneManager;
     ClipScheduler mClipScheduler;
     LaunchQuantizer mLaunchQuantizer;

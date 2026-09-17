@@ -1,7 +1,7 @@
 #pragma once
 
 #include "model/TransportState.h"
-#include "realtime/MidiQueue.h"
+#include "TimedMidiEvent.h"
 #include <cstdint>
 #include <atomic>
 
@@ -22,9 +22,6 @@ struct ClipData {
     } events[kMaxEvents];
     int32_t eventCount = 0;
 
-    // Track active notes for loop boundary cleanup
-    uint8_t mActiveNotes[128];
-    int32_t mActiveNoteCount = 0;
 };
 
 class ClipScheduler {
@@ -32,7 +29,8 @@ public:
     ClipScheduler();
     ~ClipScheduler();
 
-    void init(TransportState* transport, MidiQueue* midiQueue);
+    void init(TransportState* transport);
+    int32_t collectDueEvents(int64_t beginFrame, int64_t endFrame, TimedMidiEvent* output, int32_t capacity);
 
     // Audio-thread-only lifecycle operations.
     void activateSlot(int32_t slot, ClipData* clip);
@@ -40,7 +38,6 @@ public:
 
     // Process — called from audio callback
     // Scans clips for events that should fire at current tick position
-    void process();
 
     // Start/stop scheduling
     void start();
@@ -53,7 +50,6 @@ public:
 
 private:
     TransportState* mTransport = nullptr;
-    MidiQueue* mMidiQueue = nullptr;
     std::atomic<bool> mRunning{false};
 
     // Pre-allocated clip storage — atomic pointers prevent data race between
@@ -62,9 +58,17 @@ private:
     struct ClipSlot {
         std::atomic<ClipData*> clip{nullptr};
     };
+    struct ClipRuntime {
+        int32_t nextEventIndex = 0;
+        int32_t loopIndex = 0;
+        struct ActiveNote { uint8_t channel = 0; uint8_t note = 0; } activeNotes[128];
+        int32_t activeNoteCount = 0;
+        uint32_t nextOrder = 0;
+    };
     ClipSlot mClips[kMaxClips];
     std::atomic<int32_t> mClipCount{0};
 
     // Per-clip last-fired event index — prevents event re-firing within same callback window
     int32_t mLastFiredEventIndex[kMaxClips];
+    ClipRuntime mRuntime[kMaxClips];
 };
