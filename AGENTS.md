@@ -25,6 +25,13 @@ Requires JDK 17, Android SDK (API 34), NDK 26.1, CMake 3.22.1.
   unit tests must pass: `./gradlew :app:testDebugUnitTest` (MIDI parser regression
   suite in `app/src/test/.../midi/MidiMessageParserTest.kt`). On-device behavior is
   verified manually (no adb/logcat on the dev machine).
+- **Release versioning:** Update `app/build.gradle.kts` together: `baseVersion` to the
+  intended semantic version and `versionCode` to the next monotonically increasing
+  integer. Commit the bump on `master`, run the automated checks, then create and push
+  exactly one annotated `v<baseVersion>` tag on that commit (for example `v0.1.1`).
+  `versionName` resolves from an exact tag; non-tag builds show
+  `<baseVersion>~<short-sha>`. Do not infer the next release from only `v*` tags:
+  inspect all tags, including legacy bare tags such as `0.1.0`.
 - **LSP/clangd C++ errors are pre-existing noise.** The IDE LSP lacks NDK include paths
   and reports `fluidsynth.h`/`jni.h` not found plus a cascade of errors. Do NOT try to
   "fix" them — the Gradle/CMake build is the source of truth.
