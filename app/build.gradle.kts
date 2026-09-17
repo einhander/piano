@@ -42,7 +42,7 @@ fun signingProp(name: String): String? =
 // HEAD). Branch/PR runs are never on a tag, so they get the hash suffix.
 // All git calls are defensive: if git is unavailable they fall back to
 // baseVersion so the build never fails on a missing tool.
-val baseVersion = "0.0.7"
+val baseVersion = "0.0.10"
 
 fun runGit(vararg args: String): String? {
     return try {
@@ -108,7 +108,7 @@ android {
         applicationId = "com.piano.sequencer"
         minSdk = 26
         targetSdk = 29
-        versionCode = 9
+        versionCode = 10
         versionName = resolvedVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
