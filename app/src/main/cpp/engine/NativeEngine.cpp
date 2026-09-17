@@ -456,6 +456,24 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
 
     int32_t sequencerEventCount = mSequencer.collectDueEvents(
         framePos, framePos + safeFrames, mSequencerStaging, kSequencerStagingCapacity);
+
+    // Clip removal is control-thread intent; scheduler detachment and retired
+    // acknowledgement happen only at callback boundary.
+    for (int32_t i = 0; i < kMaxClips; ++i) {
+        uint32_t published = static_cast<uint32_t>(ClipSlotState::Published);
+        if (mClipStates[i].state.compare_exchange_strong(published,
+                static_cast<uint32_t>(ClipSlotState::Active), std::memory_order_acq_rel)) {
+            mClipScheduler.activateSlot(i, &mClips[i]);
+        }
+        if (mClipStates[i].state.load(std::memory_order_acquire) ==
+                static_cast<uint32_t>(ClipSlotState::RetireRequested)) {
+            mClipScheduler.deactivateSlot(i);
+            uint32_t expected = static_cast<uint32_t>(ClipSlotState::RetireRequested);
+            mClipStates[i].state.compare_exchange_strong(expected,
+                static_cast<uint32_t>(ClipSlotState::Retired), std::memory_order_release,
+                std::memory_order_relaxed);
+        }
+    }
     mClipScheduler.process();
 
     // Process queued scene launches
@@ -791,15 +809,26 @@ void NativeEngine::addClip(int32_t clipId, int32_t trackId, int64_t startTick, i
                            const uint8_t* events, int32_t eventCount) {
     if (!events || eventCount <= 0 || eventCount > ClipData::kMaxEvents) return;
 
-    // Find slot (replace existing or find empty)
+    // Find slot (replace existing or find reusable state)
     int32_t replaceSlot = -1;  // Slot with matching clipId
     int32_t emptySlot = -1;    // First empty slot (clipId == 0)
     for (int32_t i = 0; i < kMaxClips; i++) {
-        if (mClips[i].clipId == clipId) { replaceSlot = i; break; }
-        if (mClips[i].clipId == 0 && emptySlot < 0) { emptySlot = i; }
+        uint32_t state = mClipStates[i].state.load(std::memory_order_acquire);
+        if (state == static_cast<uint32_t>(ClipSlotState::Published) ||
+            state == static_cast<uint32_t>(ClipSlotState::Active)) {
+            if (mClips[i].clipId == clipId) { replaceSlot = i; break; }
+        }
+        if ((state == static_cast<uint32_t>(ClipSlotState::Free) || state == static_cast<uint32_t>(ClipSlotState::Retired)) && emptySlot < 0) emptySlot = i;
     }
     int32_t slot = replaceSlot >= 0 ? replaceSlot : emptySlot;
     if (slot < 0) return;
+    uint32_t expectedState = static_cast<uint32_t>(ClipSlotState::Free);
+    if (!mClipStates[slot].state.compare_exchange_strong(expectedState,
+            static_cast<uint32_t>(ClipSlotState::Building), std::memory_order_acq_rel)) {
+        expectedState = static_cast<uint32_t>(ClipSlotState::Retired);
+        if (!mClipStates[slot].state.compare_exchange_strong(expectedState,
+                static_cast<uint32_t>(ClipSlotState::Building), std::memory_order_acq_rel)) return;
+    }
 
     mClips[slot].clipId = clipId;
     mClips[slot].trackId = trackId;
@@ -823,7 +852,7 @@ void NativeEngine::addClip(int32_t clipId, int32_t trackId, int64_t startTick, i
     }
 
     // mClips is already ClipScheduler::ClipData[] — no cast needed
-    mClipScheduler.addClip(&mClips[slot]);
+    mClipStates[slot].state.store(static_cast<uint32_t>(ClipSlotState::Published), std::memory_order_release);
 
     int32_t count = mClipCount.load(std::memory_order_acquire);
     if (slot >= count) mClipCount.store(slot + 1, std::memory_order_release);
@@ -876,11 +905,17 @@ void NativeEngine::loadProject(const char* json) {
 
 void NativeEngine::removeClip(int32_t clipId) {
     for (int32_t i = 0; i < kMaxClips; i++) {
-        if (mClips[i].clipId == clipId) {
-            mClips[i].clipId = 0;
-            mClips[i].eventCount = 0;
-            mClipScheduler.removeClip(clipId);
-            mClipCount.fetch_sub(1, std::memory_order_release);
+        uint32_t state = mClipStates[i].state.load(std::memory_order_acquire);
+        if ((state == static_cast<uint32_t>(ClipSlotState::Published) ||
+             state == static_cast<uint32_t>(ClipSlotState::Active)) &&
+            mClips[i].clipId == clipId) {
+            uint32_t expected = static_cast<uint32_t>(ClipSlotState::Published);
+            if (!mClipStates[i].state.compare_exchange_strong(expected,
+                static_cast<uint32_t>(ClipSlotState::RetireRequested), std::memory_order_acq_rel)) {
+                expected = static_cast<uint32_t>(ClipSlotState::Active);
+                mClipStates[i].state.compare_exchange_strong(expected,
+                    static_cast<uint32_t>(ClipSlotState::RetireRequested), std::memory_order_acq_rel);
+            }
             return;
         }
     }

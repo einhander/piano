@@ -11,6 +11,7 @@
 #include <oboe/Oboe.h>
 #include "realtime/MidiQueue.h"
 #include "model/TransportState.h"
+#include "engine/ClipSlotState.h"
 #include "engine/Sequencer.h"
 #include "engine/SceneManager.h"
 #include "engine/ClipScheduler.h"
@@ -323,6 +324,7 @@ private:
     // Clip storage (owned by NativeEngine, safe for audio thread access)
     static constexpr int32_t kMaxClips = 64;
     ClipData mClips[kMaxClips];
+    ClipSlotStateCell mClipStates[kMaxClips];
     std::atomic<int32_t> mClipCount{0};
 
     // Pre-allocated synth render buffer (avoids stack allocation in audio callback)

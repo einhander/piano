@@ -34,11 +34,9 @@ public:
 
     void init(TransportState* transport, MidiQueue* midiQueue);
 
-    // Add a clip (called from non-audio thread)
-    void addClip(ClipData* clip);
-
-    // Remove a clip
-    void removeClip(int32_t clipId);
+    // Audio-thread-only lifecycle operations.
+    void activateSlot(int32_t slot, ClipData* clip);
+    void deactivateSlot(int32_t slot);
 
     // Process — called from audio callback
     // Scans clips for events that should fire at current tick position

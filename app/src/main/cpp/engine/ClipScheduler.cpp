@@ -17,32 +17,22 @@ void ClipScheduler::init(TransportState* transport, MidiQueue* midiQueue) {
     mMidiQueue = midiQueue;
 }
 
-void ClipScheduler::addClip(ClipData* clip) {
+void ClipScheduler::activateSlot(int32_t slot, ClipData* clip) {
     if (!clip) return;
-
-    int32_t count = mClipCount.load(std::memory_order_acquire);
-    if (count >= kMaxClips) return;
-
-    for (int32_t i = 0; i < kMaxClips; i++) {
-        if (mClips[i].clip.load(std::memory_order_acquire) == nullptr) {
-            mClips[i].clip.store(clip, std::memory_order_release);
-            mClipCount.fetch_add(1, std::memory_order_release);
-            // Initialize active note tracking
-            std::memset(clip->mActiveNotes, 0, sizeof(clip->mActiveNotes));
-            clip->mActiveNoteCount = 0;
-            return;
-        }
+    if (slot < 0 || slot >= kMaxClips) return;
+    if (mClips[slot].clip.load(std::memory_order_acquire) == nullptr) {
+        mClips[slot].clip.store(clip, std::memory_order_release);
+        mClipCount.fetch_add(1, std::memory_order_release);
+        std::memset(clip->mActiveNotes, 0, sizeof(clip->mActiveNotes));
+        clip->mActiveNoteCount = 0;
+        mLastFiredEventIndex[slot] = -1;
     }
 }
 
-void ClipScheduler::removeClip(int32_t clipId) {
-    for (int32_t i = 0; i < kMaxClips; i++) {
-        ClipData* current = mClips[i].clip.load(std::memory_order_acquire);
-        if (current && current->clipId == clipId) {
-            mClips[i].clip.store(nullptr, std::memory_order_release);
-            mClipCount.fetch_sub(1, std::memory_order_release);
-            return;
-        }
+void ClipScheduler::deactivateSlot(int32_t slot) {
+    if (slot < 0 || slot >= kMaxClips) return;
+    if (mClips[slot].clip.exchange(nullptr, std::memory_order_release) != nullptr) {
+        mClipCount.fetch_sub(1, std::memory_order_release);
     }
 }
 
