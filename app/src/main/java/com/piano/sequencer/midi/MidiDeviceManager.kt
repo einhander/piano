@@ -27,7 +27,12 @@ class MidiDeviceManager(
     private var snapshot = ConnectionSnapshot(null, false, false, 0L)
     private var activeDevice: MidiDeviceInfo? = null
     private var activeMidiDevice: MidiDevice? = null
-    private var activeOutputPort: MidiOutputPort? = null
+    private data class ActiveOutput(
+        val portIndex: Int,
+        val port: MidiOutputPort,
+        val receiver: MidiInputReceiver
+    )
+    private val activeOutputs = mutableListOf<ActiveOutput>()
     @Volatile private var closed = false
     @Volatile private var connectedSnapshot: MidiDeviceInfo? = null
 
@@ -124,45 +129,62 @@ class MidiDeviceManager(
             try { device.close() } catch (_: Exception) {}
             return
         }
-        AppLogger.info("MidiDeviceManager", "Opening output port 0/${deviceInfo.outputPortCount} for device ${deviceInfo.id}")
-        val port = try {
-                    device.openOutputPort(0)
-                } catch (e: Exception) {
-                    AppLogger.warn("MidiDeviceManager", "openOutputPort failed: ${e.message}")
-                    null
+        val outputs = mutableListOf<ActiveOutput>()
+        for (index in 0 until deviceInfo.outputPortCount) {
+            AppLogger.info("MidiDeviceManager", "Opening output port $index/${deviceInfo.outputPortCount} for device ${deviceInfo.id}")
+            val port = try {
+                device.openOutputPort(index)
+            } catch (e: Exception) {
+                AppLogger.warn("MidiDeviceManager", "openOutputPort failed index=$index: ${e.message}")
+                null
+            }
+            if (port == null) {
+                AppLogger.warn("MidiDeviceManager", "Failed to open output port index=$index for device ${deviceInfo.id}")
+                continue
+            }
+            var portReceiver: MidiInputReceiver? = null
+            try {
+                val receiver = inputCallback as? MidiInputReceiver
+                    ?: throw IllegalStateException("MIDI input callback must be MidiInputReceiver")
+                val newReceiver = receiver.createPortReceiver(index)
+                portReceiver = newReceiver
+                port.connect(newReceiver)
+                outputs += ActiveOutput(index, port, newReceiver)
+                AppLogger.info("MidiDeviceManager", "Connected output port index=$index for device ${deviceInfo.id}")
+            } catch (e: Exception) {
+                AppLogger.warn("MidiDeviceManager", "connect receiver failed index=$index: ${e.message}")
+                portReceiver?.deactivate()
+                try { port.close() } catch (closeError: Exception) {
+                    AppLogger.warn("MidiDeviceManager", "close failed index=$index: ${closeError.message}")
                 }
-                if (port == null) {
-                    try { device.close() } catch (e: Exception) {}
-                    activeDevice = null
-                    snapshot = ConnectionSnapshot(null, false, false, gen)
-                    AppLogger.warn("MidiDeviceManager", "Failed to open output port for device ${deviceInfo.id}")
-                    listener?.onDeviceDisconnected()
-                    return
+            }
+        }
+        if (closed || gen != connectGeneration) {
+            outputs.forEach { output ->
+                output.receiver.deactivate()
+                try { output.port.disconnect(output.receiver) } catch (e: Exception) {
+                    AppLogger.warn("MidiDeviceManager", "stale disconnect failed index=${output.portIndex}: ${e.message}")
                 }
-                try {
-                    port.connect(inputCallback)
-                } catch (e: Exception) {
-                    AppLogger.warn("MidiDeviceManager", "connect receiver failed: ${e.message}")
-                    try { port.close() } catch (_: Exception) {}
-                    try { device.close() } catch (_: Exception) {}
-                    activeDevice = null
-                    snapshot = ConnectionSnapshot(null, false, false, gen)
-                    listener?.onDeviceDisconnected()
-                    return
+                try { output.port.close() } catch (e: Exception) {
+                    AppLogger.warn("MidiDeviceManager", "stale close failed index=${output.portIndex}: ${e.message}")
                 }
-                // Gate window: disconnect may have run between port.open and here.
-                if (gen != connectGeneration) {
-                    try { port.disconnect(inputCallback) } catch (e: Exception) {}
-                    try { port.close() } catch (e: Exception) {}
-                    try { device.close() } catch (e: Exception) {}
-                    return
-                }
-                activeMidiDevice = device
-                activeOutputPort = port
-                connectedSnapshot = deviceInfo
-                snapshot = ConnectionSnapshot(deviceInfo, true, false, gen)
-                AppLogger.info("MidiDeviceManager", "Connected: device ${deviceInfo.id}")
-                listener?.onDeviceConnected(deviceInfo)
+            }
+            try { device.close() } catch (_: Exception) {}
+            return
+        }
+        if (outputs.isEmpty()) {
+            try { device.close() } catch (_: Exception) {}
+            activeDevice = null
+            snapshot = ConnectionSnapshot(null, false, false, gen)
+            listener?.onDeviceDisconnected()
+            return
+        }
+        activeMidiDevice = device
+        activeOutputs += outputs
+        connectedSnapshot = deviceInfo
+        snapshot = ConnectionSnapshot(deviceInfo, true, false, gen)
+        AppLogger.info("MidiDeviceManager", "Connected: device ${deviceInfo.id}")
+        listener?.onDeviceConnected(deviceInfo)
     }
 
     fun disconnect() {
@@ -170,24 +192,29 @@ class MidiDeviceManager(
     }
 
     private fun closeActiveOnHandler(notify: Boolean) {
-        val wasActive = activeDevice != null || activeOutputPort != null || activeMidiDevice != null
+        val wasActive = activeDevice != null || activeOutputs.isNotEmpty() || activeMidiDevice != null
         ++connectGeneration // invalidate pending open callback before closing resources
         val deviceId = activeDevice?.id ?: -1
         snapshot = ConnectionSnapshot(null, false, false, connectGeneration)
-        val port = activeOutputPort
+        val outputs = activeOutputs.toList()
         val device = activeMidiDevice
         activeDevice = null
-        activeOutputPort = null
+        activeOutputs.clear()
         connectedSnapshot = null
         activeMidiDevice = null
         if (wasActive) {
             if (notify) AppLogger.info("MidiDeviceManager", "Disconnected: device $deviceId")
-            try {
-                port?.disconnect(inputCallback)
-                port?.close()
-                device?.close()
-            } catch (e: Exception) {
-                AppLogger.warn("MidiDeviceManager", "Error closing MIDI: ${e.message}")
+            outputs.forEach { output ->
+                output.receiver.deactivate()
+                try { output.port.disconnect(output.receiver) } catch (e: Exception) {
+                    AppLogger.warn("MidiDeviceManager", "Error disconnecting MIDI port index=${output.portIndex}: ${e.message}")
+                }
+                try { output.port.close() } catch (e: Exception) {
+                    AppLogger.warn("MidiDeviceManager", "Error closing MIDI port index=${output.portIndex}: ${e.message}")
+                }
+            }
+            try { device?.close() } catch (e: Exception) {
+                AppLogger.warn("MidiDeviceManager", "Error closing MIDI device: ${e.message}")
             }
         }
         if (wasActive && notify) listener?.onDeviceDisconnected()

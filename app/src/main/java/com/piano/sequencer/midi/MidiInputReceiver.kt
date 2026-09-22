@@ -4,8 +4,19 @@ import android.media.midi.MidiReceiver
 import android.os.SystemClock
 import com.piano.sequencer.AppLogger
 
-class MidiInputReceiver : MidiReceiver() {
+class MidiInputReceiver private constructor(
+    private val callbackHolder: CallbackHolder,
+    private val source: String
+) : MidiReceiver() {
+    constructor() : this(CallbackHolder(), "unknown")
+
+    private class CallbackHolder {
+        @Volatile var callback: Callback? = null
+    }
+
     private val parser = MidiMessageParser.StreamParser()
+    private val lifecycleLock = Any()
+    private var active = true
     interface Callback {
         fun onNoteOn(channel: Int, note: Int, velocity: Int)
         fun onNoteOff(channel: Int, note: Int, velocity: Int)
@@ -15,12 +26,17 @@ class MidiInputReceiver : MidiReceiver() {
         fun onChannelPressure(channel: Int, value: Int)
     }
 
-    @Volatile
-    private var callback: Callback? = null
     private var lastEmptyTraceMs = 0L
 
+    fun createPortReceiver(portIndex: Int): MidiInputReceiver =
+        MidiInputReceiver(callbackHolder, "port=$portIndex")
+
     fun setCallback(callback: Callback?) {
-        this.callback = callback
+        callbackHolder.callback = callback
+    }
+
+    fun deactivate() {
+        synchronized(lifecycleLock) { active = false }
     }
 
     // Swallows a callback exception so a single bad message does not abort
@@ -31,14 +47,16 @@ class MidiInputReceiver : MidiReceiver() {
             block()
         } catch (e: Exception) {
             // Prevent a callback exception from crashing the MIDI callback chain
-            AppLogger.error("MidiInputReceiver", "MIDI callback failed: ${e.stackTraceToString()}")
+            AppLogger.error("MidiInputReceiver", "MIDI callback failed source=$source: ${e.stackTraceToString()}")
         }
     }
 
     override fun onSend(data: ByteArray, offset: Int, length: Int, timestamp: Long) {
-        val cb = callback
+        synchronized(lifecycleLock) {
+        if (!active) return
+        val cb = callbackHolder.callback
         if (cb == null) {
-            AppLogger.warn("MidiInputReceiver", "MIDI input received with no callback")
+            AppLogger.warn("MidiInputReceiver", "MIDI input received with no callback source=$source")
             return
         }
         var parsedEvents = 0
@@ -46,12 +64,12 @@ class MidiInputReceiver : MidiReceiver() {
             parser.parse(data, offset, length, object : MidiMessageParser.Handler {
                 override fun onNoteOn(channel: Int, note: Int, velocity: Int) {
                     parsedEvents++
-                    AppLogger.info("MIDI", "Parsed NOTE ON ch=${channel + 1} data=$note,$velocity")
+                    AppLogger.info("MIDI", "Parsed NOTE ON source=$source ch=${channel + 1} data=$note,$velocity")
                     safe { cb.onNoteOn(channel, note, velocity) }
                 }
                 override fun onNoteOff(channel: Int, note: Int, velocity: Int) {
                     parsedEvents++
-                    AppLogger.info("MIDI", "Parsed NOTE OFF ch=${channel + 1} data=$note,$velocity")
+                    AppLogger.info("MIDI", "Parsed NOTE OFF source=$source ch=${channel + 1} data=$note,$velocity")
                     safe { cb.onNoteOff(channel, note, velocity) }
                 }
                 override fun onControlChange(channel: Int, controller: Int, value: Int) {
@@ -60,7 +78,7 @@ class MidiInputReceiver : MidiReceiver() {
                 }
                 override fun onProgramChange(channel: Int, program: Int) {
                     parsedEvents++
-                    AppLogger.info("MIDI", "Parsed PROGRAM ch=${channel + 1} data=$program")
+                    AppLogger.info("MIDI", "Parsed PROGRAM source=$source ch=${channel + 1} data=$program")
                     safe { cb.onProgramChange(channel, program) }
                 }
                 override fun onPitchBend(channel: Int, value: Int) {
@@ -74,7 +92,7 @@ class MidiInputReceiver : MidiReceiver() {
             })
         } catch (e: Exception) {
             // Backstop: never let an exception escape onSend into the MIDI chain
-            AppLogger.error("MidiInputReceiver", "MIDI parser failed: ${e.stackTraceToString()}")
+            AppLogger.error("MidiInputReceiver", "MIDI parser failed source=$source: ${e.stackTraceToString()}")
         }
         if (parsedEvents == 0) {
             val now = SystemClock.elapsedRealtime()
@@ -88,9 +106,10 @@ class MidiInputReceiver : MidiReceiver() {
                     .joinToString(" ") { "%02X".format(it.toInt() and 255) }
                 AppLogger.warn(
                     "MidiInputReceiver",
-                    "MIDI buffer produced no supported event bytes=[$hex] length=$length"
+                    "MIDI buffer produced no supported event source=$source bytes=[$hex] length=$length"
                 )
             }
+        }
         }
     }
 }
