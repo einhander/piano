@@ -18,18 +18,18 @@ class MidiInputReceiver private constructor(
     private val lifecycleLock = Any()
     private var active = true
     interface Callback {
-        fun onNoteOn(channel: Int, note: Int, velocity: Int)
-        fun onNoteOff(channel: Int, note: Int, velocity: Int)
-        fun onControlChange(channel: Int, controller: Int, value: Int)
-        fun onProgramChange(channel: Int, program: Int)
-        fun onPitchBend(channel: Int, value: Int)
+        fun onNoteOn(channel: Int, note: Int, velocity: Int, source: String = "unknown")
+        fun onNoteOff(channel: Int, note: Int, velocity: Int, source: String = "unknown")
+        fun onControlChange(channel: Int, controller: Int, value: Int, source: String = "unknown")
+        fun onProgramChange(channel: Int, program: Int, source: String = "unknown")
+        fun onPitchBend(channel: Int, value: Int, source: String = "unknown")
         fun onChannelPressure(channel: Int, value: Int)
     }
 
     private var lastEmptyTraceMs = 0L
 
-    fun createPortReceiver(portIndex: Int): MidiInputReceiver =
-        MidiInputReceiver(callbackHolder, "port=$portIndex")
+    fun createPortReceiver(portIndex: Int, stableSource: String = source): MidiInputReceiver =
+        MidiInputReceiver(callbackHolder, "$stableSource|port=$portIndex")
 
     fun setCallback(callback: Callback?) {
         callbackHolder.callback = callback
@@ -65,25 +65,25 @@ class MidiInputReceiver private constructor(
                 override fun onNoteOn(channel: Int, note: Int, velocity: Int) {
                     parsedEvents++
                     AppLogger.info("MIDI", "Parsed NOTE ON source=$source ch=${channel + 1} data=$note,$velocity")
-                    safe { cb.onNoteOn(channel, note, velocity) }
+                    safe { cb.onNoteOn(channel, note, velocity, source) }
                 }
                 override fun onNoteOff(channel: Int, note: Int, velocity: Int) {
                     parsedEvents++
                     AppLogger.info("MIDI", "Parsed NOTE OFF source=$source ch=${channel + 1} data=$note,$velocity")
-                    safe { cb.onNoteOff(channel, note, velocity) }
+                    safe { cb.onNoteOff(channel, note, velocity, source) }
                 }
                 override fun onControlChange(channel: Int, controller: Int, value: Int) {
                     parsedEvents++
-                    safe { cb.onControlChange(channel, controller, value) }
+                    safe { cb.onControlChange(channel, controller, value, source) }
                 }
                 override fun onProgramChange(channel: Int, program: Int) {
                     parsedEvents++
                     AppLogger.info("MIDI", "Parsed PROGRAM source=$source ch=${channel + 1} data=$program")
-                    safe { cb.onProgramChange(channel, program) }
+                    safe { cb.onProgramChange(channel, program, source) }
                 }
                 override fun onPitchBend(channel: Int, value: Int) {
                     parsedEvents++
-                    safe { cb.onPitchBend(channel, value) }
+                    safe { cb.onPitchBend(channel, value, source) }
                 }
                 override fun onChannelPressure(channel: Int, value: Int) {
                     parsedEvents++

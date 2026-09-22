@@ -143,7 +143,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      * Returns false while recording (file triggering is paused; notes must reach engine).
      * Returns true if the event was consumed (mapped note) — caller must NOT forward to engine.
      */
-    fun onNoteOn(channel: Int, note: Int, velocity: Int): Boolean {
+    fun onNoteOn(channel: Int, note: Int, velocity: Int, source: String? = null): Boolean {
         // While recording, all notes must reach the engine (recorded + synthesized);
         // file triggering is paused for the duration of the recording.
         // (Chord recording is tracked separately by ChordRecorder and does not
@@ -152,11 +152,11 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         // Learn state active → capture
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
             logLearnNote(channel, note, velocity)
-            MidiFileLearnState.captureNote(note)
+            MidiFileLearnState.captureNote(note, source, channel)
             return true
         }
         val s = store ?: return false
-        val cell = s.findByNote(note)
+        val cell = s.findByNote(note, source, channel)
         if (cell == null) return false // unmapped → caller forwards
 
         if (cell.mode == MODE_CHORD) {
@@ -189,13 +189,13 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      * Returns false while recording (file triggering is paused; notes must reach engine).
      * Returns true if consumed (mapped note).
      */
-    fun onNoteOff(channel: Int, note: Int, velocity: Int): Boolean {
+    fun onNoteOff(channel: Int, note: Int, velocity: Int, source: String? = null): Boolean {
         // While recording, all notes must reach the engine (recorded + synthesized);
         // file triggering is paused for the duration of the recording.
         if (service?.recordingAllowsTriggers() == false || ChordRecorder.isActive()) return false
         noteStateMachine.noteOff(note)
         val s = store ?: return false
-        val cell = s.findByNote(note) ?: return false // unmapped → caller forwards
+        val cell = s.findByNote(note, source, channel) ?: return false // unmapped → caller forwards
         // Chord gate: release stops the chord's notes.
         if (cell.mode == MODE_CHORD) {
             stopChord(note)
@@ -214,17 +214,17 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      *    IGNORED but still consumed (a mapped CC is never forwarded to the live
      *    synth, even on repeat).
      */
-    fun onControlChange(channel: Int, ccNumber: Int, value: Int): Boolean {
+    fun onControlChange(channel: Int, ccNumber: Int, value: Int, source: String? = null): Boolean {
         if (service?.recordingAllowsTriggers() == false) return false
         // Learn state active → capture (first event of any type wins)
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
             logLearnCc(channel, ccNumber, value)
-            MidiFileLearnState.captureCC(ccNumber)
+            MidiFileLearnState.captureCC(ccNumber, source, channel)
             return true
         }
         if (ccNumber !in 0..127) return false
         val s = store ?: return false
-        val cell = s.findByCC(ccNumber)
+        val cell = s.findByCC(ccNumber, source, channel)
         if (cell == null) return false // unmapped → caller forwards
 
         // Press = value change after a stable value (≥ threshold since last event);
@@ -246,16 +246,16 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      * Same contract as [onControlChange]: false while recording; true when
      * consumed (learn capture or a mapped pitch-bend cell — including repeats).
      */
-    fun onPitchBend(channel: Int, value: Int): Boolean {
+    fun onPitchBend(channel: Int, value: Int, source: String? = null): Boolean {
         if (service?.recordingAllowsTriggers() == false) return false
         // Learn state active → capture (first event of any type wins)
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
             logLearnPitchBend(channel, value)
-            MidiFileLearnState.capturePitchBend()
+            MidiFileLearnState.capturePitchBend(source, channel)
             return true
         }
         val s = store ?: return false
-        val cell = s.findByPitchBend()
+        val cell = s.findByPitchBend(source, channel)
         if (cell == null) return false // unmapped → caller forwards
 
         if (!pbPressDetector.isPress(0, value, SystemClock.uptimeMillis())) return true
@@ -269,15 +269,15 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         return true
     }
 
-    fun onProgramChange(channel: Int, program: Int): Boolean {
+    fun onProgramChange(channel: Int, program: Int, source: String? = null): Boolean {
         if (service?.recordingAllowsTriggers() == false) return false
         if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
             logLearnProgramChange(channel, program)
-            MidiFileLearnState.captureProgramChange(program)
+            MidiFileLearnState.captureProgramChange(program, source, channel)
             return true
         }
         if (program !in 0..127) return false
-        val cell = store?.findByProgramChange(program) ?: return false
+        val cell = store?.findByProgramChange(program, source, channel) ?: return false
         val key = PROGRAM_CHANGE_KEY_BASE + program
         when (noteStateMachine.press(key, cell.loop)) {
             NoteToggleStateMachine.Result.TOGGLE_ON -> triggerSlot(cell)
@@ -314,7 +314,12 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         // MINOR-2: stale in-flight guard — re-check the store before allocating a slot.
         // The cell came from a store lookup at press time (MIDI thread or main thread);
         // by the time this runs the mapping may have been deleted or the file changed.
-        val current = store?.findByTrigger(cell.triggerType, cell.triggerData())
+        val current = store?.findByTrigger(
+            cell.triggerType,
+            cell.triggerData(),
+            cell.triggerSource,
+            cell.triggerChannel
+        )
         if (current == null || current.filePath != cell.filePath) return
 
         slotExecutor.execute {

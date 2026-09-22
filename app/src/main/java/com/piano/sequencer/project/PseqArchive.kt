@@ -41,6 +41,8 @@ data class PseqCell(
     val loop: Boolean = false,
     val tempo: Double = 120.0,
     val channel: Int = -1,
+    val triggerSource: String? = null,
+    val triggerChannel: Int = -1,
     val triggerType: String = "NOTE", // NOTE / CC / PITCH_BEND / PROGRAM_CHANGE
     val ccNumber: Int? = null,
     val programNumber: Int? = null

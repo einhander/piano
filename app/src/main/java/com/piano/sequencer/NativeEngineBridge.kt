@@ -118,6 +118,7 @@ object NativeEngineBridge {
     external fun nativeStartAudio(): Int
     external fun nativeStopAudio(): Int
     external fun nativeIsAudioPlaying(): Boolean
+    external fun nativeGetAudioState(): Int
     external fun nativeIsEngineInitialized(): Boolean
     external fun nativeGetUnderrunCount(): Int
     external fun nativeOpenAudio(): Int

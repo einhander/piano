@@ -295,33 +295,6 @@ class MainActivity : AppCompatActivity() {
                 }
                 AppLogger.info("MainActivity", "Engine initialized (${actualRate}Hz, 512 buffer)")
 
-                // Load the prebuilt LSP LADSPA bundle (master effect chain: EQ →
-                // Compressor → Limiter). Extracted into nativeLibraryDir at
-                // install time by the jniLibs sourceSet. Best-effort: if it is
-                // missing/incompatible, loadMasterEffectBundle() returns 0 and
-                // the chain stays a passthrough (the engine keeps running).
-                // Effects are loaded DISABLED (bypassed) by default; the UI
-                // toggles them on after the user opts in.
-                //
-                // Pre-load the bundle via System.loadLibrary so the linker
-                // resolves its NEEDED deps and registers the soname; the native
-                // dlopen then finds it by soname fallback. The bundle is built
-                // from the pinned LSP submodule by CI and packaged as a jniLib.
-                // Result is logged to AppLogger.
-                //
-                // If the previous launch crashed while loading the bundle (a
-                // native_crash.log is present), do NOT retry the load this
-                // launch — leave the chain as a passthrough so the user can
-                // read the captured backtrace and report it. The crash log is
-                // cleared below so a subsequent (manual) reload attempt is
-                // allowed to proceed.
-                if (prevCrash != null) {
-                    AppLogger.warn("MainActivity", "Skipping LSP bundle load: previous launch crashed (see native crash above). Chain stays passthrough.")
-                } else {
-                    NativeEngineBridge.preloadLspBundle(this@MainActivity)
-                    loadMasterEffectBundle(svc)
-                }
-
                 // Restore persisted state (SF2, polyphony, master gain, channel programs)
                 restorePersistedState(svc)
 
@@ -603,8 +576,8 @@ class MainActivity : AppCompatActivity() {
         // Setup MIDI receiver callback
         midiInputReceiver = MidiInputReceiver()
         midiIngress = MidiIngressRouter(
-            MidiFileTriggerController.get(this)::onNoteOn,
-            MidiFileTriggerController.get(this)::onNoteOff,
+            { ch, note, vel, source -> MidiFileTriggerController.get(this).onNoteOn(ch, note, vel, source) },
+            { ch, note, vel, source -> MidiFileTriggerController.get(this).onNoteOff(ch, note, vel, source) },
             { status, d1, d2, channel -> sendToTargets(status, d1, d2, intArrayOf(channel)) },
             { channel, note, velocity ->
                 lastNoteChannel = channel
@@ -612,17 +585,17 @@ class MainActivity : AppCompatActivity() {
             }
         )
         midiInputReceiver.setCallback(object : MidiInputReceiver.Callback {
-            override fun onNoteOn(channel: Int, note: Int, velocity: Int) {
-                midiIngress.noteOn(channel, note, velocity)
+            override fun onNoteOn(channel: Int, note: Int, velocity: Int, source: String) {
+                midiIngress.noteOn(channel, note, velocity, source)
             }
-            override fun onNoteOff(channel: Int, note: Int, velocity: Int) {
-                midiIngress.noteOff(channel, note, velocity)
+            override fun onNoteOff(channel: Int, note: Int, velocity: Int, source: String) {
+                midiIngress.noteOff(channel, note, velocity, source)
             }
-            override fun onControlChange(channel: Int, controller: Int, value: Int) {
+            override fun onControlChange(channel: Int, controller: Int, value: Int, source: String) {
                 // Delegate to trigger controller — consumed while learning (first CC
                 // of the session is captured) or when a cell is mapped to this CC
                 // (press toggles the cell's file; repeats are consumed too).
-                val consumed = MidiFileTriggerController.get(this@MainActivity).onControlChange(channel, controller, value)
+                val consumed = MidiFileTriggerController.get(this@MainActivity).onControlChange(channel, controller, value, source)
                 if (consumed) {
                     AppLogger.info("MIDI", "CC ch=${channel + 1} controller=$controller value=$value outcome=consumed")
                     return
@@ -638,17 +611,17 @@ class MainActivity : AppCompatActivity() {
                     sendToTargets(0xB0, controller, value, intArrayOf(channel))
                 }
             }
-            override fun onProgramChange(channel: Int, program: Int) {
-                val consumed = MidiFileTriggerController.get(this@MainActivity).onProgramChange(channel, program)
+            override fun onProgramChange(channel: Int, program: Int, source: String) {
+                val consumed = MidiFileTriggerController.get(this@MainActivity).onProgramChange(channel, program, source)
                 AppLogger.info("MIDI", "PROGRAM ch=${channel + 1} program=$program outcome=${if (consumed) "consumed" else "not-consumed/forwarded"}")
                 if (consumed) return
                 sendToTargets(0xC0, program, 0, intArrayOf(channel))
             }
-            override fun onPitchBend(channel: Int, value: Int) {
+            override fun onPitchBend(channel: Int, value: Int, source: String) {
                 // Delegate to trigger controller — consumed while learning (first
                 // pitch bend of the session is captured) or when a cell is mapped
                 // to pitch bend (press toggles the cell's file; repeats consumed).
-                val consumed = MidiFileTriggerController.get(this@MainActivity).onPitchBend(channel, value)
+                val consumed = MidiFileTriggerController.get(this@MainActivity).onPitchBend(channel, value, source)
                 if (consumed) {
                     AppLogger.info("MIDI", "PITCH BEND ch=${channel + 1} value=$value outcome=consumed")
                     return
@@ -1041,7 +1014,7 @@ class MainActivity : AppCompatActivity() {
                     soundFont = soundFont,
                     channels = channels,
                     cells = cells.map {
-                         PseqCell(id = it.id, note = it.note, filePath = it.filePath, loop = it.loop, tempo = it.tempo, channel = it.channel, triggerType = it.triggerType, ccNumber = it.ccNumber, programNumber = it.programNumber)
+                         PseqCell(id = it.id, note = it.note, filePath = it.filePath, loop = it.loop, tempo = it.tempo, channel = it.channel, triggerSource = it.triggerSource, triggerChannel = it.triggerChannel, triggerType = it.triggerType, ccNumber = it.ccNumber, programNumber = it.programNumber)
                      }
                 )
 
@@ -1123,6 +1096,8 @@ class MainActivity : AppCompatActivity() {
                             loop = cell.loop,
                             tempo = cell.tempo,
                             channel = cell.channel,
+                            triggerSource = cell.triggerSource,
+                            triggerChannel = cell.triggerChannel,
                             triggerType = cell.triggerType,
                             ccNumber = cell.ccNumber,
                             programNumber = cell.programNumber

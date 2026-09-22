@@ -327,6 +327,41 @@ class MidiFileMappingTest {
     }
 
     @Test
+    fun learnedNoteStoresInputScopeAndDoesNotMatchOtherKeyboardChannel() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, filePath = "/pad.mid"))
+
+        val learned = store.applyLearnedTrigger(
+            1,
+            LearnedEvent.Note(36, source = "vendor|pad|port=0", channel = 9)
+        )
+
+        assertEquals("vendor|pad|port=0", learned!!.triggerSource)
+        assertEquals(9, learned.triggerChannel)
+        assertNotNull(store.findByNote(36, "vendor|pad|port=0", 9))
+        assertNull(store.findByNote(36, "vendor|keyboard|port=0", 0))
+        assertNull(store.findByNote(36, "vendor|pad|port=0", 0))
+    }
+
+    @Test
+    fun exactScopedMappingWinsOverLegacyWildcard() {
+        val store = createStore()
+        store.set(SequencerCell(id = 1, note = 36, filePath = "/legacy.mid"))
+        store.set(
+            SequencerCell(
+                id = 2,
+                note = 36,
+                filePath = "/pad.mid",
+                triggerSource = "vendor|pad|port=0",
+                triggerChannel = 9
+            )
+        )
+
+        assertEquals(2, store.findByNote(36, "vendor|pad|port=0", 9)!!.id)
+        assertEquals(1, store.findByNote(36, "vendor|keyboard|port=0", 0)!!.id)
+    }
+
+    @Test
     fun legacyMapJsonMigratesToCells() {
         val sharedData = mutableMapOf<String?, Any?>()
         val oldJson = """{"48":{"note":48,"filePath":"/music/test.mid","loop":true,"tempo":90.0,"channel":5}}"""

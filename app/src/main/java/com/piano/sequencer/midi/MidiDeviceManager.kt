@@ -146,7 +146,7 @@ class MidiDeviceManager(
             try {
                 val receiver = inputCallback as? MidiInputReceiver
                     ?: throw IllegalStateException("MIDI input callback must be MidiInputReceiver")
-                val newReceiver = receiver.createPortReceiver(index)
+                val newReceiver = receiver.createPortReceiver(index, stableKey(deviceInfo))
                 portReceiver = newReceiver
                 port.connect(newReceiver)
                 outputs += ActiveOutput(index, port, newReceiver)

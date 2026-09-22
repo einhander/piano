@@ -64,6 +64,8 @@ data class SequencerCell(
     // FILE: -1 = from file, 0-15 = remap all events; CHORD: -1 = as recorded,
     // 0-15 = remap all chord notes.
     val channel: Int = -1,
+    val triggerSource: String? = null,
+    val triggerChannel: Int = -1,
     val triggerType: String = TRIGGER_NOTE, // "NOTE" / "CC" / "PITCH_BEND" / "PROGRAM_CHANGE"
     val ccNumber: Int? = null, // CC number; set for triggerType == "CC", null otherwise
     val programNumber: Int? = null,
@@ -107,17 +109,20 @@ private const val INVALID_TRIGGER_DATA = Int.MIN_VALUE
 
 /** A learned MIDI event: the first event of ANY type wins during learn mode. */
 sealed class LearnedEvent {
-    data class Note(val note: Int) : LearnedEvent()
-    data class CC(val ccNumber: Int) : LearnedEvent()
-    data class ProgramChange(val program: Int) : LearnedEvent()
-    data object PitchBend : LearnedEvent()
+    abstract val source: String?
+    abstract val channel: Int
+    data class Note(val note: Int, override val source: String? = null, override val channel: Int = -1) : LearnedEvent()
+    data class CC(val ccNumber: Int, override val source: String? = null, override val channel: Int = -1) : LearnedEvent()
+    data class ProgramChange(val program: Int, override val source: String? = null, override val channel: Int = -1) : LearnedEvent()
+    data class PitchBendEvent(override val source: String? = null, override val channel: Int = -1) : LearnedEvent()
+    data object PitchBend : LearnedEvent() { override val source: String? = null; override val channel: Int = -1 }
 }
 
 /** Encoded trigger key for a learned event (same space as [SequencerCell.triggerKey]). */
 fun triggerKeyOf(event: LearnedEvent): Int = when (event) {
     is LearnedEvent.Note -> event.note
     is LearnedEvent.CC -> 128 + event.ccNumber
-    is LearnedEvent.PitchBend -> 256
+    is LearnedEvent.PitchBend, is LearnedEvent.PitchBendEvent -> 256
     is LearnedEvent.ProgramChange -> PROGRAM_CHANGE_KEY_BASE + event.program
 }
 
@@ -272,32 +277,47 @@ class MidiFileMappingStore(private val prefs: SharedPreferences) {
     }
 
     /** Find first cell with the given note; never matches note < 0. NOTE cells only. */
-    fun findByNote(note: Int): SequencerCell? = synchronized(lock) {
+    fun findByNote(note: Int, source: String? = null, channel: Int = -1): SequencerCell? = synchronized(lock) {
         if (note < 0) return@synchronized null
-        _cells.find { it.triggerType == TRIGGER_NOTE && it.note == note }
+        bestMatch { it.triggerType == TRIGGER_NOTE && it.note == note && matches(it, source, channel) }
     }
 
     /** Find first cell mapped to the given CC number; null when absent or out of 0–127. */
-    fun findByCC(ccNumber: Int): SequencerCell? = synchronized(lock) {
+    fun findByCC(ccNumber: Int, source: String? = null, channel: Int = -1): SequencerCell? = synchronized(lock) {
         if (ccNumber !in 0..127) return@synchronized null
-        _cells.find { it.triggerType == TRIGGER_CC && it.ccNumber == ccNumber }
+        bestMatch { it.triggerType == TRIGGER_CC && it.ccNumber == ccNumber && matches(it, source, channel) }
     }
-    fun findByProgramChange(program: Int): SequencerCell? = synchronized(lock) {
+    fun findByProgramChange(program: Int, source: String? = null, channel: Int = -1): SequencerCell? = synchronized(lock) {
         if (program !in 0..127) return@synchronized null
-        _cells.find { it.triggerType == TRIGGER_PROGRAM_CHANGE && it.programNumber == program }
+        bestMatch { it.triggerType == TRIGGER_PROGRAM_CHANGE && it.programNumber == program && matches(it, source, channel) }
     }
 
     /** Find first cell mapped to pitch bend; null when absent. */
-    fun findByPitchBend(): SequencerCell? = synchronized(lock) {
-        _cells.find { it.triggerType == TRIGGER_PITCH_BEND }
+    fun findByPitchBend(source: String? = null, channel: Int = -1): SequencerCell? = synchronized(lock) {
+        bestMatch { it.triggerType == TRIGGER_PITCH_BEND && matches(it, source, channel) }
     }
 
+    private fun matches(cell: SequencerCell, source: String?, channel: Int): Boolean =
+        (cell.triggerSource == null || cell.triggerSource == source) &&
+            (cell.triggerChannel < 0 || cell.triggerChannel == channel)
+
+    /** Prefer a newly learned exact mapping over legacy wildcard mappings. */
+    private fun bestMatch(predicate: (SequencerCell) -> Boolean): SequencerCell? =
+        _cells.asSequence()
+            .filter(predicate)
+            .maxByOrNull { (if (it.triggerSource != null) 2 else 0) + if (it.triggerChannel >= 0) 1 else 0 }
+
     /** Find first cell with the given trigger (type + data). */
-    fun findByTrigger(type: String, data: Int): SequencerCell? = when (type) {
-        TRIGGER_CC -> findByCC(data)
-        TRIGGER_PITCH_BEND -> findByPitchBend()
-        TRIGGER_PROGRAM_CHANGE -> findByProgramChange(data)
-        else -> findByNote(data)
+    fun findByTrigger(
+        type: String,
+        data: Int,
+        source: String? = null,
+        channel: Int = -1
+    ): SequencerCell? = when (type) {
+        TRIGGER_CC -> findByCC(data, source, channel)
+        TRIGGER_PITCH_BEND -> findByPitchBend(source, channel)
+        TRIGGER_PROGRAM_CHANGE -> findByProgramChange(data, source, channel)
+        else -> findByNote(data, source, channel)
     }
 
     /**
@@ -311,18 +331,18 @@ class MidiFileMappingStore(private val prefs: SharedPreferences) {
         val cur = get(cellId) ?: return null
         val key = triggerKeyOf(event)
         for (c2 in all()) {
-            if (c2.id != cellId && c2.hasTrigger() && c2.triggerKey() == key) {
+            if (c2.id != cellId && c2.hasTrigger() && c2.triggerKey() == key && c2.triggerSource == event.source && c2.triggerChannel == event.channel) {
                 set(c2.copy(triggerType = TRIGGER_NOTE, ccNumber = null, programNumber = null, note = -1))
             }
         }
         val updated = when (event) {
             is LearnedEvent.Note ->
-                cur.copy(note = event.note, triggerType = TRIGGER_NOTE, ccNumber = null, programNumber = null)
+                cur.copy(note = event.note, triggerType = TRIGGER_NOTE, ccNumber = null, programNumber = null, triggerSource = event.source, triggerChannel = event.channel)
             is LearnedEvent.CC ->
-                cur.copy(note = -1, triggerType = TRIGGER_CC, ccNumber = event.ccNumber, programNumber = null)
-            is LearnedEvent.PitchBend ->
-                cur.copy(note = -1, triggerType = TRIGGER_PITCH_BEND, ccNumber = null, programNumber = null)
-            is LearnedEvent.ProgramChange -> cur.copy(note = -1, triggerType = TRIGGER_PROGRAM_CHANGE, ccNumber = null, programNumber = event.program)
+                cur.copy(note = -1, triggerType = TRIGGER_CC, ccNumber = event.ccNumber, programNumber = null, triggerSource = event.source, triggerChannel = event.channel)
+            is LearnedEvent.PitchBend, is LearnedEvent.PitchBendEvent ->
+                cur.copy(note = -1, triggerType = TRIGGER_PITCH_BEND, ccNumber = null, programNumber = null, triggerSource = event.source, triggerChannel = event.channel)
+            is LearnedEvent.ProgramChange -> cur.copy(note = -1, triggerType = TRIGGER_PROGRAM_CHANGE, ccNumber = null, programNumber = event.program, triggerSource = event.source, triggerChannel = event.channel)
         }
         set(updated)
         return updated
@@ -383,12 +403,14 @@ object MidiFileLearnState {
         }
     }
 
-    fun captureNote(note: Int) = capture(LearnedEvent.Note(note))
+    fun captureNote(note: Int, source: String? = null, channel: Int = -1) = capture(LearnedEvent.Note(note, source, channel))
 
-    fun captureCC(ccNumber: Int) = capture(LearnedEvent.CC(ccNumber))
+    fun captureCC(ccNumber: Int, source: String? = null, channel: Int = -1) = capture(LearnedEvent.CC(ccNumber, source, channel))
 
-    fun capturePitchBend() = capture(LearnedEvent.PitchBend)
-    fun captureProgramChange(program: Int) = capture(LearnedEvent.ProgramChange(program))
+    fun capturePitchBend(source: String? = null, channel: Int = -1) = capture(
+        if (source == null && channel < 0) LearnedEvent.PitchBend else LearnedEvent.PitchBendEvent(source, channel)
+    )
+    fun captureProgramChange(program: Int, source: String? = null, channel: Int = -1) = capture(LearnedEvent.ProgramChange(program, source, channel))
 
     private fun capture(event: LearnedEvent) {
         val callback = synchronized(this) {
