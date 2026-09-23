@@ -199,9 +199,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // SAF document creator for .pseq project save
+    // Keep project extension as .pseq. Using application/zip makes DocumentsUI
+    // append .zip to the suggested filename even though ZIP is only the
+    // internal container format.
     private val saveProjectLauncher = registerForActivityResult(
-        ActivityResultContracts.CreateDocument("application/zip")
+        ActivityResultContracts.CreateDocument("application/x-piano-sequencer")
     ) { uri ->
         if (uri != null) saveProjectToUri(uri)
     }
