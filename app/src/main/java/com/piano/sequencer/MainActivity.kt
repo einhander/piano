@@ -636,6 +636,9 @@ class MainActivity : AppCompatActivity() {
             override fun onChannelPressure(channel: Int, value: Int) {
                 sendToTargets(0xD0, value, 0, intArrayOf(channel))
             }
+            override fun onSysEx(bytes: ByteArray, source: String) {
+                MidiFileTriggerController.get(this@MainActivity).onSysEx(bytes, source)
+            }
         })
 
         // Setup MIDI device manager
@@ -1014,7 +1017,7 @@ class MainActivity : AppCompatActivity() {
                     soundFont = soundFont,
                     channels = channels,
                     cells = cells.map {
-                         PseqCell(id = it.id, note = it.note, filePath = it.filePath, loop = it.loop, tempo = it.tempo, channel = it.channel, triggerSource = it.triggerSource, triggerChannel = it.triggerChannel, triggerType = it.triggerType, ccNumber = it.ccNumber, programNumber = it.programNumber)
+                          PseqCell(id = it.id, note = it.note, filePath = it.filePath, loop = it.loop, tempo = it.tempo, channel = it.channel, triggerSource = it.triggerSource, triggerChannel = it.triggerChannel, triggerType = it.triggerType, ccNumber = it.ccNumber, programNumber = it.programNumber, sysexBytes = it.sysexBytes)
                      }
                 )
 
@@ -1100,7 +1103,8 @@ class MainActivity : AppCompatActivity() {
                             triggerChannel = cell.triggerChannel,
                             triggerType = cell.triggerType,
                             ccNumber = cell.ccNumber,
-                            programNumber = cell.programNumber
+                            programNumber = cell.programNumber,
+                            sysexBytes = cell.sysexBytes
                         )
                     )
                 }

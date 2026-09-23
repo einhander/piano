@@ -45,7 +45,8 @@ data class PseqCell(
     val triggerChannel: Int = -1,
     val triggerType: String = "NOTE", // NOTE / CC / PITCH_BEND / PROGRAM_CHANGE
     val ccNumber: Int? = null,
-    val programNumber: Int? = null
+    val programNumber: Int? = null,
+    val sysexBytes: List<Int> = emptyList()
 )
 
 @Serializable
@@ -152,7 +153,7 @@ object PseqArchive {
 
     // Migration hook for future format versions (v2 → add a branch here).
     private fun migrate(doc: PseqDocument): PseqDocument = when (doc.formatVersion) {
-        FORMAT_VERSION -> doc
+        FORMAT_VERSION -> doc.copy(cells = doc.cells.map { if (it.triggerType == "SYSEX") it.copy(triggerChannel = -1) else it })
         else -> throw PseqFormatException("unsupported format version ${doc.formatVersion}")
     }
 
@@ -175,6 +176,8 @@ object PseqArchive {
             if (cell.triggerType == "PROGRAM_CHANGE" && cell.programNumber !in 0..127) {
                 throw PseqFormatException("Invalid document: cell ${cell.id} has invalid program number ${cell.programNumber}")
             }
+            if (cell.triggerType == "SYSEX" && (cell.sysexBytes.size < 2 || cell.sysexBytes.any { it !in 0..255 } || cell.sysexBytes.firstOrNull() != 0xf0 || cell.sysexBytes.lastOrNull() != 0xf7))
+                throw PseqFormatException("Invalid document: cell ${cell.id} has invalid SysEx")
         }
     }
 

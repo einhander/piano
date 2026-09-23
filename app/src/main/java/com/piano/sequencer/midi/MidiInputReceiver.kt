@@ -24,6 +24,7 @@ class MidiInputReceiver private constructor(
         fun onProgramChange(channel: Int, program: Int, source: String = "unknown")
         fun onPitchBend(channel: Int, value: Int, source: String = "unknown")
         fun onChannelPressure(channel: Int, value: Int)
+        fun onSysEx(bytes: ByteArray, source: String = "unknown")
     }
 
     private var lastEmptyTraceMs = 0L
@@ -88,6 +89,11 @@ class MidiInputReceiver private constructor(
                 override fun onChannelPressure(channel: Int, value: Int) {
                     parsedEvents++
                     safe { cb.onChannelPressure(channel, value) }
+                }
+                override fun onSysEx(bytes: ByteArray) {
+                    parsedEvents++
+                    AppLogger.info("MIDI", "Parsed SYSEX source=$source bytes=${bytes.joinToString("") { "%02X".format(it.toInt() and 255) }}")
+                    safe { cb.onSysEx(bytes, source) }
                 }
             })
         } catch (e: Exception) {

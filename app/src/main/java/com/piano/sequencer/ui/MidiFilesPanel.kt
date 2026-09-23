@@ -28,6 +28,7 @@ import com.piano.sequencer.midi.TRIGGER_CC
 import com.piano.sequencer.midi.TRIGGER_NOTE
 import com.piano.sequencer.midi.TRIGGER_PITCH_BEND
 import com.piano.sequencer.midi.TRIGGER_PROGRAM_CHANGE
+import com.piano.sequencer.midi.TRIGGER_SYSEX
 import com.piano.sequencer.midi.noteToName
 import java.io.File
 
@@ -256,6 +257,7 @@ class MidiFilesPanel @JvmOverloads constructor(
                 TRIGGER_CC -> "CC ${cell.ccNumber}"
                 TRIGGER_PITCH_BEND -> "PB"
                 TRIGGER_PROGRAM_CHANGE -> "PC ${cell.programNumber}"
+                TRIGGER_SYSEX -> "SysEx"
                 else -> if (cell.note >= 0) noteToName(cell.note) else "—"
             }
             textSize = 12f
@@ -501,7 +503,7 @@ class MidiFilesPanel @JvmOverloads constructor(
                 // via the encoded trigger key (works for all three trigger types).
                 val cur = store.get(cell.id) ?: return@setOnClickListener
                 val key = cur.triggerKey()
-                store.set(cur.copy(triggerType = TRIGGER_NOTE, ccNumber = null, programNumber = null, note = -1))
+                store.set(cur.copy(triggerType = TRIGGER_NOTE, ccNumber = null, programNumber = null, sysexBytes = emptyList(), note = -1))
                 onNoteUnlearned(key)
             } else {
                 // LEARN: first event of ANY type wins (note, CC, or pitch bend).

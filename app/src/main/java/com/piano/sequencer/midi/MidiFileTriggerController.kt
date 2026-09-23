@@ -287,6 +287,33 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         return true
     }
 
+    /** Proprietary SysEx is an exact, channel-less press event. Never forward to synth. */
+    fun onSysEx(bytes: ByteArray, source: String? = null): Boolean {
+        if (service?.recordingAllowsTriggers() == false) return false
+        if (bytes.size < 2 || bytes.first().toInt() and 255 != 0xf0 || bytes.last().toInt() and 255 != 0xf7) return false
+        if (MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+            AppLogger.info("MIDI", "MIDI IN SYSEX source=$source bytes=${bytes.joinToString("") { "%02X".format(it.toInt() and 255) }}")
+            MidiFileLearnState.captureSysEx(bytes, source)
+            return true
+        }
+        val cell = store?.findBySysEx(bytes, source) ?: return false
+        val key = cell.triggerKey()
+        if (cell.mode == MODE_CHORD) {
+            when (noteStateMachine.press(key, true)) {
+                NoteToggleStateMachine.Result.TOGGLE_ON -> playChord(cell, 127)
+                NoteToggleStateMachine.Result.TOGGLE_OFF -> stopChord(key)
+                NoteToggleStateMachine.Result.IGNORED -> {}
+            }
+            return true
+        }
+        when (noteStateMachine.press(key, cell.loop)) {
+            NoteToggleStateMachine.Result.TOGGLE_ON -> triggerSlot(cell)
+            NoteToggleStateMachine.Result.TOGGLE_OFF -> stopSlotForTrigger(key)
+            NoteToggleStateMachine.Result.IGNORED -> {}
+        }
+        return true
+    }
+
     private fun logLearnNote(channel: Int, note: Int, velocity: Int) {
         AppLogger.info("MIDI", "MIDI IN NOTE ch=${channel + 1} note=$note velocity=$velocity")
     }
@@ -320,7 +347,10 @@ class MidiFileTriggerController private constructor(appContext: Context) {
             cell.triggerSource,
             cell.triggerChannel
         )
-        if (current == null || current.filePath != cell.filePath) return
+        val exactCurrent = if (cell.triggerType == TRIGGER_SYSEX) {
+            store?.findBySysEx(cell.sysexBytes.map { it.toByte() }.toByteArray(), cell.triggerSource)
+        } else current
+        if (exactCurrent == null || exactCurrent.filePath != cell.filePath) return
 
         slotExecutor.execute {
             val svc = service ?: return@execute
@@ -645,8 +675,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         slotExecutor.execute {
             val svc = service ?: return@execute
             val slot = triggerSlotMap[key] ?: return@execute
-            val (triggerType, triggerData) = decodeTriggerKey(key) ?: return@execute
-            val cell = store?.findByTrigger(triggerType, triggerData) ?: return@execute
+            val cell = store?.all()?.firstOrNull { it.triggerKey() == key } ?: return@execute
             synchronized(slotLocks[slot]) {
                 // Live loop/tempo
                 svc.setMidiFileSlotLoop(slot, loop)
