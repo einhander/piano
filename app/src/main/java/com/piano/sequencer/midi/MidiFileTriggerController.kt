@@ -299,9 +299,14 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         val cell = store?.findBySysEx(bytes, source) ?: return false
         val key = cell.triggerKey()
         if (cell.mode == MODE_CHORD) {
-            when (noteStateMachine.press(key, true)) {
-                NoteToggleStateMachine.Result.TOGGLE_ON -> playChord(cell, 127)
-                NoteToggleStateMachine.Result.TOGGLE_OFF -> stopChord(key)
+            // SysEx is a press-only event: there is no release to arm a toggle.
+            // Treat every press as a chord retrigger, matching note-on chord mode.
+            when (noteStateMachine.press(key, loop = false)) {
+                NoteToggleStateMachine.Result.TOGGLE_ON -> {
+                    stopChord(key)
+                    playChord(cell, 127)
+                }
+                NoteToggleStateMachine.Result.TOGGLE_OFF,
                 NoteToggleStateMachine.Result.IGNORED -> {}
             }
             return true
