@@ -1129,29 +1129,34 @@ class MainActivity : AppCompatActivity() {
                 val loadedPaths = mutableListOf<String>()
                 if (sf2Names.isNotEmpty()) {
                     val svc = playbackService
-                    if (svc != null) {
-                        // Replace: unload all, then load the project's fonts.
-                        svc.unloadSoundFonts()
-                    }
-                    for (sf2Name in sf2Names) {
-                        // User-provided archive data: reject path separators.
-                        if (sf2Name.contains('/')) {
-                            sf2Missing = true
-                            continue
+                    val wasPlaying = svc?.isAudioPlaying() == true
+                    if (wasPlaying) svc?.stopAudioForMaintenance()
+                    try {
+                        if (svc != null) {
+                            // Replace: unload all, then load the project's fonts.
+                            svc.unloadSoundFonts()
                         }
-                        val sf2File = File(extDir, sf2Name)
-                        if (sf2File.exists()) {
-                            val svc = playbackService
-                            val id = svc?.loadSoundFont(sf2File.absolutePath) ?: -1
-                            if (id >= 0 || svc == null) {
-                                loadedPaths.add(sf2File.absolutePath)
-                            } else {
-                                sf2Unavailable = true
-                                AppLogger.warn("MainActivity", "Failed to load SF2 on project load: ${sf2File.absolutePath} (error: $id)")
+                        for (sf2Name in sf2Names) {
+                            // User-provided archive data: reject path separators.
+                            if (sf2Name.contains('/')) {
+                                sf2Missing = true
+                                continue
                             }
-                        } else {
-                            sf2Missing = true
+                            val sf2File = File(extDir, sf2Name)
+                            if (sf2File.exists()) {
+                                val id = svc?.loadSoundFont(sf2File.absolutePath) ?: -1
+                                if (id >= 0 || svc == null) {
+                                    loadedPaths.add(sf2File.absolutePath)
+                                } else {
+                                    sf2Unavailable = true
+                                    AppLogger.warn("MainActivity", "Failed to load SF2 on project load: ${sf2File.absolutePath} (error: $id)")
+                                }
+                            } else {
+                                sf2Missing = true
+                            }
                         }
+                    } finally {
+                        if (wasPlaying) svc?.restartAfterMaintenance()
                     }
                 }
 
