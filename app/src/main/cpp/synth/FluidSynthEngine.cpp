@@ -109,19 +109,17 @@ void FluidSynthEngine::applyDesiredState(fluid_synth_t* synth) {
 }
 
 // M3: free the old active slot's SF2 (now inactive). Worker thread, called
-// AFTER the flip. Waits (bounded) for the audio thread to finish its current
+// AFTER the flip. Waits for the audio thread to finish its current
 // callback (mSynthSeq even), then unloads the SF2. The audio thread provably
 // doesn't touch the old active slot post-flip (render/processOneMidi/
 // endSynthAccess all re-load mActiveIndex; processCommands skips the
-// preparing slot). Bounded wait: the worker yields (it is NOT the audio
-// callback, so yielding is fine).
+// preparing slot). The worker yields while waiting (it is NOT the audio
+// callback, so blocking the worker is safe).
 void FluidSynthEngine::freeOldActiveSlotSf2(int oldActive) {
     // Wait for the audio thread to finish its current callback (mSynthSeq
-    // even). Bounded: one callback period (~10ms); the worker yields.
-    int spins = 0;
-    while ((mSynthSeq.load(std::memory_order_acquire) & 1) && spins < 10000) {
+    // even). Never unload on timeout: that would reintroduce use-after-free.
+    while (mSynthSeq.load(std::memory_order_acquire) & 1) {
         std::this_thread::yield();
-        spins++;
     }
     fluid_synth_t* oldSynth = mSynth[oldActive];
     if (oldSynth) {
@@ -140,7 +138,8 @@ void FluidSynthEngine::freeOldActiveSlotSf2(int oldActive) {
 // all loads failed). The target is the slot the audio thread is NOT rendering
 // from, so this never races with the audio thread (M2: the mPreparing flag
 // makes processCommands skip the target slot).
-int FluidSynthEngine::prepareInactiveSlot(const std::vector<std::string>& sfPaths) {
+int FluidSynthEngine::prepareInactiveSlot(const std::vector<std::string>& sfPaths,
+                                           std::vector<std::string>* loadedPaths) {
     int target = 1 - mActiveIndex.load(std::memory_order_acquire);
     fluid_synth_t* synth = mSynth[target];
     if (!synth) {
@@ -173,6 +172,7 @@ int FluidSynthEngine::prepareInactiveSlot(const std::vector<std::string>& sfPath
             std::memory_order_relaxed);
         if (sfId >= 0) {
             lastSfId = sfId;
+            if (loadedPaths) loadedPaths->push_back(path);
         }
     }
 
@@ -184,12 +184,14 @@ int FluidSynthEngine::prepareInactiveSlot(const std::vector<std::string>& sfPath
     // next callback. (Side effect: active voices are reset — acceptable, this
     // is a setup operation and the old code also reset presets on load.)
     int oldActive = mActiveIndex.load(std::memory_order_acquire);
+    mPreparing[oldActive].store(true, std::memory_order_release);
     mActiveIndex.store(target, std::memory_order_release);
 
     // M3: free the old active slot's SF2 (now inactive) — keeps 1× the SF2 set
     // resident instead of 2× (a 150MB SF2 would otherwise be 300MB on a 2GB
     // device).
     freeOldActiveSlotSf2(oldActive);
+    mPreparing[oldActive].store(false, std::memory_order_release);
 
     // M2: clear the preparing flag (after the M3 free, so processCommands
     // skips the target slot for the entire preparation).
@@ -260,10 +262,12 @@ void FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
     // Flip the active index — the audio thread picks up the new synth on the
     // next callback.
     int oldActive = mActiveIndex.load(std::memory_order_acquire);
+    mPreparing[oldActive].store(true, std::memory_order_release);
     mActiveIndex.store(target, std::memory_order_release);
 
     // M3: free the old active slot's SF2 (now inactive).
     freeOldActiveSlotSf2(oldActive);
+    mPreparing[oldActive].store(false, std::memory_order_release);
 
     // M2: clear the preparing flag.
     mPreparing[target].store(false, std::memory_order_release);
@@ -297,9 +301,10 @@ int FluidSynthEngine::loadSoundFont(const char* filePath) {
     }
     sfPaths.push_back(filePath);
 
-    int lastSfId = prepareInactiveSlot(sfPaths);
+    std::vector<std::string> loadedPaths;
+    int lastSfId = prepareInactiveSlot(sfPaths, &loadedPaths);
     if (lastSfId >= 0) {
-        rebuildLoadedSf2List();
+        rebuildLoadedSf2List(loadedPaths);
     }
     return lastSfId;
 }
@@ -326,8 +331,9 @@ bool FluidSynthEngine::unloadSoundFont(int sfId) {
     }
     if (!found) return false;
 
-    prepareInactiveSlot(sfPaths);
-    rebuildLoadedSf2List();
+    std::vector<std::string> loadedPaths;
+    prepareInactiveSlot(sfPaths, &loadedPaths);
+    rebuildLoadedSf2List(loadedPaths);
     return true;
 }
 
@@ -340,7 +346,7 @@ void FluidSynthEngine::unloadSoundFonts() {
     prepareInactiveSlot(std::vector<std::string>{});
 }
 
-void FluidSynthEngine::rebuildLoadedSf2List() {
+void FluidSynthEngine::rebuildLoadedSf2List(const std::vector<std::string>& loadedPaths) {
     std::vector<Sf2Entry> rebuilt;
     while (true) {
         uint32_t s1 = mSynthSeq.load(std::memory_order_acquire);
@@ -357,8 +363,9 @@ void FluidSynthEngine::rebuildLoadedSf2List() {
                 fluid_sfont_t* sfont = fluid_synth_get_sfont(synth, i);
                 if (!sfont) continue;
                 int id = fluid_sfont_get_id(sfont);
-                const char* name = fluid_sfont_get_name(sfont);
-                rebuilt.push_back({id, std::string(name ? name : "")});
+                if (static_cast<size_t>(i) < loadedPaths.size()) {
+                    rebuilt.push_back({id, loadedPaths[static_cast<size_t>(i)]});
+                }
             }
         }
         uint32_t s2 = mSynthSeq.load(std::memory_order_acquire);

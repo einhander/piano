@@ -39,9 +39,11 @@ struct InstrumentInfo {
 //     double-buffered synth: two pre-allocated fluid_synth_t slots. The worker
 //     prepares the INACTIVE slot (the one the audio thread is not rendering
 //     from) and then atomically flips mActiveIndex. The audio thread picks up
-//     the new synth on the next callback. No waiting, no locks. (Side effect:
-//     loading/unloading an SF2 resets the active voices — acceptable, it is a
-//     setup operation, and the old code also reset presets on load.)
+//     the new synth on the next callback. The worker waits for the current
+//     callback to finish before releasing the old slot; the audio path takes
+//     no locks. (Side effect: loading/unloading an SF2 resets the active voices
+//     — acceptable, it is a setup operation, and the old code also reset
+//     presets on load.)
 //  3. getInstruments() (SF2 preset enumeration, worker thread) reads the active
 //     synth. It is synchronized with the audio thread via a sequence lock
 //     (mSynthSeq): the audio thread increments it around its synth access
@@ -198,12 +200,13 @@ private:
     // in order. Returns the sfId of the LAST loaded SF2 (or -1 if the list is
     // empty / all loads failed). Flips mActiveIndex and frees the old active
     // slot's SF2s (M3). Used by loadSoundFont (additive) and unloadSoundFont.
-    int prepareInactiveSlot(const std::vector<std::string>& sfPaths);
+    int prepareInactiveSlot(const std::vector<std::string>& sfPaths,
+                            std::vector<std::string>* loadedPaths = nullptr);
 
     // Rebuild mLoadedSf2s from the now-active synth (fresh ids after a slot
     // swap). Enumerated under the sequence lock (audio thread may render).
     // Worker thread, caller holds mWorkerMutex.
-    void rebuildLoadedSf2List();
+    void rebuildLoadedSf2List(const std::vector<std::string>& loadedPaths);
 
     // M2: apply the current desired state (polyphony/gain/reverb/chorus/
     // interps/channel programs) to one synth slot. Worker thread, called
@@ -211,7 +214,7 @@ private:
     void applyDesiredState(fluid_synth_t* synth);
 
     // M3: free the old active slot's SF2 (now inactive). Worker thread, called
-    // AFTER the flip. Waits (bounded) for the audio thread to finish its
+    // AFTER the flip. Waits for the audio thread to finish its
     // current callback (mSynthSeq even), then unloads the SF2. The audio
     // thread provably doesn't touch the old active slot post-flip.
     void freeOldActiveSlotSf2(int oldActive);
