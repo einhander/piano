@@ -54,6 +54,9 @@ struct InstrumentInfo {
 // (processOneMidi), pre-allocated, no locks.
 class FluidSynthEngine {
 public:
+    // Callback admission: exactly one non-blocking attempt per callback.
+    bool tryEnterAudioCallback();
+    void leaveAudioCallback();
     FluidSynthEngine();
     ~FluidSynthEngine();
 
@@ -192,6 +195,20 @@ public:
     int getLastRearmVelocity() const { return mLastRearmVel; }
 
 private:
+    class WorkerAccessGuard {
+    public:
+        explicit WorkerAccessGuard(FluidSynthEngine& engine);
+        ~WorkerAccessGuard();
+        WorkerAccessGuard(const WorkerAccessGuard&) = delete;
+        WorkerAccessGuard& operator=(const WorkerAccessGuard&) = delete;
+    private:
+        FluidSynthEngine& mEngine;
+        std::unique_lock<std::mutex> mWorkerLock;
+    };
+
+    static constexpr uint32_t kAudioGateBit = uint32_t{1} << 31;
+    static constexpr uint32_t kAudioReaderMask = ~kAudioGateBit;
+    std::atomic<uint32_t> mAudioAccess{0};
     // Apply a single control command to one synth slot.
     void applyCommandToSynth(fluid_synth_t* synth, const SynthCmd& cmd);
 

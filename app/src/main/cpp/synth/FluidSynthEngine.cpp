@@ -15,7 +15,31 @@ FluidSynthEngine::FluidSynthEngine() {
     }
 }
 
+bool FluidSynthEngine::tryEnterAudioCallback() {
+    uint32_t state = mAudioAccess.load(std::memory_order_relaxed);
+    if (state & kAudioGateBit) return false;
+    return mAudioAccess.compare_exchange_strong(state, state + 1,
+        std::memory_order_acquire, std::memory_order_relaxed);
+}
+
+void FluidSynthEngine::leaveAudioCallback() {
+    mAudioAccess.fetch_sub(1, std::memory_order_release);
+}
+
+FluidSynthEngine::WorkerAccessGuard::WorkerAccessGuard(FluidSynthEngine& engine)
+    : mEngine(engine), mWorkerLock(engine.mWorkerMutex) {
+    mEngine.mAudioAccess.fetch_or(kAudioGateBit, std::memory_order_acq_rel);
+    while ((mEngine.mAudioAccess.load(std::memory_order_acquire) & kAudioReaderMask) != 0) {
+        std::this_thread::yield();
+    }
+}
+
+FluidSynthEngine::WorkerAccessGuard::~WorkerAccessGuard() {
+    mEngine.mAudioAccess.fetch_and(kAudioReaderMask, std::memory_order_release);
+}
+
 FluidSynthEngine::~FluidSynthEngine() {
+    WorkerAccessGuard workerAccess(*this);
     for (int i = 0; i < kSynthSlots; i++) {
         if (mSynth[i]) {
             delete_fluid_synth(mSynth[i]);
@@ -29,6 +53,7 @@ FluidSynthEngine::~FluidSynthEngine() {
 }
 
 bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
+    WorkerAccessGuard workerAccess(*this);
     // m8: free whatever was created if a later slot fails to allocate
     // (previously slot 0's settings/synth leaked when slot 1's failed).
     auto cleanup = [this]() {
@@ -211,7 +236,7 @@ void FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
     if (!mInitialized.load()) return;
     // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
     // Worker-thread blocking is allowed; the audio thread never takes this lock.
-    std::lock_guard<std::mutex> workerLock(mWorkerMutex);
+    WorkerAccessGuard workerAccess(*this);
     int target = 1 - mActiveIndex.load(std::memory_order_acquire);
 
     // M2: mark the target slot as "preparing" so the audio thread's
@@ -285,7 +310,7 @@ int FluidSynthEngine::loadSoundFont(const char* filePath) {
     }
     // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
     // Worker-thread blocking is allowed; the audio thread never takes this lock.
-    std::lock_guard<std::mutex> workerLock(mWorkerMutex);
+    WorkerAccessGuard workerAccess(*this);
 
     // Additive: build the target SF2 list = currently-loaded paths + the new
     // one. prepareInactiveSlot reloads them all into the inactive slot, then
@@ -313,7 +338,7 @@ bool FluidSynthEngine::unloadSoundFont(int sfId) {
     if (!mInitialized.load()) return false;
     if (sfId < 0) return false;
     // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
-    std::lock_guard<std::mutex> workerLock(mWorkerMutex);
+    WorkerAccessGuard workerAccess(*this);
 
     // Build the target SF2 list = currently-loaded paths MINUS the one to drop.
     std::vector<std::string> sfPaths;
@@ -340,7 +365,7 @@ bool FluidSynthEngine::unloadSoundFont(int sfId) {
 void FluidSynthEngine::unloadSoundFonts() {
     if (!mInitialized.load()) return;
     // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
-    std::lock_guard<std::mutex> workerLock(mWorkerMutex);
+    WorkerAccessGuard workerAccess(*this);
     { std::lock_guard<std::mutex> lock(mSfPathMutex); mLoadedSf2s.clear(); }
     // Unload all SF2s from the inactive slot and flip to it (active = no SF2).
     prepareInactiveSlot(std::vector<std::string>{});
@@ -720,22 +745,9 @@ int FluidSynthEngine::getInterps() const { return mInterps.load(); }
 int FluidSynthEngine::getActiveVoices() const { return mActiveVoices.load(); }
 
 int FluidSynthEngine::getSoundFontCount() const {
-    // Read the active synth's SF2 count under the sequence lock (the audio
-    // thread may be rendering from it). Spin (with yield) until consistent.
-    while (true) {
-        uint32_t s1 = mSynthSeq.load(std::memory_order_acquire);
-        if (s1 & 1) {
-            std::this_thread::yield();
-            continue;
-        }
-        int idx = mActiveIndex.load(std::memory_order_acquire);
-        int count = mSynth[idx] ? fluid_synth_sfcount(mSynth[idx]) : 0;
-        uint32_t s2 = mSynthSeq.load(std::memory_order_acquire);
-        if (s1 == s2) {
-            return count;
-        }
-        // Inconsistent read — retry
-    }
+    WorkerAccessGuard workerAccess(*const_cast<FluidSynthEngine*>(this));
+    int idx = mActiveIndex.load(std::memory_order_acquire);
+    return mSynth[idx] ? fluid_synth_sfcount(mSynth[idx]) : 0;
 }
 
 std::string FluidSynthEngine::getSoundFontPath() const {
@@ -757,40 +769,25 @@ std::vector<FluidSynthEngine::LoadedSf2> FluidSynthEngine::getLoadedSoundFonts()
 
 std::vector<InstrumentInfo> FluidSynthEngine::getInstruments() const {
     if (!mInitialized.load()) return {};
+    WorkerAccessGuard workerAccess(*const_cast<FluidSynthEngine*>(this));
     std::vector<InstrumentInfo> result;
-    // Enumerate the active synth's presets under the sequence lock (the audio
-    // thread may be rendering from it). Spin (with yield) until a consistent
-    // read. One-shot UI operation; not for playback.
-    while (true) {
-        uint32_t s1 = mSynthSeq.load(std::memory_order_acquire);
-        if (s1 & 1) {
-            std::this_thread::yield();
-            continue;
-        }
-        int idx = mActiveIndex.load(std::memory_order_acquire);
-        fluid_synth_t* synth = mSynth[idx];
-        if (synth) {
-            result.reserve(256);
-            int sfCount = fluid_synth_sfcount(synth);
-            for (int i = 0; i < sfCount; i++) {
-                fluid_sfont_t* sfont = fluid_synth_get_sfont(synth, i);
-                if (!sfont) continue;
-                fluid_sfont_iteration_start(sfont);
-                fluid_preset_t* preset;
-                while ((preset = fluid_sfont_iteration_next(sfont)) != nullptr) {
-                    const char* name = fluid_preset_get_name(preset);
-                    result.push_back({name ? name : "",
-                                      fluid_preset_get_banknum(preset),
-                                      fluid_preset_get_num(preset)});
-                }
+    int idx = mActiveIndex.load(std::memory_order_acquire);
+    fluid_synth_t* synth = mSynth[idx];
+    if (synth) {
+        result.reserve(256);
+        int sfCount = fluid_synth_sfcount(synth);
+        for (int i = 0; i < sfCount; i++) {
+            fluid_sfont_t* sfont = fluid_synth_get_sfont(synth, i);
+            if (!sfont) continue;
+            fluid_sfont_iteration_start(sfont);
+            fluid_preset_t* preset;
+            while ((preset = fluid_sfont_iteration_next(sfont)) != nullptr) {
+                const char* name = fluid_preset_get_name(preset);
+                result.push_back({name ? name : "",
+                                  fluid_preset_get_banknum(preset),
+                                  fluid_preset_get_num(preset)});
             }
         }
-        uint32_t s2 = mSynthSeq.load(std::memory_order_acquire);
-        if (s1 == s2) {
-            break;  // consistent read
-        }
-        // Inconsistent read — discard and retry
-        result.clear();
     }
     return result;
 }
