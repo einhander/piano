@@ -3,6 +3,7 @@
 #include <cstring>
 #include <thread>
 #include <chrono>
+#include <omp.h>
 
 // ── Lock-free design (see FluidSynthEngine.h for the full rationale) ─────────
 // ALL fluid_synth_* calls happen on the audio thread (the only thread that
@@ -32,6 +33,9 @@ FluidSynthEngine::WorkerAccessGuard::WorkerAccessGuard(FluidSynthEngine& engine)
     while ((mEngine.mAudioAccess.load(std::memory_order_acquire) & kAudioReaderMask) != 0) {
         std::this_thread::yield();
     }
+    // OpenMP team sizing is per-thread. Limit FluidSynth worker-side SF2
+    // loading/maintenance without changing OpenMP behavior on Oboe callback.
+    omp_set_num_threads(1);
 }
 
 FluidSynthEngine::WorkerAccessGuard::~WorkerAccessGuard() {
