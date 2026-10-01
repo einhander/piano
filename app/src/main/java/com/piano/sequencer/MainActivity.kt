@@ -515,6 +515,13 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(this@MainActivity, SequencerActivity::class.java))
             }
         })
+        layout.addView(Button(this).apply {
+            text = "Exit"
+            setOnClickListener {
+                stopService(Intent(this@MainActivity, PlaybackService::class.java))
+                finishAffinity()
+            }
+        })
         setContentView(layout)
 
         midiStatusText = TextView(this).apply {
