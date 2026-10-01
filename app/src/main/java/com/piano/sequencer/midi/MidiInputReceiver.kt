@@ -60,6 +60,21 @@ class MidiInputReceiver private constructor(
             AppLogger.warn("MidiInputReceiver", "MIDI input received with no callback source=$source")
             return
         }
+        val traceStart = offset.coerceIn(0, data.size)
+        val traceEnd = (offset.toLong() + length.toLong())
+            .coerceIn(traceStart.toLong(), data.size.toLong()).toInt()
+        val sysexMarkers = (traceStart until traceEnd).filter {
+            (data[it].toInt() and 0xff) == 0xf0 || (data[it].toInt() and 0xff) == 0xf7
+        }
+        if (sysexMarkers.isNotEmpty()) {
+            val bytesEnd = minOf(traceEnd.toLong(), traceStart.toLong() + 32L).toInt()
+            val hex = data.copyOfRange(traceStart, bytesEnd)
+                .joinToString(" ") { "%02X".format(it.toInt() and 255) }
+            AppLogger.info(
+                "MidiInputReceiver",
+                "MIDI SYSEX boundary source=$source offset=$offset length=$length markers=${sysexMarkers.map { it - offset }} bytes=[$hex]"
+            )
+        }
         var parsedEvents = 0
         try {
             parser.parse(data, offset, length, object : MidiMessageParser.Handler {
@@ -104,15 +119,12 @@ class MidiInputReceiver private constructor(
             val now = SystemClock.elapsedRealtime()
             if (now - lastEmptyTraceMs >= 1000) {
                 lastEmptyTraceMs = now
-                val traceStart = offset.coerceIn(0, data.size)
-                val requestedEnd = offset.toLong() + length.toLong()
-                val end = requestedEnd.coerceIn(traceStart.toLong(), data.size.toLong()).toInt()
-                val traceEnd = minOf(end.toLong(), traceStart.toLong() + 16L).toInt()
-                val hex = data.copyOfRange(traceStart, traceEnd)
+                val emptyTraceEnd = minOf(traceEnd.toLong(), traceStart.toLong() + 16L).toInt()
+                val emptyHex = data.copyOfRange(traceStart, emptyTraceEnd)
                     .joinToString(" ") { "%02X".format(it.toInt() and 255) }
                 AppLogger.warn(
                     "MidiInputReceiver",
-                    "MIDI buffer produced no supported event source=$source bytes=[$hex] length=$length"
+                    "MIDI buffer produced no supported event source=$source bytes=[$emptyHex] length=$length"
                 )
             }
         }
