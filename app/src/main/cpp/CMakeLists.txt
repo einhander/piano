@@ -23,6 +23,7 @@ set(enable-ladspa OFF CACHE BOOL "")
 set(enable-native-dls OFF CACHE BOOL "")
 set(enable-network OFF CACHE BOOL "")
 set(enable-ipv6 OFF CACHE BOOL "")
+set(enable-openmp OFF CACHE BOOL "" FORCE) # Diagnostic only; revert after device test.
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/fluidsynth ${CMAKE_CURRENT_BINARY_DIR}/fluidsynth)
 
