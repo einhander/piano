@@ -69,6 +69,10 @@ class MidiDeviceManager(
     fun deviceName(info: MidiDeviceInfo): String =
         info.properties.getString("name") ?: "MIDI device ${info.id}"
 
+    private fun outputPortMetadata(info: MidiDeviceInfo): String =
+        info.ports.filter { it.type == MidiDeviceInfo.PortInfo.TYPE_OUTPUT }
+            .joinToString(prefix = "[", postfix = "]") { "${it.portNumber}:${it.name}" }
+
     fun getCurrentDevice(): MidiDeviceInfo? = snapshot.device
 
     fun stableKey(info: MidiDeviceInfo): String {
@@ -92,7 +96,7 @@ class MidiDeviceManager(
 
     fun connect(deviceInfo: MidiDeviceInfo) {
         if (closed) return
-        AppLogger.info("MidiDeviceManager", "Selected MIDI device id=${deviceInfo.id} name=${deviceName(deviceInfo)} outputPorts=${deviceInfo.outputPortCount}")
+        AppLogger.info("MidiDeviceManager", "Selected MIDI device id=${deviceInfo.id} name=${deviceName(deviceInfo)} type=${deviceInfo.type} outputPorts=${outputPortMetadata(deviceInfo)}")
         midiHandler.post {
             val current = snapshot
             if (current.device != null && stableKey(current.device) == stableKey(deviceInfo)) return@post
@@ -130,10 +134,8 @@ class MidiDeviceManager(
             return
         }
         val outputs = mutableListOf<ActiveOutput>()
-        // Preserve the legacy primary-port input stream. Some controllers emit
-        // SysEx on port 0 while exposing pad-note traffic on secondary ports.
-        for (index in 0 until minOf(1, deviceInfo.outputPortCount)) {
-            AppLogger.info("MidiDeviceManager", "Opening output port $index/${deviceInfo.outputPortCount} for device ${deviceInfo.id}")
+        for (index in 0 until deviceInfo.outputPortCount) {
+            AppLogger.info("MidiDeviceManager", "Opening output port $index/${deviceInfo.outputPortCount} for device ${deviceInfo.id} name=${deviceName(deviceInfo)} type=${deviceInfo.type} ports=${outputPortMetadata(deviceInfo)}")
             val port = try {
                 device.openOutputPort(index)
             } catch (e: Exception) {
@@ -152,7 +154,7 @@ class MidiDeviceManager(
                 portReceiver = newReceiver
                 port.connect(newReceiver)
                 outputs += ActiveOutput(index, port, newReceiver)
-                AppLogger.info("MidiDeviceManager", "Connected output port index=$index for device ${deviceInfo.id}")
+                AppLogger.info("MidiDeviceManager", "Connected output port index=$index name=${deviceInfo.ports.firstOrNull { it.type == MidiDeviceInfo.PortInfo.TYPE_OUTPUT && it.portNumber == index }?.name} for device ${deviceInfo.id}")
             } catch (e: Exception) {
                 AppLogger.warn("MidiDeviceManager", "connect receiver failed index=$index: ${e.message}")
                 portReceiver?.deactivate()
@@ -207,6 +209,7 @@ class MidiDeviceManager(
         if (wasActive) {
             if (notify) AppLogger.info("MidiDeviceManager", "Disconnected: device $deviceId")
             outputs.forEach { output ->
+                AppLogger.info("MidiDeviceManager", "Port totals index=${output.portIndex}: ${output.receiver.diagnosticTotals()}")
                 output.receiver.deactivate()
                 try { output.port.disconnect(output.receiver) } catch (e: Exception) {
                     AppLogger.warn("MidiDeviceManager", "Error disconnecting MIDI port index=${output.portIndex}: ${e.message}")

@@ -8,6 +8,10 @@ class MidiInputReceiver private constructor(
     private val callbackHolder: CallbackHolder,
     private val source: String
 ) : MidiReceiver() {
+    companion object {
+        private const val CAPTURE_CALLBACK_LIMIT = 16
+        private const val PREVIEW_BYTE_LIMIT = 64
+    }
     constructor() : this(CallbackHolder(), "unknown")
 
     private class CallbackHolder {
@@ -28,6 +32,14 @@ class MidiInputReceiver private constructor(
     }
 
     private var lastEmptyTraceMs = 0L
+    private var callbackCount = 0L
+    private var byteCount = 0L
+    private var capturedBuffers = 0
+    private var captureLimitLogged = false
+
+    fun diagnosticTotals(): String = synchronized(lifecycleLock) {
+        "callbacks=$callbackCount bytes=$byteCount captured=$capturedBuffers/$CAPTURE_CALLBACK_LIMIT"
+    }
 
     fun createPortReceiver(portIndex: Int, stableSource: String = source): MidiInputReceiver =
         MidiInputReceiver(callbackHolder, "$stableSource|port=$portIndex")
@@ -55,6 +67,24 @@ class MidiInputReceiver private constructor(
     override fun onSend(data: ByteArray, offset: Int, length: Int, timestamp: Long) {
         synchronized(lifecycleLock) {
         if (!active) return
+        if (length > 0) {
+            callbackCount++
+            byteCount += length.toLong()
+            if (capturedBuffers < CAPTURE_CALLBACK_LIMIT) {
+                val captureStart = offset.coerceIn(0, data.size)
+                val captureEnd = (offset.toLong() + length.toLong())
+                    .coerceIn(captureStart.toLong(), data.size.toLong()).toInt()
+                val previewEnd = minOf(captureEnd.toLong(), captureStart.toLong() + PREVIEW_BYTE_LIMIT).toInt()
+                val hex = data.copyOfRange(captureStart, previewEnd)
+                    .joinToString(" ") { "%02X".format(it.toInt() and 0xff) }
+                capturedBuffers++
+                AppLogger.info("MidiInputReceiver", "MIDI ingress source=$source offset=$offset length=$length bytes=[$hex]")
+                if (capturedBuffers == CAPTURE_CALLBACK_LIMIT && !captureLimitLogged) {
+                    captureLimitLogged = true
+                    AppLogger.info("MidiInputReceiver", "MIDI ingress capture limit reached source=$source limit=$CAPTURE_CALLBACK_LIMIT")
+                }
+            }
+        }
         val cb = callbackHolder.callback
         if (cb == null) {
             AppLogger.warn("MidiInputReceiver", "MIDI input received with no callback source=$source")
