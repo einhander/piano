@@ -130,7 +130,9 @@ class MidiDeviceManager(
             return
         }
         val outputs = mutableListOf<ActiveOutput>()
-        for (index in 0 until deviceInfo.outputPortCount) {
+        // Preserve the legacy primary-port input stream. Some controllers emit
+        // SysEx on port 0 while exposing pad-note traffic on secondary ports.
+        for (index in 0 until minOf(1, deviceInfo.outputPortCount)) {
             AppLogger.info("MidiDeviceManager", "Opening output port $index/${deviceInfo.outputPortCount} for device ${deviceInfo.id}")
             val port = try {
                 device.openOutputPort(index)
