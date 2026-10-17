@@ -6,9 +6,14 @@
 
 #include <atomic>
 #include <memory>
+#include <array>
+#include <limits>
 
 namespace piano {
 namespace ladspa {
+
+static_assert(std::atomic<float>::is_always_lock_free,
+              "LADSPA meter snapshots must be lock-free on supported ABIs");
 
 // Adapter that wraps one LADSPA plugin instance as a piano::AudioEffect.
 //
@@ -22,6 +27,9 @@ namespace ladspa {
 // port floats and calls the plugin's run(). No alloc/lock/I/O in process().
 class LadspaEffect : public AudioEffect {
 public:
+    // [inputL,inputR,outputL,outputR,gainReductionL,gainReductionR];
+    // values are linear amplitude. Missing descriptor ports remain NaN.
+    using MeterSnapshot = std::array<float, 6>;
     // slot selects the binding (EQ/Comp/Limiter). The descriptor is looked up
     // from the LadspaRegistry by the factory before construction; if nullptr,
     // the effect is unavailable.
@@ -40,6 +48,7 @@ public:
     const char* stableId() const noexcept override;
     bool isAvailable() const noexcept override;
     int getLatencyFrames() const noexcept override;
+    MeterSnapshot meterSnapshot() const noexcept;
 
     LadspaEffect(const LadspaEffect&) = delete;
     LadspaEffect& operator=(const LadspaEffect&) = delete;
@@ -62,6 +71,11 @@ private:
     int mMaxFrames = 0;
     int mLatencyPort = -1;
     int mLatencyFrames = 0;
+    int mMeterPorts[6] = {-1, -1, -1, -1, -1, -1};
+    std::array<std::atomic<float>, 6> mMeters{{
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN()}};
 
     // The binding for this slot (audio port indexes, bypass/latency ports).
     const lsp::LadspaBinding* mBinding;

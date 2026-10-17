@@ -78,4 +78,5 @@ class EffectRepository(private val service: com.piano.sequencer.service.Playback
     fun setEnabled(slot: Int, enabled: Boolean) = service.setMasterEffectEnabled(slot, enabled)
     fun setParameter(slot: Int, parameterId: Int, value: Float) =
         service.setMasterEffectParameter(slot, parameterId, value)
+    fun meterSnapshot(slot: Int): FloatArray? = service.getMasterEffectMeterSnapshot(slot)
 }

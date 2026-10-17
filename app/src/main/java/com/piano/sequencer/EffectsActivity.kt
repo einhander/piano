@@ -5,6 +5,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.graphics.Typeface
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
 import android.os.Bundle
 import android.os.IBinder
 import android.view.View
@@ -17,6 +20,10 @@ import androidx.core.content.ContextCompat
 import com.piano.sequencer.service.PlaybackService
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
@@ -54,11 +61,15 @@ class EffectsActivity : AppCompatActivity() {
         }
     }
 
-    private val mainExecutor = Executors.newSingleThreadExecutor { r ->
+    private val mainExecutor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "EffectsMain").apply { isDaemon = true }
     }
 
     private lateinit var repository: EffectRepository
+    private var meterView: LevelMeterView? = null
+    private var meterTask: ScheduledFuture<*>? = null
+    private var screenVisible = false
+    private val meterUiUpdatePending = AtomicBoolean(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -78,6 +89,7 @@ class EffectsActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        stopMeterPolling()
         mainExecutor.shutdown()
         super.onDestroy()
         try {
@@ -85,6 +97,38 @@ class EffectsActivity : AppCompatActivity() {
         } catch (_: Exception) {
             // ignore if not bound
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        screenVisible = true
+        startMeterPolling()
+    }
+
+    override fun onStop() {
+        screenVisible = false
+        stopMeterPolling()
+        super.onStop()
+    }
+
+    private fun startMeterPolling() {
+        val view = meterView ?: return
+        val slot = editorSlot ?: return
+        if (!screenVisible || meterTask != null || isFinishing || isDestroyed) return
+        meterTask = mainExecutor.scheduleAtFixedRate({
+            val snapshot = try { repository.meterSnapshot(slot) } catch (_: Throwable) { null }
+            if (screenVisible && !isFinishing && !isDestroyed && meterUiUpdatePending.compareAndSet(false, true)) {
+                runOnUiThread {
+                    if (meterView === view) view.setSnapshot(snapshot)
+                    meterUiUpdatePending.set(false)
+                }
+            }
+        }, 0, 50, TimeUnit.MILLISECONDS)
+    }
+
+    private fun stopMeterPolling() {
+        meterTask?.cancel(true)
+        meterTask = null
     }
 
     override fun onSupportNavigateUp(): Boolean {
@@ -210,10 +254,72 @@ class EffectsActivity : AppCompatActivity() {
         state.text = getString(when { !instance.available -> R.string.master_effects_unavailable_state; instance.enabled -> R.string.master_effects_enabled_state; else -> R.string.master_effects_bypassed_state })
         panel.addView(toggle)
         panel.addView(state)
+        val stableId = instance.descriptor.stableId
+        if (stableId == "lsp.compressor" || stableId == "lsp.limiter") {
+            val meters = LevelMeterView(this, stableId == "lsp.compressor")
+            meterView = meters
+            panel.addView(meters, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, (156 * resources.displayMetrics.density).toInt()
+            ))
+            startMeterPolling()
+        } else if (stableId == "lsp.parametric_eq") {
+            panel.addView(TextView(this).apply {
+                text = "Response unavailable — faithful LSP response data is not connected."
+                textSize = 13f
+                setPadding(0, 12, 0, 12)
+            })
+        }
         instance.parameters.filter { it.writable }.forEach { p ->
             panel.addView(buildParamRow(instance.slot, p, p.value.rawValue, instance.available))
         }
         return panel
+    }
+
+    /** Draws only the six native snapshot values; NaN remains explicitly unavailable. */
+    private class LevelMeterView(context: Context, private val compressor: Boolean) : View(context) {
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xff36a878.toInt() }
+        private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xffe5e9e7.toInt() }
+        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xff24332d.toInt(); textSize = 12f * resources.displayMetrics.density }
+        private var values: FloatArray? = null
+        private val density = resources.displayMetrics.density
+
+        fun setSnapshot(snapshot: FloatArray?) {
+            values = snapshot?.takeIf { it.size >= 6 }?.copyOf(6)
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val labels = arrayOf("Input", "Output", if (compressor) "Reduction" else "Gain reduction")
+            val data = values
+            val rowHeight = height / 3f
+            val left = 76f * density
+            val right = width - 48f * density
+            val barHeight = 7f * density
+            val dbFloor = -60f
+            for (row in 0..2) {
+                val top = row * rowHeight
+                canvas.drawText(labels[row], 0f, top + 18f * density, textPaint)
+                for (channel in 0..1) {
+                    val y = top + (28f + channel * 20f) * density
+                    val index = when (row) { 0 -> channel; 1 -> channel + 2; else -> channel + 4 }
+                    val raw = data?.get(index) ?: Float.NaN
+                    val db = if (row == 2) {
+                        if (raw.isFinite() && raw in 0f..1f) if (raw <= 0f) 60f else (-20f * log10(raw.toDouble())).toFloat() else Float.NaN
+                    } else {
+                        if (raw.isFinite() && raw > 0f) (20f * log10(raw.toDouble())).toFloat() else if (raw == 0f) dbFloor else Float.NaN
+                    }
+                    val available = db.isFinite()
+                    val label = if (!available) "—" else "%.1f dB".format(db)
+                    canvas.drawRoundRect(RectF(left, y, right, y + barHeight), barHeight, barHeight, trackPaint)
+                    if (available) {
+                        val fraction = if (row == 2) (db / 60f).coerceIn(0f, 1f) else ((db - dbFloor) / -dbFloor).coerceIn(0f, 1f)
+                        canvas.drawRoundRect(RectF(left, y, left + (right - left) * fraction, y + barHeight), barHeight, barHeight, fillPaint)
+                    }
+                    canvas.drawText("${if (channel == 0) "L" else "R"}  $label", right + 5f * density, y + barHeight + 2f * density, textPaint)
+                }
+            }
+        }
     }
 
     private fun friendlyEffectTitle(stableId: String): String {

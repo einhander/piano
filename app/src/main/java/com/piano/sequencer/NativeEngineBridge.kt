@@ -257,6 +257,8 @@ object NativeEngineBridge {
     external fun nativeSetMasterEffectEnabled(slot: Int, enabled: Boolean)
     external fun nativeIsMasterEffectEnabled(slot: Int): Boolean
     external fun nativeIsMasterEffectAvailable(slot: Int): Boolean
+    // Linear amplitude [inputL,inputR,outputL,outputR,gainReductionL,gainReductionR]; NaN means absent.
+    external fun nativeGetMasterEffectMeterSnapshot(slot: Int): FloatArray?
     external fun nativeSetMasterEffectParameter(slot: Int, parameterId: Int, value: Float)
     external fun nativeGetMasterEffectParameter(slot: Int, parameterId: Int): Float
     external fun nativeGetMasterEffectStableId(slot: Int): String

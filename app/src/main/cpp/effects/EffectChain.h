@@ -5,6 +5,8 @@
 
 #include <memory>
 #include <string>
+#include <array>
+#include <limits>
 
 namespace piano {
 
@@ -45,6 +47,8 @@ public:
     // the slot is out of range. The pointer is stable for the chain's lifetime
     // after prepare().
     AudioEffect* effect(int slot) const;
+    // Linear amplitude [inL,inR,outL,outR,GRL,GRR]; unavailable fields NaN.
+    std::array<float, 6> meterSnapshot(int slot) const noexcept;
 
     int effectCount() const { return lsp::kMasterEffectCount; }
 

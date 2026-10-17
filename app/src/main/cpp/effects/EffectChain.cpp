@@ -2,6 +2,7 @@
 #include "lsp/LspLog.h"
 
 #include "ladspa/LadspaRegistry.h"
+#include "ladspa/LadspaEffect.h"
 #include "lsp/LspEffectFactory.h"
 
 #include <cstdlib>
@@ -229,6 +230,14 @@ AudioEffect* EffectChain::effect(int slot) const {
         return nullptr;
     }
     return mEffects[slot];
+}
+
+std::array<float, 6> EffectChain::meterSnapshot(int slot) const noexcept {
+    std::array<float, 6> absent;
+    absent.fill(std::numeric_limits<float>::quiet_NaN());
+    if (slot != lsp::kSlotCompressor && slot != lsp::kSlotLimiter) return absent;
+    auto* ladspa = dynamic_cast<ladspa::LadspaEffect*>(effect(slot));
+    return ladspa ? ladspa->meterSnapshot() : absent;
 }
 
 bool EffectChain::isAvailable() const {

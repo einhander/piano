@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <string>
 #include <vector>
+#include <limits>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/wait.h>
@@ -884,6 +885,18 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeIsMasterEffectAvailable(
     NativeEngine* inst = NativeEngine::getInstance();
     if (inst) return static_cast<jboolean>(inst->isMasterEffectAvailable(static_cast<int>(slot)));
     return JNI_FALSE;
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterEffectMeterSnapshot(
+        JNIEnv* env, jclass, jint slot) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    const float absent = std::numeric_limits<float>::quiet_NaN();
+    const auto values = inst ? inst->getMasterEffectMeterSnapshot(static_cast<int>(slot))
+                             : std::array<float, 6>{absent, absent, absent, absent, absent, absent};
+    jfloatArray out = env->NewFloatArray(6);
+    if (out) env->SetFloatArrayRegion(out, 0, 6, values.data());
+    return out;
 }
 
 JNIEXPORT void JNICALL

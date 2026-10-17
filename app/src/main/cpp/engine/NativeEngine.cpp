@@ -823,6 +823,10 @@ bool NativeEngine::isMasterEffectAvailable(int slot) const {
     return e && e->isAvailable();
 }
 
+std::array<float, 6> NativeEngine::getMasterEffectMeterSnapshot(int slot) const noexcept {
+    return mMasterEffects.meterSnapshot(slot);
+}
+
 void NativeEngine::setMasterEffectParameter(int slot, int parameterId, float value) {
     if (auto* e = mMasterEffects.effect(slot)) {
         e->setParameter(static_cast<uint32_t>(parameterId), value);

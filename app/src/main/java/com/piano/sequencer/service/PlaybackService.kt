@@ -350,6 +350,9 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         NativeEngineBridge.nativeIsMasterEffectEnabled(slot)
     fun isMasterEffectAvailable(slot: Int): Boolean =
         NativeEngineBridge.nativeIsMasterEffectAvailable(slot)
+    /** Worker-thread snapshot; linear amplitude [inL,inR,outL,outR,GRL,GRR], NaN when unavailable. */
+    fun getMasterEffectMeterSnapshot(slot: Int): FloatArray? =
+        NativeEngineBridge.nativeGetMasterEffectMeterSnapshot(slot)
     fun setMasterEffectParameter(slot: Int, parameterId: Int, value: Float) =
         NativeEngineBridge.nativeSetMasterEffectParameter(slot, parameterId, value)
     fun getMasterEffectParameter(slot: Int, parameterId: Int): Float =
