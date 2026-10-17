@@ -56,18 +56,7 @@ class EffectsActivity : AppCompatActivity() {
         Thread(r, "EffectsMain").apply { isDaemon = true }
     }
 
-    // ── Per-parameter slider model ──
-    private data class ParamInfo(
-        val slot: Int,
-        val paramId: Int,
-        val min: Float,
-        val max: Float,
-        val def: Float,
-        val logarithmic: Boolean,
-        val integer: Boolean,
-        val toggled: Boolean,
-        val name: String
-    )
+    private lateinit var repository: EffectRepository
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -104,6 +93,7 @@ class EffectsActivity : AppCompatActivity() {
 
     private fun buildUi() {
         val svc = service ?: return
+        repository = EffectRepository(svc)
         if (!svc.isEngineInitialized()) {
             runOnUiThread {
                 statusText.text = getString(R.string.master_effects_engine_not_ready)
@@ -122,7 +112,8 @@ class EffectsActivity : AppCompatActivity() {
             return
         }
 
-        val count = try { svc.getMasterEffectCount() } catch (e: Exception) { 0 }
+        val instances = try { repository.snapshot() } catch (e: Exception) { emptyList() }
+        val count = instances.size
         if (count <= 0) {
             runOnUiThread {
                 statusText.text = getString(R.string.master_effects_unavailable)
@@ -131,47 +122,13 @@ class EffectsActivity : AppCompatActivity() {
         }
         // Gather metadata + current values on the worker thread, then build
         // views on the main thread.
-        val cards = ArrayList<ArrayList<ParamInfo>>(count)
-        val enabledStates = BooleanArray(count)
-        val currentValues = ArrayList<FloatArray>(count)
-        val titles = ArrayList<String>(count)
-
-        for (slot in 0 until count) {
-            val n = svc.getMasterEffectParamCount(slot)
-            val params = ArrayList<ParamInfo>(n)
-            val values = FloatArray(n)
-            for (index in 0 until n) {
-                val info = svc.getMasterEffectParamInfo(slot, index)
-                val name = svc.getMasterEffectParamName(slot, index)
-                if (info == null || info.size < 7) continue
-                val p = ParamInfo(
-                    slot = slot,
-                    paramId = info[0].toInt(),
-                    min = info[1],
-                    max = info[2],
-                    def = info[3],
-                    logarithmic = info[4] != 0f,
-                    integer = info[5] != 0f,
-                    toggled = info[6] != 0f,
-                    name = name.ifEmpty { "Param ${info[0].toInt()}" }
-                )
-                params.add(p)
-                val idx = params.size - 1
-                values[idx] = svc.getMasterEffectParameter(slot, p.paramId)
-            }
-            cards.add(params)
-            currentValues.add(values)
-            enabledStates[slot] = try { svc.isMasterEffectEnabled(slot) } catch (e: Exception) { false }
-            titles.add(friendlyEffectTitle(svc.getMasterEffectStableId(slot), slot))
-        }
-
         runOnUiThread {
             statusText.text = getString(R.string.master_effects_available, count)
             isRestoringState = true
-            for (slot in 0 until count) {
+            for ((slot, instance) in instances.withIndex()) {
                 container.addView(buildEffectCard(
-                    slot, titles[slot], enabledStates[slot],
-                    cards[slot], currentValues[slot]
+                    slot, friendlyEffectTitle(instance.descriptor.stableId, slot), instance.enabled,
+                    instance.parameters, instance.parameters.map { it.value.rawValue }.toFloatArray()
                 ))
             }
             isRestoringState = false
@@ -191,7 +148,7 @@ class EffectsActivity : AppCompatActivity() {
         slot: Int,
         title: String,
         enabled: Boolean,
-        params: ArrayList<ParamInfo>,
+        params: List<EffectParameter>,
         values: FloatArray
     ): View {
         val ctx = this
@@ -231,7 +188,7 @@ class EffectsActivity : AppCompatActivity() {
                 if (isRestoringState) return@setOnCheckedChangeListener
                 val svc = service ?: return@setOnCheckedChangeListener
                 CompletableFuture.runAsync({
-                    svc.setMasterEffectEnabled(slot, isChecked)
+                    repository.setEnabled(slot, isChecked)
                     prefs().edit().putBoolean(fxEnabledKey(slot), isChecked).apply()
                 }, mainExecutor)
             }
@@ -249,7 +206,7 @@ class EffectsActivity : AppCompatActivity() {
         return card
     }
 
-    private fun buildParamRow(slot: Int, p: ParamInfo, value: Float): View {
+    private fun buildParamRow(slot: Int, p: EffectParameter, value: Float): View {
         val ctx = this
         val row = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -280,8 +237,8 @@ class EffectsActivity : AppCompatActivity() {
                     val v = progressToValue(p, sb?.progress ?: 0)
                     val svc = service ?: return
                     CompletableFuture.runAsync({
-                        svc.setMasterEffectParameter(slot, p.paramId, v)
-                        prefs().edit().putFloat(fxParamKey(slot, p.paramId), v).apply()
+                        repository.setParameter(slot, p.stableId.toInt(), v)
+                        prefs().edit().putFloat(fxParamKey(slot, p.stableId.toInt()), v).apply()
                     }, mainExecutor)
                 }
             })
@@ -297,45 +254,45 @@ class EffectsActivity : AppCompatActivity() {
 
     // ── Slider value ↔ progress mapping ──
 
-    private fun valueToProgress(p: ParamInfo, value: Float): Int {
-        val v = if (p.toggled) {
+    private fun valueToProgress(p: EffectParameter, value: Float): Int {
+        val v = if (p.type == EffectParameterType.BOOLEAN) {
             if (value >= 0.5f) 1f else 0f
-        } else if (p.logarithmic && p.min > 0f) {
-            val lo = log10(p.min.toDouble())
-            val hi = log10(p.max.toDouble())
-            val clamped = min(p.max.toDouble(), max(p.min.toDouble(), value.toDouble()))
+        } else if (p.logarithmic && p.minimum > 0f) {
+            val lo = log10(p.minimum.toDouble())
+            val hi = log10(p.maximum.toDouble())
+            val clamped = min(p.maximum.toDouble(), max(p.minimum.toDouble(), value.toDouble()))
             ((log10(clamped) - lo) / (hi - lo)).toFloat()
         } else {
-            val span = (p.max - p.min)
-            if (span <= 0f) 0f else ((value - p.min) / span)
+            val span = (p.maximum - p.minimum)
+            if (span <= 0f) 0f else ((value - p.minimum) / span)
         }
         return (v.coerceIn(0f, 1f) * SEEKBAR_STEPS).toInt()
     }
 
-    private fun progressToValue(p: ParamInfo, progress: Int): Float {
+    private fun progressToValue(p: EffectParameter, progress: Int): Float {
         val t = progress.toFloat() / SEEKBAR_STEPS
-        var v: Float = if (p.toggled) {
+        var v: Float = if (p.type == EffectParameterType.BOOLEAN) {
             if (t >= 0.5f) 1f else 0f
-        } else if (p.logarithmic && p.min > 0f) {
-            val lo = log10(p.min.toDouble())
-            val hi = log10(p.max.toDouble())
+        } else if (p.logarithmic && p.minimum > 0f) {
+            val lo = log10(p.minimum.toDouble())
+            val hi = log10(p.maximum.toDouble())
             (10.0.pow((lo + (hi - lo) * t))).toFloat()
         } else {
-            p.min + (p.max - p.min) * t
+            p.minimum + (p.maximum - p.minimum) * t
         }
-        if (p.integer) v = kotlin.math.round(v)
-        return v.coerceIn(p.min, p.max)
+        if (p.type == EffectParameterType.INTEGER) v = kotlin.math.round(v)
+        return v.coerceIn(p.minimum, p.maximum)
     }
 
-    private fun formatParamLabel(p: ParamInfo, value: Float): String {
-        val v = if (p.toggled) {
+    private fun formatParamLabel(p: EffectParameter, value: Float): String {
+        val v = if (p.type == EffectParameterType.BOOLEAN) {
             if (value >= 0.5f) getString(R.string.master_effects_on) else getString(R.string.master_effects_off)
-        } else if (p.integer) {
+        } else if (p.type == EffectParameterType.INTEGER) {
             value.toInt().toString()
         } else {
             "%.3f".format(value)
         }
-        return "${p.name}: $v"
+        return "${p.displayName}: $v"
     }
 
     // ── Persistence (lightweight; project format is Milestone 8) ──
