@@ -27,7 +27,12 @@ class MidiDeviceManager(
     private var snapshot = ConnectionSnapshot(null, false, false, 0L)
     private var activeDevice: MidiDeviceInfo? = null
     private var activeMidiDevice: MidiDevice? = null
-    private var activeOutputPort: MidiOutputPort? = null
+    private data class ActiveOutput(
+        val portIndex: Int,
+        val port: MidiOutputPort,
+        val receiver: MidiInputReceiver
+    )
+    private val activeOutputs = mutableListOf<ActiveOutput>()
     @Volatile private var closed = false
     @Volatile private var connectedSnapshot: MidiDeviceInfo? = null
 
@@ -53,11 +58,20 @@ class MidiDeviceManager(
     }
 
     fun listDevices(): List<MidiDeviceInfo> {
-        return midiManager.devices.filter { it.outputPortCount > 0 }.toList()
+        val devices = midiManager.devices.filter { it.outputPortCount > 0 }.toList()
+        AppLogger.info("MidiDeviceManager", "Eligible MIDI devices=${devices.size}")
+        devices.forEach { device ->
+            AppLogger.info("MidiDeviceManager", "Device id=${device.id} name=${deviceName(device)} outputPorts=${device.outputPortCount}")
+        }
+        return devices
     }
 
     fun deviceName(info: MidiDeviceInfo): String =
         info.properties.getString("name") ?: "MIDI device ${info.id}"
+
+    private fun outputPortMetadata(info: MidiDeviceInfo): String =
+        info.ports.filter { it.type == MidiDeviceInfo.PortInfo.TYPE_OUTPUT }
+            .joinToString(prefix = "[", postfix = "]") { "${it.portNumber}:${it.name}" }
 
     fun getCurrentDevice(): MidiDeviceInfo? = snapshot.device
 
@@ -82,6 +96,7 @@ class MidiDeviceManager(
 
     fun connect(deviceInfo: MidiDeviceInfo) {
         if (closed) return
+        AppLogger.info("MidiDeviceManager", "Selected MIDI device id=${deviceInfo.id} name=${deviceName(deviceInfo)} type=${deviceInfo.type} outputPorts=${outputPortMetadata(deviceInfo)}")
         midiHandler.post {
             val current = snapshot
             if (current.device != null && stableKey(current.device) == stableKey(deviceInfo)) return@post
@@ -114,48 +129,73 @@ class MidiDeviceManager(
     }
 
     private fun installOpenedDevice(gen: Long, deviceInfo: MidiDeviceInfo, device: MidiDevice) {
-                if (closed || gen != connectGeneration) {
-                    try { device.close() } catch (_: Exception) {}
-                    return
+        if (closed || gen != connectGeneration) {
+            try { device.close() } catch (_: Exception) {}
+            return
+        }
+        val outputs = mutableListOf<ActiveOutput>()
+        for (index in 0 until deviceInfo.outputPortCount) {
+            AppLogger.info("MidiDeviceManager", "Opening output port $index/${deviceInfo.outputPortCount} for device ${deviceInfo.id} name=${deviceName(deviceInfo)} type=${deviceInfo.type} ports=${outputPortMetadata(deviceInfo)}")
+            val port = try {
+                device.openOutputPort(index)
+            } catch (e: Exception) {
+                AppLogger.warn("MidiDeviceManager", "openOutputPort failed index=$index: ${e.message}")
+                null
+            }
+            if (port == null) {
+                AppLogger.warn("MidiDeviceManager", "Failed to open output port index=$index for device ${deviceInfo.id}")
+                continue
+            }
+            var portReceiver: MidiInputReceiver? = null
+            try {
+                val receiver = inputCallback as? MidiInputReceiver
+                    ?: throw IllegalStateException("MIDI input callback must be MidiInputReceiver")
+                val newReceiver = receiver.createPortReceiver(index, stableKey(deviceInfo), isSmk37ProUsb(deviceInfo))
+                portReceiver = newReceiver
+                port.connect(newReceiver)
+                outputs += ActiveOutput(index, port, newReceiver)
+                AppLogger.info("MidiDeviceManager", "Connected output port index=$index name=${deviceInfo.ports.firstOrNull { it.type == MidiDeviceInfo.PortInfo.TYPE_OUTPUT && it.portNumber == index }?.name} for device ${deviceInfo.id}")
+            } catch (e: Exception) {
+                AppLogger.warn("MidiDeviceManager", "connect receiver failed index=$index: ${e.message}")
+                portReceiver?.deactivate()
+                try { port.close() } catch (closeError: Exception) {
+                    AppLogger.warn("MidiDeviceManager", "close failed index=$index: ${closeError.message}")
                 }
-                val port = try {
-                    device.openOutputPort(0)
-                } catch (e: Exception) {
-                    AppLogger.warn("MidiDeviceManager", "openOutputPort failed: ${e.message}")
-                    null
+            }
+        }
+        if (closed || gen != connectGeneration) {
+            outputs.forEach { output ->
+                output.receiver.deactivate()
+                try { output.port.disconnect(output.receiver) } catch (e: Exception) {
+                    AppLogger.warn("MidiDeviceManager", "stale disconnect failed index=${output.portIndex}: ${e.message}")
                 }
-                if (port == null) {
-                    try { device.close() } catch (e: Exception) {}
-                    activeDevice = null
-                    snapshot = ConnectionSnapshot(null, false, false, gen)
-                    AppLogger.warn("MidiDeviceManager", "Failed to open output port for device ${deviceInfo.id}")
-                    listener?.onDeviceDisconnected()
-                    return
+                try { output.port.close() } catch (e: Exception) {
+                    AppLogger.warn("MidiDeviceManager", "stale close failed index=${output.portIndex}: ${e.message}")
                 }
-                try {
-                    port.connect(inputCallback)
-                } catch (e: Exception) {
-                    AppLogger.warn("MidiDeviceManager", "connect receiver failed: ${e.message}")
-                    try { port.close() } catch (_: Exception) {}
-                    try { device.close() } catch (_: Exception) {}
-                    activeDevice = null
-                    snapshot = ConnectionSnapshot(null, false, false, gen)
-                    listener?.onDeviceDisconnected()
-                    return
-                }
-                // Gate window: disconnect may have run between port.open and here.
-                if (gen != connectGeneration) {
-                    try { port.disconnect(inputCallback) } catch (e: Exception) {}
-                    try { port.close() } catch (e: Exception) {}
-                    try { device.close() } catch (e: Exception) {}
-                    return
-                }
-                activeMidiDevice = device
-                activeOutputPort = port
-                connectedSnapshot = deviceInfo
-                snapshot = ConnectionSnapshot(deviceInfo, true, false, gen)
-                AppLogger.info("MidiDeviceManager", "Connected: device ${deviceInfo.id}")
-                listener?.onDeviceConnected(deviceInfo)
+            }
+            try { device.close() } catch (_: Exception) {}
+            return
+        }
+        if (outputs.isEmpty()) {
+            try { device.close() } catch (_: Exception) {}
+            activeDevice = null
+            snapshot = ConnectionSnapshot(null, false, false, gen)
+            listener?.onDeviceDisconnected()
+            return
+        }
+        activeMidiDevice = device
+        activeOutputs += outputs
+        connectedSnapshot = deviceInfo
+        snapshot = ConnectionSnapshot(deviceInfo, true, false, gen)
+        AppLogger.info("MidiDeviceManager", "Connected: device ${deviceInfo.id}")
+        listener?.onDeviceConnected(deviceInfo)
+    }
+
+    private fun isSmk37ProUsb(info: MidiDeviceInfo): Boolean {
+        val props = info.properties
+        val name = listOfNotNull(props.getString("name"), props.getString("product"), props.getString("manufacturer"))
+            .joinToString(" ")
+        return info.type == MidiDeviceInfo.TYPE_USB && name.contains("SMK-37 Pro", ignoreCase = true)
     }
 
     fun disconnect() {
@@ -163,24 +203,30 @@ class MidiDeviceManager(
     }
 
     private fun closeActiveOnHandler(notify: Boolean) {
-        val wasActive = activeDevice != null || activeOutputPort != null || activeMidiDevice != null
+        val wasActive = activeDevice != null || activeOutputs.isNotEmpty() || activeMidiDevice != null
         ++connectGeneration // invalidate pending open callback before closing resources
         val deviceId = activeDevice?.id ?: -1
         snapshot = ConnectionSnapshot(null, false, false, connectGeneration)
-        val port = activeOutputPort
+        val outputs = activeOutputs.toList()
         val device = activeMidiDevice
         activeDevice = null
-        activeOutputPort = null
+        activeOutputs.clear()
         connectedSnapshot = null
         activeMidiDevice = null
         if (wasActive) {
             if (notify) AppLogger.info("MidiDeviceManager", "Disconnected: device $deviceId")
-            try {
-                port?.disconnect(inputCallback)
-                port?.close()
-                device?.close()
-            } catch (e: Exception) {
-                AppLogger.warn("MidiDeviceManager", "Error closing MIDI: ${e.message}")
+            outputs.forEach { output ->
+                AppLogger.info("MidiDeviceManager", "Port totals index=${output.portIndex}: ${output.receiver.diagnosticTotals()}")
+                output.receiver.deactivate()
+                try { output.port.disconnect(output.receiver) } catch (e: Exception) {
+                    AppLogger.warn("MidiDeviceManager", "Error disconnecting MIDI port index=${output.portIndex}: ${e.message}")
+                }
+                try { output.port.close() } catch (e: Exception) {
+                    AppLogger.warn("MidiDeviceManager", "Error closing MIDI port index=${output.portIndex}: ${e.message}")
+                }
+            }
+            try { device?.close() } catch (e: Exception) {
+                AppLogger.warn("MidiDeviceManager", "Error closing MIDI device: ${e.message}")
             }
         }
         if (wasActive && notify) listener?.onDeviceDisconnected()
@@ -190,6 +236,11 @@ class MidiDeviceManager(
     fun isConnected(): Boolean = snapshot.connected || snapshot.connecting
 
     fun close() {
+        close { }
+    }
+
+    /** Handler barrier: callback runs after active ports/device have been closed. */
+    fun close(onClosed: () -> Unit) {
         closed = true
         midiHandler.post {
             closeActiveOnHandler(notify = true)
@@ -197,6 +248,7 @@ class MidiDeviceManager(
             // queued open callback after close. Its generation/closed guards
             // must run so returned device resources are closed.
             midiHandlerThread.quitSafely()
+            onClosed()
         }
     }
 }

@@ -152,6 +152,18 @@ class NoteToggleStateMachineTest {
     }
 
     @Test
+    fun sysexChordPressRetriggersInsteadOfTogglingOff() {
+        val sm = fresh()
+        val sysexKey = Int.MIN_VALUE + 7
+
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.press(sysexKey, loop = false))
+        // SysEx pads emit presses without release events; a repeated press must
+        // retrigger the chord rather than turn it off.
+        assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.press(sysexKey, loop = false))
+        assertTrue(sm.isPlaying(sysexKey))
+    }
+
+    @Test
     fun pressIndependentFromNoteState() {
         val sm = fresh()
         assertEquals(NoteToggleStateMachine.Result.TOGGLE_ON, sm.noteOn(60, loop = true))

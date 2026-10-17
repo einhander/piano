@@ -21,6 +21,7 @@ import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import com.piano.sequencer.AppLogger
 
 /**
  * Master effect chain UI (Milestone 7).
@@ -110,7 +111,24 @@ class EffectsActivity : AppCompatActivity() {
             }
             return
         }
-        val available = try { svc.isMasterEffectChainAvailable() } catch (e: Exception) { false }
+        // EffectChain rebuild is not callback-safe. Stop/rebuild/restart on this
+        // worker before querying descriptors; passthrough remains fallback.
+        val wasPlaying = svc.isAudioPlaying()
+        if (wasPlaying) svc.stopAudioForMaintenance()
+        var loadedNow = false
+        val available = try {
+            if (!svc.isMasterEffectChainAvailable()) {
+                NativeEngineBridge.preloadLspBundle(this)
+                val result = svc.loadMasterEffectBundle("${applicationInfo.nativeLibraryDir}/liblsp-plugins-ladspa.so")
+                AppLogger.info("EffectsActivity", "Lazy LSP load result=$result")
+                loadedNow = result > 0
+            }
+            svc.isMasterEffectChainAvailable()
+        } catch (e: Throwable) {
+            AppLogger.warn("EffectsActivity", "Lazy LSP load skipped: ${e.javaClass.simpleName}: ${e.message}")
+            false
+        }
+        if (wasPlaying) svc.restartAfterMaintenance()
         if (!available) {
             runOnUiThread {
                 statusText.text = getString(R.string.master_effects_unavailable)
@@ -125,6 +143,7 @@ class EffectsActivity : AppCompatActivity() {
             }
             return
         }
+        if (loadedNow) restorePersistedEffectState(svc, count)
 
         // Gather metadata + current values on the worker thread, then build
         // views on the main thread.
@@ -172,6 +191,23 @@ class EffectsActivity : AppCompatActivity() {
                 ))
             }
             isRestoringState = false
+        }
+    }
+
+    /** Restore effect state after a lazy process-local chain load. Worker thread only. */
+    private fun restorePersistedEffectState(svc: PlaybackService, effectCount: Int) {
+        val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+        for (slot in 0 until effectCount) {
+            val paramCount = runCatching { svc.getMasterEffectParamCount(slot) }.getOrDefault(0)
+            for (index in 0 until paramCount) {
+                val info = svc.getMasterEffectParamInfo(slot, index) ?: continue
+                if (info.size < 4) continue
+                val paramId = info[0].toInt()
+                if (prefs.contains("fx_param_${slot}_$paramId")) {
+                    svc.setMasterEffectParameter(slot, paramId, prefs.getFloat("fx_param_${slot}_$paramId", info[3]))
+                }
+            }
+            svc.setMasterEffectEnabled(slot, prefs.getBoolean("fx_enabled_$slot", false))
         }
     }
 

@@ -26,6 +26,10 @@ set(enable-ipv6 OFF CACHE BOOL "")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/fluidsynth ${CMAKE_CURRENT_BINARY_DIR}/fluidsynth)
 
+# FluidSynth finds OpenMP::OpenMP_C internally; expose matching C++ runtime
+# target to the app for worker-thread OpenMP controls (same NDK runtime).
+find_package(OpenMP REQUIRED COMPONENTS CXX)
+
 # Native library
 add_library(native-lib SHARED
     native_engine_jni.cpp
@@ -76,7 +80,8 @@ target_include_directories(native-lib PRIVATE
 # Link libraries
 target_link_libraries(native-lib
     oboe
-libfluidsynth
+    libfluidsynth
+    OpenMP::OpenMP_CXX
     log
     android
     OpenSLES

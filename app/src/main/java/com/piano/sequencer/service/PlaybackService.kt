@@ -33,6 +33,9 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         Thread(r, "AudioFocusWorker").apply { isDaemon = true }
     }
     @Volatile private var resumeAfterFocus = false
+    @Volatile private var audioFocusGranted = false
+    @Volatile private var intentionalStop = false
+    @Volatile private var startWhenFocusGained = false
 
     inner class PlaybackBinder : Binder() {
         fun getService(): PlaybackService = this@PlaybackService
@@ -124,6 +127,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     override fun onCreate() {
         super.onCreate()
+        (application as? com.piano.sequencer.PianoApp)?.playbackServiceCreated(this)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioWorker.execute {
             recordingCache = NativeEngineBridge.nativeIsRecording()
@@ -142,13 +146,24 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         // Non-blocking — the daemon exits on its own; no join needed.
         perfLoggerThread.interrupt()
         stopForeground(true)
+        intentionalStop = true
+        startWhenFocusGained = false
         releaseAudioFocus()
         audioWorker.shutdown()
         NativeEngineBridge.nativeStopAudio()
         super.onDestroy()
+        (application as? com.piano.sequencer.PianoApp)?.playbackServiceDestroyed()
     }
 
     fun startAudio() {
+        if (!audioFocusGranted) {
+            startWhenFocusGained = true
+            requestAudioFocus()
+            AppLogger.warn("PlaybackService", "Audio start refused: audio focus not granted")
+            return
+        }
+        startWhenFocusGained = false
+        intentionalStop = false
         val result = NativeEngineBridge.nativeStartAudio()
         if (result != 0) {
             AppLogger.error("PlaybackService", "Start audio failed: $result")
@@ -234,6 +249,13 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
                     break
                 }
                 if (!NativeEngineBridge.nativeIsAudioPlaying()) {
+                    val state = NativeEngineBridge.nativeGetAudioState()
+                    if (!intentionalStop && audioFocusGranted && (state == 12 || state == 13)) {
+                        AppLogger.warn("PlaybackService", "Audio stream state=$state; reopening on worker")
+                        val open = NativeEngineBridge.nativeOpenAudio()
+                        if (open == 0) AppLogger.info("PlaybackService", "Audio recovery start=${NativeEngineBridge.nativeStartAudio()}")
+                        else AppLogger.warn("PlaybackService", "Audio recovery open=$open")
+                    }
                     lastUnderruns = 0
                     continue
                 }
@@ -252,6 +274,32 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun isEngineInitialized(): Boolean = NativeEngineBridge.nativeIsEngineInitialized()
 
     fun openAudio(): Int = NativeEngineBridge.nativeOpenAudio()
+
+    fun stopAudioForMaintenance() {
+        intentionalStop = true
+        NativeEngineBridge.nativeStopAudio()
+        AppLogger.info("PlaybackService", "Audio stopped for maintenance")
+    }
+
+    /** Stop recovery/start paths and audio before explicit process termination. */
+    fun prepareForExplicitExit(onStopped: () -> Unit) {
+        intentionalStop = true
+        startWhenFocusGained = false
+        audioWorker.execute {
+            val result = NativeEngineBridge.nativeStopAudio()
+            if (result != 0) AppLogger.warn("PlaybackService", "Audio stop during explicit exit returned $result; process termination will release stream")
+            onStopped()
+        }
+    }
+
+    fun restartAfterMaintenance() {
+        if (!audioFocusGranted) return
+        intentionalStop = false
+        val open = NativeEngineBridge.nativeOpenAudio()
+        if (open != 0) { AppLogger.warn("PlaybackService", "Audio reopen failed: $open"); return }
+        val result = NativeEngineBridge.nativeStartAudio()
+        AppLogger.info("PlaybackService", "Audio restart result=$result")
+    }
 
     fun initEngine(sampleRate: Int, bufferSize: Int): Boolean =
         NativeEngineBridge.nativeInitEngine(sampleRate, bufferSize)
@@ -433,7 +481,8 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         NativeEngineBridge.nativeWriteRecordedMidiFile(filePath, ppq, tempo)
 
     private fun requestAudioFocus() {
-        if (audioFocusRequest != null) return
+        if (audioFocusGranted) return
+        val result: Int
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(
@@ -444,13 +493,15 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
                 )
                 .setOnAudioFocusChangeListener(this)
                 .build()
-            audioManager?.requestAudioFocus(audioFocusRequest!!)
+            result = audioManager?.requestAudioFocus(audioFocusRequest!!) ?: AudioManager.AUDIOFOCUS_REQUEST_FAILED
         } else {
             @Suppress("DEPRECATION")
-            audioManager?.requestAudioFocus(
+            result = audioManager?.requestAudioFocus(
                 null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN
-            )
+            ) ?: AudioManager.AUDIOFOCUS_REQUEST_FAILED
         }
+        audioFocusGranted = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        AppLogger.info("PlaybackService", "Audio focus request result=$result granted=$audioFocusGranted")
     }
 
     private fun releaseAudioFocus() {
@@ -463,29 +514,51 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
             audioManager?.abandonAudioFocus(this)
         }
         audioFocusRequest = null
+        audioFocusGranted = false
+        startWhenFocusGained = false
     }
 
     override fun onAudioFocusChange(focusChange: Int) {
         audioWorker.execute {
+            val focusName = when (focusChange) {
+                AudioManager.AUDIOFOCUS_GAIN -> "GAIN"
+                AudioManager.AUDIOFOCUS_LOSS -> "LOSS(permanent; no auto-resume)"
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> "LOSS_TRANSIENT"
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> "LOSS_TRANSIENT_CAN_DUCK"
+                else -> "UNKNOWN"
+            }
+            val beforeState = NativeEngineBridge.nativeGetAudioState()
+            val beforePlaying = NativeEngineBridge.nativeIsAudioPlaying()
+            AppLogger.info("PlaybackService", "Audio focus change=$focusChange name=$focusName before state=$beforeState playing=$beforePlaying intentionalStop=$intentionalStop resumeAfterFocus=$resumeAfterFocus startPending=$startWhenFocusGained granted=$audioFocusGranted")
             when (focusChange) {
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                     if (NativeEngineBridge.nativeIsAudioPlaying()) {
                         resumeAfterFocus = true
+                        audioFocusGranted = false
                         NativeEngineBridge.nativeStopAudio()
                     }
                 }
                 AudioManager.AUDIOFOCUS_LOSS -> {
                     resumeAfterFocus = false
+                    startWhenFocusGained = false
+                    audioFocusGranted = false
                     NativeEngineBridge.nativeStopAudio()
                 }
                 AudioManager.AUDIOFOCUS_GAIN -> {
-                    if (resumeAfterFocus) {
+                    audioFocusGranted = true
+                    if (resumeAfterFocus || startWhenFocusGained) {
                         resumeAfterFocus = false
-                        NativeEngineBridge.nativeStartAudio()
+                        startWhenFocusGained = false
+                        intentionalStop = false
+                        val result = NativeEngineBridge.nativeStartAudio()
+                        if (result != 0) {
+                            AppLogger.warn("PlaybackService", "Audio start after focus gain failed: $result")
+                        }
                     }
                 }
             }
+            AppLogger.info("PlaybackService", "Audio focus outcome change=$focusChange name=$focusName state=${NativeEngineBridge.nativeGetAudioState()} playing=${NativeEngineBridge.nativeIsAudioPlaying()} intentionalStop=$intentionalStop resumeAfterFocus=$resumeAfterFocus startPending=$startWhenFocusGained granted=$audioFocusGranted")
         }
     }
 

@@ -14,6 +14,8 @@ class MidiMessageParserTest {
     /** Records every event in arrival order as a string. */
     private class RecordingHandler : MidiMessageParser.Handler {
         val events = mutableListOf<String>()
+        val sysex = mutableListOf<ByteArray>()
+        override fun onSysEx(bytes: ByteArray) { sysex.add(bytes) }
         override fun onNoteOn(channel: Int, note: Int, velocity: Int) {
             events.add("noteOn:$channel:$note:$velocity")
         }
@@ -55,6 +57,23 @@ class MidiMessageParserTest {
     @Test
     fun noteOn() {
         assertEquals(listOf("noteOn:0:60:100"), parse(0x90, 60, 100))
+    }
+
+    @Test fun sysexCompleteAndChunkedRealtime() {
+        val h = RecordingHandler(); val p = MidiMessageParser.StreamParser()
+        p.parse(byteArrayOf(0xf0.toByte(), 0x35, 0xf8.toByte(), 0x59, 0x10, 0x5f, 0x7f, 0xf7.toByte()), 0, 8, h)
+        assertEquals(listOf(0xf0, 0x35, 0x59, 0x10, 0x5f, 0x7f, 0xf7), h.sysex.single().map { it.toInt() and 255 })
+        val h2 = RecordingHandler(); val p2 = MidiMessageParser.StreamParser()
+        p2.parse(byteArrayOf(0xf0.toByte(), 1, 2), 0, 3, h2); assertTrue(h2.sysex.isEmpty())
+        p2.parse(byteArrayOf(3, 0xf7.toByte()), 0, 2, h2); assertEquals(1, h2.sysex.size)
+    }
+
+    @Test fun overlongSysexDropsUntilTerminatorThenParsesNote() {
+        val h = RecordingHandler(); val p = MidiMessageParser.StreamParser()
+        val data = ByteArray(8195) { if (it == 0) 0xf0.toByte() else 1 }
+        p.parse(data, 0, data.size, h)
+        p.parse(byteArrayOf(0xf7.toByte(), 0x90.toByte(), 60, 100), 0, 4, h)
+        assertTrue(h.sysex.isEmpty()); assertEquals(listOf("noteOn:0:60:100"), h.events)
     }
 
     @Test

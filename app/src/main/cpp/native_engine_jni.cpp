@@ -201,6 +201,12 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeIsAudioPlaying(JNIEnv* env, jc
     return state == oboe::StreamState::Started;
 }
 
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetAudioState(JNIEnv* env, jclass) {
+    OboeOutput* inst = OboeOutput::getInstance();
+    return inst ? static_cast<jint>(inst->getState()) : -1;
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeIsEngineInitialized(JNIEnv* env, jclass) {
     NativeEngine* inst = NativeEngine::getInstance();

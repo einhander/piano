@@ -66,6 +66,9 @@ oboe::Result OboeOutput::open() {
             builder.setSharingMode(mode);
             builder.setFormat(oboe::AudioFormat::Float);
             builder.setChannelCount(oboe::ChannelCount::Stereo);
+            builder.setUsage(oboe::Usage::Media);
+            builder.setContentType(oboe::ContentType::Music);
+            builder.setAllowedCapturePolicy(oboe::AllowedCapturePolicy::All);
             builder.setCallback(this);
             builder.setFramesPerCallback(64);
             builder.setErrorCallback(this);

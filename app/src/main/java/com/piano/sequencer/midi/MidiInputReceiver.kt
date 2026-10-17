@@ -1,23 +1,78 @@
 package com.piano.sequencer.midi
 
 import android.media.midi.MidiReceiver
+import android.os.SystemClock
+import com.piano.sequencer.AppLogger
+import java.util.concurrent.ConcurrentHashMap
 
-class MidiInputReceiver : MidiReceiver() {
-    private val parser = MidiMessageParser.StreamParser()
-    interface Callback {
-        fun onNoteOn(channel: Int, note: Int, velocity: Int)
-        fun onNoteOff(channel: Int, note: Int, velocity: Int)
-        fun onControlChange(channel: Int, controller: Int, value: Int)
-        fun onProgramChange(channel: Int, program: Int)
-        fun onPitchBend(channel: Int, value: Int)
-        fun onChannelPressure(channel: Int, value: Int)
+class MidiInputReceiver private constructor(
+    private val callbackHolder: CallbackHolder,
+    private val source: String
+) : MidiReceiver() {
+    companion object {
+        private const val CAPTURE_CALLBACK_LIMIT = 16
+        private const val PREVIEW_BYTE_LIMIT = 64
+    }
+    constructor() : this(CallbackHolder(), "unknown")
+
+    private class CallbackHolder {
+        @Volatile var callback: Callback? = null
+        val portPolicies = ConcurrentHashMap<String, MidiIngressRouter.PortRoute>()
     }
 
-    @Volatile
-    private var callback: Callback? = null
+    private val parser = MidiMessageParser.StreamParser()
+    private val lifecycleLock = Any()
+    private var active = true
+    interface Callback {
+        fun onNoteOn(channel: Int, note: Int, velocity: Int, source: String = "unknown")
+        fun onNoteOff(channel: Int, note: Int, velocity: Int, source: String = "unknown")
+        fun onControlChange(channel: Int, controller: Int, value: Int, source: String = "unknown")
+        fun onProgramChange(channel: Int, program: Int, source: String = "unknown")
+        fun onPitchBend(channel: Int, value: Int, source: String = "unknown")
+        fun onChannelPressure(channel: Int, value: Int)
+        fun onSysEx(bytes: ByteArray, source: String = "unknown")
+    }
+
+    private var lastEmptyTraceMs = 0L
+    private var callbackCount = 0L
+    private var byteCount = 0L
+    private var capturedBuffers = 0
+    private var captureLimitLogged = false
+
+    fun diagnosticTotals(): String = synchronized(lifecycleLock) {
+        "callbacks=$callbackCount bytes=$byteCount captured=$capturedBuffers/$CAPTURE_CALLBACK_LIMIT"
+    }
+
+    fun createPortReceiver(portIndex: Int, stableSource: String = source, smk37Usb: Boolean = false): MidiInputReceiver {
+        val portSource = "$stableSource|port=$portIndex"
+        val route = portRoute(portIndex, smk37Usb)
+        if (route == MidiIngressRouter.PortRoute.NORMAL) callbackHolder.portPolicies.remove(portSource)
+        else callbackHolder.portPolicies[portSource] = route
+        return MidiInputReceiver(callbackHolder, portSource)
+    }
+
+    fun routeForPort(source: String?): MidiIngressRouter.PortRoute {
+        return source?.let { callbackHolder.portPolicies[it] } ?: MidiIngressRouter.PortRoute.NORMAL
+    }
+
+    private fun portRoute(portIndex: Int, smk37Usb: Boolean): MidiIngressRouter.PortRoute {
+        if (!smk37Usb) return MidiIngressRouter.PortRoute.NORMAL
+        return when (portIndex) {
+            1 -> MidiIngressRouter.PortRoute.IGNORE
+            2 -> MidiIngressRouter.PortRoute.CONTROL_ONLY
+            else -> MidiIngressRouter.PortRoute.NORMAL
+        }
+    }
 
     fun setCallback(callback: Callback?) {
-        this.callback = callback
+        callbackHolder.callback = callback
+    }
+
+    fun deactivate() {
+        synchronized(lifecycleLock) {
+            active = false
+            callbackHolder.portPolicies.remove(source)
+        }
     }
 
     // Swallows a callback exception so a single bad message does not abort
@@ -28,34 +83,104 @@ class MidiInputReceiver : MidiReceiver() {
             block()
         } catch (e: Exception) {
             // Prevent a callback exception from crashing the MIDI callback chain
+            AppLogger.error("MidiInputReceiver", "MIDI callback failed source=$source: ${e.stackTraceToString()}")
         }
     }
 
     override fun onSend(data: ByteArray, offset: Int, length: Int, timestamp: Long) {
-        val cb = callback ?: return
+        synchronized(lifecycleLock) {
+        if (!active) return
+        if (length > 0) {
+            callbackCount++
+            byteCount += length.toLong()
+            if (capturedBuffers < CAPTURE_CALLBACK_LIMIT) {
+                val captureStart = offset.coerceIn(0, data.size)
+                val captureEnd = (offset.toLong() + length.toLong())
+                    .coerceIn(captureStart.toLong(), data.size.toLong()).toInt()
+                val previewEnd = minOf(captureEnd.toLong(), captureStart.toLong() + PREVIEW_BYTE_LIMIT).toInt()
+                val hex = data.copyOfRange(captureStart, previewEnd)
+                    .joinToString(" ") { "%02X".format(it.toInt() and 0xff) }
+                capturedBuffers++
+                AppLogger.info("MidiInputReceiver", "MIDI ingress source=$source offset=$offset length=$length bytes=[$hex]")
+                if (capturedBuffers == CAPTURE_CALLBACK_LIMIT && !captureLimitLogged) {
+                    captureLimitLogged = true
+                    AppLogger.info("MidiInputReceiver", "MIDI ingress capture limit reached source=$source limit=$CAPTURE_CALLBACK_LIMIT")
+                }
+            }
+        }
+        val cb = callbackHolder.callback
+        if (cb == null) {
+            AppLogger.warn("MidiInputReceiver", "MIDI input received with no callback source=$source")
+            return
+        }
+        val traceStart = offset.coerceIn(0, data.size)
+        val traceEnd = (offset.toLong() + length.toLong())
+            .coerceIn(traceStart.toLong(), data.size.toLong()).toInt()
+        val sysexMarkers = (traceStart until traceEnd).filter {
+            (data[it].toInt() and 0xff) == 0xf0 || (data[it].toInt() and 0xff) == 0xf7
+        }
+        if (sysexMarkers.isNotEmpty()) {
+            val bytesEnd = minOf(traceEnd.toLong(), traceStart.toLong() + 32L).toInt()
+            val hex = data.copyOfRange(traceStart, bytesEnd)
+                .joinToString(" ") { "%02X".format(it.toInt() and 255) }
+            AppLogger.info(
+                "MidiInputReceiver",
+                "MIDI SYSEX boundary source=$source offset=$offset length=$length markers=${sysexMarkers.map { it - offset }} bytes=[$hex]"
+            )
+        }
+        var parsedEvents = 0
         try {
             parser.parse(data, offset, length, object : MidiMessageParser.Handler {
                 override fun onNoteOn(channel: Int, note: Int, velocity: Int) {
-                    safe { cb.onNoteOn(channel, note, velocity) }
+                    parsedEvents++
+                    AppLogger.info("MIDI", "Parsed NOTE ON source=$source ch=${channel + 1} data=$note,$velocity")
+                    safe { cb.onNoteOn(channel, note, velocity, source) }
                 }
                 override fun onNoteOff(channel: Int, note: Int, velocity: Int) {
-                    safe { cb.onNoteOff(channel, note, velocity) }
+                    parsedEvents++
+                    AppLogger.info("MIDI", "Parsed NOTE OFF source=$source ch=${channel + 1} data=$note,$velocity")
+                    safe { cb.onNoteOff(channel, note, velocity, source) }
                 }
                 override fun onControlChange(channel: Int, controller: Int, value: Int) {
-                    safe { cb.onControlChange(channel, controller, value) }
+                    parsedEvents++
+                    safe { cb.onControlChange(channel, controller, value, source) }
                 }
                 override fun onProgramChange(channel: Int, program: Int) {
-                    safe { cb.onProgramChange(channel, program) }
+                    parsedEvents++
+                    AppLogger.info("MIDI", "Parsed PROGRAM source=$source ch=${channel + 1} data=$program")
+                    safe { cb.onProgramChange(channel, program, source) }
                 }
                 override fun onPitchBend(channel: Int, value: Int) {
-                    safe { cb.onPitchBend(channel, value) }
+                    parsedEvents++
+                    safe { cb.onPitchBend(channel, value, source) }
                 }
                 override fun onChannelPressure(channel: Int, value: Int) {
+                    parsedEvents++
                     safe { cb.onChannelPressure(channel, value) }
+                }
+                override fun onSysEx(bytes: ByteArray) {
+                    parsedEvents++
+                    AppLogger.info("MIDI", "Parsed SYSEX source=$source bytes=${bytes.joinToString("") { "%02X".format(it.toInt() and 255) }}")
+                    safe { cb.onSysEx(bytes, source) }
                 }
             })
         } catch (e: Exception) {
             // Backstop: never let an exception escape onSend into the MIDI chain
+            AppLogger.error("MidiInputReceiver", "MIDI parser failed source=$source: ${e.stackTraceToString()}")
+        }
+        if (parsedEvents == 0) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastEmptyTraceMs >= 1000) {
+                lastEmptyTraceMs = now
+                val emptyTraceEnd = minOf(traceEnd.toLong(), traceStart.toLong() + 16L).toInt()
+                val emptyHex = data.copyOfRange(traceStart, emptyTraceEnd)
+                    .joinToString(" ") { "%02X".format(it.toInt() and 255) }
+                AppLogger.warn(
+                    "MidiInputReceiver",
+                    "MIDI buffer produced no supported event source=$source bytes=[$emptyHex] length=$length"
+                )
+            }
+        }
         }
     }
 }

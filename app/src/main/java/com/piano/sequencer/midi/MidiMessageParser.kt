@@ -8,6 +8,7 @@ object MidiMessageParser {
         fun onProgramChange(channel: Int, program: Int)
         fun onPitchBend(channel: Int, value: Int)
         fun onChannelPressure(channel: Int, value: Int)
+        fun onSysEx(bytes: ByteArray) {}
     }
 
     /** Stateful parser. One instance belongs to one MIDI input stream. */
@@ -16,6 +17,9 @@ object MidiMessageParser {
         private var pendingStatus = -1
         private val pending = ArrayList<Int>(2)
         private var inSysex = false
+        private var sysexOverflow = false
+        private val sysex = ArrayList<Byte>(32)
+        private val maxSysexBytes = 8192
 
         fun parse(data: ByteArray, offset: Int, length: Int, handler: Handler) {
             val end = (offset + length).coerceAtMost(data.size)
@@ -24,12 +28,32 @@ object MidiMessageParser {
                 val b = data[pos++].toInt() and 0xff
                 if (b >= 0xf8) continue // realtime never affects message state
                 if (inSysex) {
-                    if (b == 0xf7) inSysex = false
+                    if (sysexOverflow) {
+                        if (b == 0xf7) {
+                            inSysex = false
+                            sysexOverflow = false
+                        }
+                        continue
+                    }
+                    if (sysex.size >= maxSysexBytes) {
+                        sysexOverflow = true
+                        sysex.clear()
+                        continue
+                    }
+                    sysex.add(b.toByte())
+                    if (b == 0xf7) {
+                        inSysex = false
+                        handler.onSysEx(sysex.toByteArray())
+                        sysex.clear()
+                    }
                     continue
                 }
                 if (b >= 0x80) {
                     if (b == 0xf0) {
                         inSysex = true
+                        sysexOverflow = false
+                        sysex.clear()
+                        sysex.add(0xf0.toByte())
                         clearMessage(false)
                     } else if (b >= 0xf1) {
                         clearMessage(false)

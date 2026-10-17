@@ -15,6 +15,8 @@ import android.os.IBinder
 import android.provider.OpenableColumns
 import android.text.util.Linkify
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -36,6 +38,7 @@ import com.piano.sequencer.midi.MidiFileTriggerController
 import com.piano.sequencer.midi.PitchBendChannelResolver
 import com.piano.sequencer.midi.MultiChannelResolver
 import com.piano.sequencer.midi.MidiIngressRouter
+import com.piano.sequencer.midi.MidiInputTrace
 import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.midi.noteToName
 import com.piano.sequencer.project.PseqArchive
@@ -51,17 +54,24 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.LinkedHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicReference
 
 class MainActivity : AppCompatActivity() {
     private val midiWorker = Executors.newSingleThreadExecutor { r ->
         Thread(r, "MainMidiWorker").apply { isDaemon = true }
     }
+    private val projectIoWorker = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "ProjectIoWorker").apply { isDaemon = true }
+    }
+    private val projectIoFailure = AtomicReference<Throwable?>(null)
 
     private lateinit var layout: LinearLayout
     private lateinit var statusText: TextView
     private lateinit var c4Button: Button
     private lateinit var d4Button: Button
     private lateinit var e4Button: Button
+    private lateinit var diagnosticNotes: DiagnosticNoteInput
     private lateinit var panicButton: Button
     private lateinit var projectsButton: Button
     private lateinit var aboutButton: Button
@@ -114,6 +124,7 @@ class MainActivity : AppCompatActivity() {
     // (e.g. a virtual MIDI device connected after the app started).
     private val midiDeviceCallback = object : MidiManager.DeviceCallback() {
         override fun onDeviceAdded(deviceInfo: MidiDeviceInfo) {
+            if (exitPending) return
             refreshMidiStatus()
             if (!midiManager.isConnected() && !userDisconnected) {
                 val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
@@ -126,6 +137,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         override fun onDeviceRemoved(deviceInfo: MidiDeviceInfo) {
+            if (exitPending) return
             refreshMidiStatus()
             val active = midiManager.getCurrentDevice()
             if (active != null && midiManager.stableKey(active) == midiManager.stableKey(deviceInfo)) {
@@ -146,6 +158,9 @@ class MainActivity : AppCompatActivity() {
     @Volatile
     private var playbackService: PlaybackService? = null
     private var serviceBound = false
+    @Volatile private var exitPending = false
+    private val exitLock = Any()
+    @Volatile private var engineBootThread: Thread? = null
 
     // SAF folder picker for the crash log destination (crash.log)
     private val logFolderLauncher = registerForActivityResult(
@@ -185,6 +200,7 @@ class MainActivity : AppCompatActivity() {
     private val midiImportLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
+        if (exitPending) return@registerForActivityResult
         uri?.let {
             projectRepo.importResource(it, "imported.mid") { result ->
                 runOnUiThread {
@@ -198,9 +214,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // SAF document creator for .pseq project save
+    // Keep project extension as .pseq. Using application/zip makes DocumentsUI
+    // append .zip to the suggested filename even though ZIP is only the
+    // internal container format.
     private val saveProjectLauncher = registerForActivityResult(
-        ActivityResultContracts.CreateDocument("application/zip")
+        ActivityResultContracts.CreateDocument("application/x-piano-sequencer")
     ) { uri ->
         if (uri != null) saveProjectToUri(uri)
     }
@@ -222,13 +240,14 @@ class MainActivity : AppCompatActivity() {
             }
             playbackService = binder.getService()
             serviceBound = true
+            if (exitPending) return
 
             // Bind trigger controller (singleton) — cheap ref storage, safe on main thread
             MidiFileTriggerController.get(this@MainActivity).bind(this@MainActivity, playbackService!!)
             refreshLog()
 
             // Move engine boot OFF the main thread
-            Thread({
+            engineBootThread = Thread({
                 val svc = playbackService ?: return@Thread
                 // Install the native crash handler FIRST so a native crash
                 // (e.g. while loading the LSP bundle) leaves a backtrace in
@@ -294,38 +313,14 @@ class MainActivity : AppCompatActivity() {
                 }
                 AppLogger.info("MainActivity", "Engine initialized (${actualRate}Hz, 512 buffer)")
 
-                // Load the prebuilt LSP LADSPA bundle (master effect chain: EQ →
-                // Compressor → Limiter). Extracted into nativeLibraryDir at
-                // install time by the jniLibs sourceSet. Best-effort: if it is
-                // missing/incompatible, loadMasterEffectBundle() returns 0 and
-                // the chain stays a passthrough (the engine keeps running).
-                // Effects are loaded DISABLED (bypassed) by default; the UI
-                // toggles them on after the user opts in.
-                //
-                // Pre-load the bundle via System.loadLibrary so the linker
-                // resolves its NEEDED deps and registers the soname; the native
-                // dlopen then finds it by soname fallback. The bundle is built
-                // from the pinned LSP submodule by CI and packaged as a jniLib.
-                // Result is logged to AppLogger.
-                //
-                // If the previous launch crashed while loading the bundle (a
-                // native_crash.log is present), do NOT retry the load this
-                // launch — leave the chain as a passthrough so the user can
-                // read the captured backtrace and report it. The crash log is
-                // cleared below so a subsequent (manual) reload attempt is
-                // allowed to proceed.
-                if (prevCrash != null) {
-                    AppLogger.warn("MainActivity", "Skipping LSP bundle load: previous launch crashed (see native crash above). Chain stays passthrough.")
-                } else {
-                    NativeEngineBridge.preloadLspBundle(this@MainActivity)
-                    loadMasterEffectBundle(svc)
-                }
-
                 // Restore persisted state (SF2, polyphony, master gain, channel programs)
                 restorePersistedState(svc)
 
                 // Start audio
-                svc.startAudio()
+                synchronized(exitLock) {
+                    if (exitPending) return@Thread
+                    svc.startAudio()
+                }
                 val playing = svc.isAudioPlaying() == true
                 val underruns = svc.getUnderrunCount()
 
@@ -337,7 +332,7 @@ class MainActivity : AppCompatActivity() {
                     statusText.text = if (playing) "Piano Sequencer — running (underruns: $underruns)"
                                       else "Piano Sequencer — audio start failed"
                 }
-            }, "EngineBoot").apply { isDaemon = true }.start()
+            }, "EngineBoot").apply { isDaemon = true }.also { it.start() }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -360,22 +355,29 @@ class MainActivity : AppCompatActivity() {
 
     /** Sends one keyboard message to every target channel of multi-channel broadcast. */
     private fun sendToTargets(statusBase: Int, d1: Int, d2: Int, base: IntArray) {
-        val targets = MultiChannelResolver.resolve(base, multiChannelMask, multiChannelEnabled)
-        val service = playbackService
-        if (service == null) {
-            uiToast("Service not connected")
-            return
+        synchronized(exitLock) {
+            if (exitPending) return
+            val targets = MultiChannelResolver.resolve(base, multiChannelMask, multiChannelEnabled)
+            val service = playbackService
+            if (service == null) {
+                AppLogger.warn("MIDI", "MIDI send unavailable: service not connected status=0x${statusBase.toString(16)} d1=$d1 d2=$d2")
+                uiToast("Service not connected")
+                return
+            }
+            midiWorker.execute { for (t in targets) service.sendMidiMessage(statusBase or t, d1, d2) }
         }
-        midiWorker.execute { for (t in targets) service.sendMidiMessage(statusBase or t, d1, d2) }
     }
 
     private fun dispatchMidi(action: (PlaybackService) -> Unit) {
-        val service = playbackService
-        if (service == null) {
-            uiToast("Service not connected")
-            return
+        synchronized(exitLock) {
+            if (exitPending) return
+            val service = playbackService
+            if (service == null) {
+                uiToast("Service not connected")
+                return
+            }
+            midiWorker.execute { action(service) }
         }
-        midiWorker.execute { action(service) }
     }
 
     /** Toast on the main thread; no-op if the activity is finishing/destroyed. */
@@ -427,20 +429,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun connectToDevice(deviceInfo: MidiDeviceInfo, persist: Boolean = true) {
-        midiManager.connect(deviceInfo)
-        selectedDeviceName = midiManager.deviceName(deviceInfo)
-        userDisconnected = false
-        if (persist) {
-            // Persist the selected device's stable key.
-            getSharedPreferences("piano_prefs", MODE_PRIVATE).edit().putString(
-                "midi_device_key",
-                midiManager.stableKey(deviceInfo)
-            ).apply()
+        synchronized(exitLock) {
+            if (exitPending) return
+            midiManager.connect(deviceInfo)
+            selectedDeviceName = midiManager.deviceName(deviceInfo)
+            userDisconnected = false
+            if (persist) {
+                // Persist the selected device's stable key.
+                getSharedPreferences("piano_prefs", MODE_PRIVATE).edit().putString(
+                    "midi_device_key",
+                    midiManager.stableKey(deviceInfo)
+                ).apply()
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        diagnosticNotes = DiagnosticNoteInput(
+            noteOn = { note -> midiIngress.noteOn(0, note, 100) },
+            noteOff = { note -> midiIngress.noteOff(0, note, 0) }
+        )
         layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(32, 32, 32, 32)
@@ -451,33 +460,39 @@ class MainActivity : AppCompatActivity() {
         }
         c4Button = Button(this).apply {
             text = "C4 (60)"
-            setOnClickListener {
-                midiIngress.noteOn(0, 60, 100)
+            setOnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> { diagnosticNotes.touchDown(60); true }
+                    MotionEvent.ACTION_UP -> { diagnosticNotes.touchUp(60); view.performClick(); true }
+                    MotionEvent.ACTION_CANCEL -> { diagnosticNotes.touchCancel(60); true }
+                    else -> true
+                }
             }
-            setOnLongClickListener {
-                midiIngress.noteOff(0, 60, 0)
-                true
-            }
+            setOnClickListener { diagnosticNotes.click(60) }
         }
         d4Button = Button(this).apply {
             text = "D4 (62)"
-            setOnClickListener {
-                midiIngress.noteOn(0, 62, 100)
+            setOnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> { diagnosticNotes.touchDown(62); true }
+                    MotionEvent.ACTION_UP -> { diagnosticNotes.touchUp(62); view.performClick(); true }
+                    MotionEvent.ACTION_CANCEL -> { diagnosticNotes.touchCancel(62); true }
+                    else -> true
+                }
             }
-            setOnLongClickListener {
-                midiIngress.noteOff(0, 62, 0)
-                true
-            }
+            setOnClickListener { diagnosticNotes.click(62) }
         }
         e4Button = Button(this).apply {
             text = "E4 (64)"
-            setOnClickListener {
-                midiIngress.noteOn(0, 64, 100)
+            setOnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> { diagnosticNotes.touchDown(64); true }
+                    MotionEvent.ACTION_UP -> { diagnosticNotes.touchUp(64); view.performClick(); true }
+                    MotionEvent.ACTION_CANCEL -> { diagnosticNotes.touchCancel(64); true }
+                    else -> true
+                }
             }
-            setOnLongClickListener {
-                midiIngress.noteOff(0, 64, 0)
-                true
-            }
+            setOnClickListener { diagnosticNotes.click(64) }
         }
         panicButton = Button(this).apply {
             text = "PANIC"
@@ -536,6 +551,12 @@ class MainActivity : AppCompatActivity() {
             text = getString(R.string.sequencer_title)
             setOnClickListener {
                 startActivity(Intent(this@MainActivity, SequencerActivity::class.java))
+            }
+        })
+        layout.addView(Button(this).apply {
+            text = "Exit"
+            setOnClickListener {
+                beginExplicitExit()
             }
         })
         setContentView(layout)
@@ -601,26 +622,35 @@ class MainActivity : AppCompatActivity() {
         // Setup MIDI receiver callback
         midiInputReceiver = MidiInputReceiver()
         midiIngress = MidiIngressRouter(
-            MidiFileTriggerController.get(this)::onNoteOn,
-            MidiFileTriggerController.get(this)::onNoteOff,
+            { ch, note, vel, source -> MidiFileTriggerController.get(this).onNoteOn(ch, note, vel, source) },
+            { ch, note, vel, source -> MidiFileTriggerController.get(this).onNoteOff(ch, note, vel, source) },
             { status, d1, d2, channel -> sendToTargets(status, d1, d2, intArrayOf(channel)) },
             { channel, note, velocity ->
                 lastNoteChannel = channel
                 if (ChordRecorder.isActive()) ChordRecorder.onNoteOn(channel, note, velocity)
-            }
+            },
+            { source -> midiInputReceiver.routeForPort(source) }
         )
         midiInputReceiver.setCallback(object : MidiInputReceiver.Callback {
-            override fun onNoteOn(channel: Int, note: Int, velocity: Int) {
-                midiIngress.noteOn(channel, note, velocity)
+            override fun onNoteOn(channel: Int, note: Int, velocity: Int, source: String) {
+                withMidiIngress { midiIngress.noteOn(channel, note, velocity, source) }
             }
-            override fun onNoteOff(channel: Int, note: Int, velocity: Int) {
-                midiIngress.noteOff(channel, note, velocity)
+            override fun onNoteOff(channel: Int, note: Int, velocity: Int, source: String) {
+                withMidiIngress { midiIngress.noteOff(channel, note, velocity, source) }
             }
-            override fun onControlChange(channel: Int, controller: Int, value: Int) {
+            override fun onControlChange(channel: Int, controller: Int, value: Int, source: String) {
+                withMidiIngress {
                 // Delegate to trigger controller — consumed while learning (first CC
                 // of the session is captured) or when a cell is mapped to this CC
                 // (press toggles the cell's file; repeats are consumed too).
-                if (MidiFileTriggerController.get(this@MainActivity).onControlChange(channel, controller, value)) return
+                val consumed = MidiFileTriggerController.get(this@MainActivity).onControlChange(channel, controller, value, source)
+                if (consumed) {
+                    AppLogger.info("MIDI", "CC ch=${channel + 1} controller=$controller value=$value outcome=consumed")
+                    return
+                }
+                MidiInputTrace.routine("cc-outcome-$channel-$controller", value.toString()) {
+                    "CC ch=${channel + 1} controller=$controller value=$value outcome=not-consumed/forwarded"
+                }
                 if (controller in 0..1) {
                     // Modulation / breath follow the keyboard's current channel
                     val base = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
@@ -628,22 +658,39 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     sendToTargets(0xB0, controller, value, intArrayOf(channel))
                 }
+                }
             }
-            override fun onProgramChange(channel: Int, program: Int) {
-                if (MidiFileTriggerController.get(this@MainActivity).onProgramChange(channel, program)) return
+            override fun onProgramChange(channel: Int, program: Int, source: String) {
+                withMidiIngress {
+                val consumed = MidiFileTriggerController.get(this@MainActivity).onProgramChange(channel, program, source)
+                AppLogger.info("MIDI", "PROGRAM ch=${channel + 1} program=$program outcome=${if (consumed) "consumed" else "not-consumed/forwarded"}")
+                if (consumed) return
                 sendToTargets(0xC0, program, 0, intArrayOf(channel))
+                }
             }
-            override fun onPitchBend(channel: Int, value: Int) {
+            override fun onPitchBend(channel: Int, value: Int, source: String) {
+                withMidiIngress {
                 // Delegate to trigger controller — consumed while learning (first
                 // pitch bend of the session is captured) or when a cell is mapped
                 // to pitch bend (press toggles the cell's file; repeats consumed).
-                if (MidiFileTriggerController.get(this@MainActivity).onPitchBend(channel, value)) return
+                val consumed = MidiFileTriggerController.get(this@MainActivity).onPitchBend(channel, value, source)
+                if (consumed) {
+                    AppLogger.info("MIDI", "PITCH BEND ch=${channel + 1} value=$value outcome=consumed")
+                    return
+                }
+                MidiInputTrace.routine("bend-outcome-$channel", value.toString()) {
+                    "PITCH BEND ch=${channel + 1} value=$value outcome=not-consumed/forwarded"
+                }
                 // Pitch bend follows the keyboard's current channel
                 val base = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
                 sendToTargets(0xE0, value and 0x7F, (value shr 7) and 0x7F, base)
+                }
             }
             override fun onChannelPressure(channel: Int, value: Int) {
-                sendToTargets(0xD0, value, 0, intArrayOf(channel))
+                withMidiIngress { sendToTargets(0xD0, value, 0, intArrayOf(channel)) }
+            }
+            override fun onSysEx(bytes: ByteArray, source: String) {
+                withMidiIngress { MidiFileTriggerController.get(this@MainActivity).onSysEx(bytes, source) }
             }
         })
 
@@ -694,6 +741,109 @@ class MainActivity : AppCompatActivity() {
 
         // Initialize project repository
         projectRepo = ProjectRepository(this)
+    }
+
+    private fun beginExplicitExit() {
+        synchronized(exitLock) {
+            if (exitPending) return
+            if (::diagnosticNotes.isInitialized) diagnosticNotes.releaseHeld()
+            exitPending = true
+        }
+        disableActions(layout)
+        val mainDrain = CountDownLatch(1)
+        val repoDrain = CountDownLatch(1)
+        val projectIoDrain = CountDownLatch(1)
+        val triggerDrain = CountDownLatch(1)
+        val failure = AtomicReference<Throwable?>(null)
+        val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+        val triggerController = MidiFileTriggerController.get(this)
+        // Non-destructive sentinels only: if any durability step fails, all
+        // input, service, and executors remain available for retry.
+        Thread({
+            engineBootThread?.takeIf { it !== Thread.currentThread() }?.join()
+            // EngineBoot can call preloadAll(); only place barriers after its
+            // final submission so they represent a complete accepted-work set.
+            ExecutorDrain.enqueue(projectIoWorker) {
+                projectIoFailure.get()?.let { failure.compareAndSet(null, it) }
+                projectIoDrain.countDown()
+            }
+            synchronized(exitLock) {
+                ExecutorDrain.enqueue(midiWorker) { mainDrain.countDown() }
+            }
+            projectIoDrain.await()
+            triggerController.awaitIdle { triggerDrain.countDown() }
+            triggerDrain.await()
+            mainDrain.await()
+            projectRepo.awaitIdle { result ->
+                result.exceptionOrNull()?.let { failure.compareAndSet(null, it) }
+                repoDrain.countDown()
+            }
+            repoDrain.await()
+            try {
+                if (!prefs.edit().commit()) throw IllegalStateException("SharedPreferences commit failed")
+            } catch (t: Throwable) { failure.compareAndSet(null, t) }
+            if (failure.get() != null) {
+                AppLogger.error("MainActivity", "Explicit exit aborted; durable drain failed: ${failure.get()}")
+                runOnUiThread {
+                    triggerController.resumeAfterAbortedExit()
+                    synchronized(exitLock) { exitPending = false }
+                    enableActions(layout)
+                    Toast.makeText(this, "Exit cancelled: save/flush failed", Toast.LENGTH_LONG).show()
+                }
+                return@Thread
+            }
+            ExplicitExitCoordinator(
+                drainDurableWork = { it(Result.success(Unit)) },
+                stopService = { stopped ->
+                    runOnUiThread {
+                        midiInputReceiver.deactivate()
+                        midiManager.unregisterDeviceCallback(midiDeviceCallback)
+                        midiManager.close {
+                            runOnUiThread {
+                        midiWorker.shutdown()
+                        projectIoWorker.shutdown()
+                        projectRepo.shutdown()
+                        if (serviceBound) {
+                            unbindService(serviceConnection)
+                            serviceBound = false
+                        }
+                        (application as PianoApp).stopServiceThen {
+                            stopped(Result.success(Unit))
+                        }
+                        finishAffinity()
+                    }
+                }
+                    }
+                },
+                terminate = { android.os.Process.killProcess(android.os.Process.myPid()) },
+                onFailure = { error ->
+                    AppLogger.error("MainActivity", "Explicit exit service stop failed: $error")
+                    runOnUiThread { Toast.makeText(this, "Exit failed: ${error.message}", Toast.LENGTH_LONG).show() }
+                }
+            ).begin()
+        }, "ExplicitExitDrain").start()
+    }
+
+    private fun disableActions(group: ViewGroup) {
+        for (index in 0 until group.childCount) {
+            val child = group.getChildAt(index)
+            child.isEnabled = false
+            if (child is ViewGroup) disableActions(child)
+        }
+    }
+
+    private inline fun withMidiIngress(block: () -> Unit) {
+        synchronized(exitLock) {
+            if (!exitPending) block()
+        }
+    }
+
+    private fun enableActions(group: ViewGroup) {
+        for (index in 0 until group.childCount) {
+            val child = group.getChildAt(index)
+            child.isEnabled = true
+            if (child is ViewGroup) enableActions(child)
+        }
     }
 
     private fun refreshLog() {
@@ -912,7 +1062,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 2. Restore polyphony + master gain.
-        svc.setPolyphony(prefs.getInt("polyphony", 64))
+        svc.setPolyphony(prefs.getInt("polyphony", 64).coerceIn(1, 2048))
         svc.setMasterGain(prefs.getFloat("master_gain", 1.0f))
 
         // 2b. Restore reverb / chorus / interps / buffer size (Fix #10-12, #4).
@@ -981,7 +1131,8 @@ class MainActivity : AppCompatActivity() {
      * (JNI calls must never run on main); toasts on main.
      */
     private fun saveProjectToUri(uri: Uri) {
-        Thread({
+        if (exitPending) return
+        projectIoWorker.execute {
             try {
                 val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
 
@@ -1023,7 +1174,7 @@ class MainActivity : AppCompatActivity() {
                     soundFont = soundFont,
                     channels = channels,
                     cells = cells.map {
-                         PseqCell(id = it.id, note = it.note, filePath = it.filePath, loop = it.loop, tempo = it.tempo, channel = it.channel, triggerType = it.triggerType, ccNumber = it.ccNumber, programNumber = it.programNumber)
+                          PseqCell(id = it.id, note = it.note, filePath = it.filePath, loop = it.loop, tempo = it.tempo, channel = it.channel, triggerSource = it.triggerSource, triggerChannel = it.triggerChannel, triggerType = it.triggerType, ccNumber = it.ccNumber, programNumber = it.programNumber, sysexBytes = it.sysexBytes)
                      }
                 )
 
@@ -1031,13 +1182,15 @@ class MainActivity : AppCompatActivity() {
                     ?: throw IOException("Cannot open output stream")
                 PseqArchive.write(out, doc, midiFiles) // write() closes the stream
 
+                projectIoFailure.set(null)
                 AppLogger.info("MainActivity", "Project saved: ${doc.name} (${midiFiles.size} midi file(s))")
                 uiToast("Project saved")
             } catch (e: Exception) {
+                projectIoFailure.set(e)
                 AppLogger.error("MainActivity", "Project save failed: $e")
                 uiToast("Save failed: ${e.message}")
             }
-        }, "PseqSave").apply { isDaemon = true }.start()
+        }
     }
 
     /**
@@ -1048,7 +1201,8 @@ class MainActivity : AppCompatActivity() {
      * on main.
      */
     private fun loadProjectFromUri(uri: Uri) {
-        Thread({
+        if (exitPending) return
+        projectIoWorker.execute {
             try {
                 // 1. Buffer the archive once — SAF streams are one-shot, so
                 //    every PseqArchive call gets a fresh ByteArrayInputStream.
@@ -1105,9 +1259,12 @@ class MainActivity : AppCompatActivity() {
                             loop = cell.loop,
                             tempo = cell.tempo,
                             channel = cell.channel,
+                            triggerSource = cell.triggerSource,
+                            triggerChannel = cell.triggerChannel,
                             triggerType = cell.triggerType,
                             ccNumber = cell.ccNumber,
-                            programNumber = cell.programNumber
+                            programNumber = cell.programNumber,
+                            sysexBytes = cell.sysexBytes
                         )
                     )
                 }
@@ -1130,29 +1287,34 @@ class MainActivity : AppCompatActivity() {
                 val loadedPaths = mutableListOf<String>()
                 if (sf2Names.isNotEmpty()) {
                     val svc = playbackService
-                    if (svc != null) {
-                        // Replace: unload all, then load the project's fonts.
-                        svc.unloadSoundFonts()
-                    }
-                    for (sf2Name in sf2Names) {
-                        // User-provided archive data: reject path separators.
-                        if (sf2Name.contains('/')) {
-                            sf2Missing = true
-                            continue
+                    val wasPlaying = svc?.isAudioPlaying() == true
+                    if (wasPlaying) svc?.stopAudioForMaintenance()
+                    try {
+                        if (svc != null) {
+                            // Replace: unload all, then load the project's fonts.
+                            svc.unloadSoundFonts()
                         }
-                        val sf2File = File(extDir, sf2Name)
-                        if (sf2File.exists()) {
-                            val svc = playbackService
-                            val id = svc?.loadSoundFont(sf2File.absolutePath) ?: -1
-                            if (id >= 0 || svc == null) {
-                                loadedPaths.add(sf2File.absolutePath)
-                            } else {
-                                sf2Unavailable = true
-                                AppLogger.warn("MainActivity", "Failed to load SF2 on project load: ${sf2File.absolutePath} (error: $id)")
+                        for (sf2Name in sf2Names) {
+                            // User-provided archive data: reject path separators.
+                            if (sf2Name.contains('/')) {
+                                sf2Missing = true
+                                continue
                             }
-                        } else {
-                            sf2Missing = true
+                            val sf2File = File(extDir, sf2Name)
+                            if (sf2File.exists()) {
+                                val id = svc?.loadSoundFont(sf2File.absolutePath) ?: -1
+                                if (id >= 0 || svc == null) {
+                                    loadedPaths.add(sf2File.absolutePath)
+                                } else {
+                                    sf2Unavailable = true
+                                    AppLogger.warn("MainActivity", "Failed to load SF2 on project load: ${sf2File.absolutePath} (error: $id)")
+                                }
+                            } else {
+                                sf2Missing = true
+                            }
                         }
+                    } finally {
+                        if (wasPlaying) svc?.restartAfterMaintenance()
                     }
                 }
 
@@ -1204,7 +1366,7 @@ class MainActivity : AppCompatActivity() {
                 AppLogger.error("MainActivity", "Project load failed: $e")
                 uiToast("Load failed: ${e.message}")
             }
-        }, "PseqLoad").apply { isDaemon = true }.start()
+        }
     }
 
     /**
@@ -1347,6 +1509,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (exitPending) return
         // Re-read the pitch bend / mod / breath fallback mask — covers first
         // launch and returning from SettingsActivity.
         pitchBendChannelsMask = getSharedPreferences("piano_prefs", MODE_PRIVATE)
@@ -1383,6 +1546,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        if (::diagnosticNotes.isInitialized) diagnosticNotes.releaseHeld()
         super.onPause()
     }
 
@@ -1396,6 +1560,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         midiWorker.shutdown()
+        projectIoWorker.shutdown()
         super.onDestroy()
         if (serviceBound) {
             unbindService(serviceConnection)

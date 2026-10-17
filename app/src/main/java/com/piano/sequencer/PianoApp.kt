@@ -20,6 +20,32 @@ import java.util.Locale
  * the app's private filesDir.
  */
 class PianoApp : Application() {
+    @Volatile private var playbackServiceAlive = false
+    @Volatile private var playbackService: com.piano.sequencer.service.PlaybackService? = null
+    @Volatile private var exitAfterServiceStop: (() -> Unit)? = null
+
+    @Synchronized fun playbackServiceCreated(service: com.piano.sequencer.service.PlaybackService) {
+        playbackServiceAlive = true
+        playbackService = service
+    }
+    @Synchronized fun playbackServiceDestroyed() {
+        playbackServiceAlive = false
+        playbackService = null
+        exitAfterServiceStop?.also { exitAfterServiceStop = null }?.invoke()
+    }
+    @Synchronized fun stopServiceThen(onStopped: () -> Unit) {
+        if (!playbackServiceAlive) { onStopped(); return }
+        exitAfterServiceStop = onStopped
+        val service = playbackService
+        if (service == null) {
+            exitAfterServiceStop = null
+            onStopped()
+            return
+        }
+        service.prepareForExplicitExit {
+            stopService(android.content.Intent(this, com.piano.sequencer.service.PlaybackService::class.java))
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()

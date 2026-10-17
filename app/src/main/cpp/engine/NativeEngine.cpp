@@ -15,6 +15,21 @@
 #include <atomic>
 #include <cmath>
 
+namespace {
+class AudioCallbackGuard {
+public:
+    explicit AudioCallbackGuard(FluidSynthEngine* synth) : mSynth(synth) {}
+    ~AudioCallbackGuard() { if (mAdmitted) mSynth->leaveAudioCallback(); }
+    bool enter() {
+        mAdmitted = mSynth && mSynth->tryEnterAudioCallback();
+        return mAdmitted;
+    }
+private:
+    FluidSynthEngine* mSynth;
+    bool mAdmitted = false;
+};
+}
+
 std::atomic<NativeEngine*> NativeEngine::sInstance{nullptr};
 
 NativeEngine::NativeEngine()
@@ -451,6 +466,13 @@ void NativeEngine::enqueueMidiMessage(uint8_t status, uint8_t data1, uint8_t dat
 // thread polls mLiveMidiQueue for recording only.
 
 void NativeEngine::onAudioFrame(float* output, int numFrames) {
+    AudioCallbackGuard callbackGuard(mSynth);
+    if (!callbackGuard.enter()) {
+        // Maintenance gate drops this callback: transport pauses and queued
+        // MIDI/events remain untouched for the next admitted callback.
+        std::memset(output, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
+        return;
+    }
     // M2: clamp to mMaxSynthFrames (max(kMaxSynthFrames, Oboe capacity), set in
     // init()), NOT the fixed kMaxSynthFrames — this renders the full Oboe buffer
     // (e.g. 3840) instead of clamping to 2048 + a silence tail (the choppiness).
