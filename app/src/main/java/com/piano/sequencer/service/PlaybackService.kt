@@ -507,6 +507,16 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     override fun onAudioFocusChange(focusChange: Int) {
         audioWorker.execute {
+            val focusName = when (focusChange) {
+                AudioManager.AUDIOFOCUS_GAIN -> "GAIN"
+                AudioManager.AUDIOFOCUS_LOSS -> "LOSS(permanent; no auto-resume)"
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> "LOSS_TRANSIENT"
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> "LOSS_TRANSIENT_CAN_DUCK"
+                else -> "UNKNOWN"
+            }
+            val beforeState = NativeEngineBridge.nativeGetAudioState()
+            val beforePlaying = NativeEngineBridge.nativeIsAudioPlaying()
+            AppLogger.info("PlaybackService", "Audio focus change=$focusChange name=$focusName before state=$beforeState playing=$beforePlaying intentionalStop=$intentionalStop resumeAfterFocus=$resumeAfterFocus startPending=$startWhenFocusGained granted=$audioFocusGranted")
             when (focusChange) {
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
@@ -535,6 +545,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
                     }
                 }
             }
+            AppLogger.info("PlaybackService", "Audio focus outcome change=$focusChange name=$focusName state=${NativeEngineBridge.nativeGetAudioState()} playing=${NativeEngineBridge.nativeIsAudioPlaying()} intentionalStop=$intentionalStop resumeAfterFocus=$resumeAfterFocus startPending=$startWhenFocusGained granted=$audioFocusGranted")
         }
     }
 
