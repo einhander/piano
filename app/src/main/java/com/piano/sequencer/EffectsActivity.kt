@@ -38,6 +38,7 @@ class EffectsActivity : AppCompatActivity() {
 
     private lateinit var container: LinearLayout
     private lateinit var statusText: TextView
+    private var editorSlot: Int? = null
 
     private var service: PlaybackService? = null
     private var isRestoringState = false
@@ -69,6 +70,7 @@ class EffectsActivity : AppCompatActivity() {
         }
         container = findViewById(R.id.effectsContainer)
         statusText = findViewById(R.id.effectsStatus)
+        editorSlot = if (intent.hasExtra(EXTRA_EFFECT_SLOT)) intent.getIntExtra(EXTRA_EFFECT_SLOT, -1).takeIf { it >= 0 } else null
 
         Intent(this, PlaybackService::class.java).also { intent ->
             bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
@@ -133,13 +135,85 @@ class EffectsActivity : AppCompatActivity() {
         // Gather metadata + current values on the worker thread, then build
         // views on the main thread.
         runOnUiThread {
-            statusText.text = getString(R.string.master_effects_chain_heading)
+            supportActionBar?.title = if (editorSlot == null) getString(R.string.master_effects_title)
+                else instances.firstOrNull { it.slot == editorSlot }?.let { friendlyEffectTitle(it.descriptor.stableId) }
+                    ?: getString(R.string.master_effects_title)
+            statusText.text = if (editorSlot == null) getString(R.string.master_effects_chain_heading) else ""
             isRestoringState = true
-            for ((slot, instance) in instances.withIndex()) {
-                container.addView(buildEffectCard(slot, friendlyEffectTitle(instance.descriptor.stableId), instance))
+            if (editorSlot == null) {
+                for (instance in instances) container.addView(buildEffectCard(instance.slot, friendlyEffectTitle(instance.descriptor.stableId), instance))
+            } else {
+                val index = instances.indexOfFirst { it.slot == editorSlot }
+                if (index < 0) {
+                    statusText.text = getString(R.string.master_effects_unavailable)
+                } else {
+                    container.addView(buildEditorTabs(instances, index))
+                    container.addView(buildEditor(instances[index]))
+                }
             }
             isRestoringState = false
         }
+    }
+
+    private fun buildEditorTabs(instances: List<EffectInstance>, selected: Int): View =
+        android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(LinearLayout(this@EffectsActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                instances.forEachIndexed { index, instance ->
+                    val tab = android.widget.Button(this@EffectsActivity).apply {
+                        text = friendlyEffectTitle(instance.descriptor.stableId)
+                        isEnabled = instance.available
+                        isSelected = index == selected
+                        setOnClickListener {
+                            startActivity(Intent(this@EffectsActivity, EffectsActivity::class.java)
+                                .putExtra(EXTRA_EFFECT_SLOT, instance.slot))
+                            finish()
+                        }
+                    }
+                    addView(tab)
+                }
+            })
+        }
+
+    private fun buildEditor(instance: EffectInstance): View {
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = ContextCompat.getDrawable(this@EffectsActivity, R.drawable.card_frame)
+            val pad = (16 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad, pad, pad)
+        }
+        panel.addView(TextView(this).apply {
+            text = friendlyEffectTitle(instance.descriptor.stableId)
+            textSize = 24f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, 8, 0, 12)
+        })
+        val state = TextView(this).apply { textSize = 13f }
+        val toggle = SwitchCompat(this).apply {
+            text = getString(R.string.master_effects_enable)
+            isChecked = instance.enabled
+            isEnabled = instance.available
+            setOnCheckedChangeListener { _, checked ->
+                state.text = getString(if (checked) R.string.master_effects_enabled_state else R.string.master_effects_bypassed_state)
+                CompletableFuture.runAsync({
+                    try {
+                        repository.setEnabled(instance.slot, checked)
+                        prefs().edit().putBoolean(fxEnabledKey(instance.slot), checked).apply()
+                    } catch (e: Exception) {
+                        AppLogger.error("EffectsActivity", "Could not change ${instance.descriptor.displayName} state: ${e.message}")
+                        runOnUiThread { state.text = getString(R.string.master_effects_error_state) }
+                    }
+                }, mainExecutor)
+            }
+        }
+        state.text = getString(when { !instance.available -> R.string.master_effects_unavailable_state; instance.enabled -> R.string.master_effects_enabled_state; else -> R.string.master_effects_bypassed_state })
+        panel.addView(toggle)
+        panel.addView(state)
+        instance.parameters.filter { it.writable }.forEach { p ->
+            panel.addView(buildParamRow(instance.slot, p, p.value.rawValue, instance.available))
+        }
+        return panel
     }
 
     private fun friendlyEffectTitle(stableId: String): String {
@@ -219,17 +293,14 @@ class EffectsActivity : AppCompatActivity() {
 
         card.addView(stateLabel)
 
-        val parameterArea = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val editButton = android.widget.Button(ctx).apply {
             text = getString(R.string.master_effects_parameters, instance.parameters.size)
             isEnabled = instance.available
             setOnClickListener {
-                parameterArea.visibility = if (parameterArea.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                startActivity(Intent(this@EffectsActivity, EffectsActivity::class.java).putExtra(EXTRA_EFFECT_SLOT, slot))
             }
         }
         card.addView(editButton)
-        for (p in instance.parameters) parameterArea.addView(buildParamRow(slot, p, p.value.rawValue, instance.available))
-        card.addView(parameterArea)
         return card
     }
 
@@ -337,5 +408,6 @@ class EffectsActivity : AppCompatActivity() {
 
     companion object {
         private const val SEEKBAR_STEPS = 1000
+        const val EXTRA_EFFECT_SLOT = "effect_slot"
     }
 }
