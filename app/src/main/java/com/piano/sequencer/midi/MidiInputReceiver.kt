@@ -3,6 +3,7 @@ package com.piano.sequencer.midi
 import android.media.midi.MidiReceiver
 import android.os.SystemClock
 import com.piano.sequencer.AppLogger
+import java.util.concurrent.ConcurrentHashMap
 
 class MidiInputReceiver private constructor(
     private val callbackHolder: CallbackHolder,
@@ -16,6 +17,7 @@ class MidiInputReceiver private constructor(
 
     private class CallbackHolder {
         @Volatile var callback: Callback? = null
+        val portPolicies = ConcurrentHashMap<String, MidiIngressRouter.PortRoute>()
     }
 
     private val parser = MidiMessageParser.StreamParser()
@@ -41,15 +43,36 @@ class MidiInputReceiver private constructor(
         "callbacks=$callbackCount bytes=$byteCount captured=$capturedBuffers/$CAPTURE_CALLBACK_LIMIT"
     }
 
-    fun createPortReceiver(portIndex: Int, stableSource: String = source): MidiInputReceiver =
-        MidiInputReceiver(callbackHolder, "$stableSource|port=$portIndex")
+    fun createPortReceiver(portIndex: Int, stableSource: String = source, smk37Usb: Boolean = false): MidiInputReceiver {
+        val portSource = "$stableSource|port=$portIndex"
+        val route = portRoute(portIndex, smk37Usb)
+        if (route == MidiIngressRouter.PortRoute.NORMAL) callbackHolder.portPolicies.remove(portSource)
+        else callbackHolder.portPolicies[portSource] = route
+        return MidiInputReceiver(callbackHolder, portSource)
+    }
+
+    fun routeForPort(source: String?): MidiIngressRouter.PortRoute {
+        return source?.let { callbackHolder.portPolicies[it] } ?: MidiIngressRouter.PortRoute.NORMAL
+    }
+
+    private fun portRoute(portIndex: Int, smk37Usb: Boolean): MidiIngressRouter.PortRoute {
+        if (!smk37Usb) return MidiIngressRouter.PortRoute.NORMAL
+        return when (portIndex) {
+            1 -> MidiIngressRouter.PortRoute.IGNORE
+            2 -> MidiIngressRouter.PortRoute.CONTROL_ONLY
+            else -> MidiIngressRouter.PortRoute.NORMAL
+        }
+    }
 
     fun setCallback(callback: Callback?) {
         callbackHolder.callback = callback
     }
 
     fun deactivate() {
-        synchronized(lifecycleLock) { active = false }
+        synchronized(lifecycleLock) {
+            active = false
+            callbackHolder.portPolicies.remove(source)
+        }
     }
 
     // Swallows a callback exception so a single bad message does not abort

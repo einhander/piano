@@ -150,7 +150,7 @@ class MidiDeviceManager(
             try {
                 val receiver = inputCallback as? MidiInputReceiver
                     ?: throw IllegalStateException("MIDI input callback must be MidiInputReceiver")
-                val newReceiver = receiver.createPortReceiver(index, stableKey(deviceInfo))
+                val newReceiver = receiver.createPortReceiver(index, stableKey(deviceInfo), isSmk37ProUsb(deviceInfo))
                 portReceiver = newReceiver
                 port.connect(newReceiver)
                 outputs += ActiveOutput(index, port, newReceiver)
@@ -189,6 +189,13 @@ class MidiDeviceManager(
         snapshot = ConnectionSnapshot(deviceInfo, true, false, gen)
         AppLogger.info("MidiDeviceManager", "Connected: device ${deviceInfo.id}")
         listener?.onDeviceConnected(deviceInfo)
+    }
+
+    private fun isSmk37ProUsb(info: MidiDeviceInfo): Boolean {
+        val props = info.properties
+        val name = listOfNotNull(props.getString("name"), props.getString("product"), props.getString("manufacturer"))
+            .joinToString(" ")
+        return info.type == MidiDeviceInfo.TYPE_USB && name.contains("SMK-37 Pro", ignoreCase = true)
     }
 
     fun disconnect() {

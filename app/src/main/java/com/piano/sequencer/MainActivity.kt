@@ -591,7 +591,8 @@ class MainActivity : AppCompatActivity() {
             { channel, note, velocity ->
                 lastNoteChannel = channel
                 if (ChordRecorder.isActive()) ChordRecorder.onNoteOn(channel, note, velocity)
-            }
+            },
+            { source -> midiInputReceiver.routeForPort(source) }
         )
         midiInputReceiver.setCallback(object : MidiInputReceiver.Callback {
             override fun onNoteOn(channel: Int, note: Int, velocity: Int, source: String) {
