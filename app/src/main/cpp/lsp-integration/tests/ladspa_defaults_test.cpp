@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
+#include <set>
 
 namespace {
 float observed[256];
@@ -78,8 +79,54 @@ int main() {
     for (int i = 0; i < tableCount; ++i)
         if (limUi[i].id == piano::lsp::kParamLimReleaseMs) uiReleaseFive = limUi[i].defaultValue == 5.f;
     assert(uiReleaseFive);
+    const auto* eq = piano::lsp::paramTable(piano::lsp::kSlotEq, tableCount);
+    assert(tableCount == 99);
+    std::set<uint32_t> ids;
+    for (int i = 0; i < tableCount; ++i) assert(ids.insert(eq[i].paramId).second);
+    const uint32_t bandIds[16][6] = {
+        {30,31,32,33,34,35},
+        {piano::lsp::kParamEqBand1Type,piano::lsp::kParamEqBand1Mode,piano::lsp::kParamEqBand1Mute,piano::lsp::kParamEqBand1Freq,piano::lsp::kParamEqBand1Gain,piano::lsp::kParamEqBand1Q},
+        {piano::lsp::kParamEqBand2Type,piano::lsp::kParamEqBand2Mode,piano::lsp::kParamEqBand2Mute,piano::lsp::kParamEqBand2Freq,piano::lsp::kParamEqBand2Gain,piano::lsp::kParamEqBand2Q},
+        {piano::lsp::kParamEqBand3Type,piano::lsp::kParamEqBand3Mode,piano::lsp::kParamEqBand3Mute,piano::lsp::kParamEqBand3Freq,piano::lsp::kParamEqBand3Gain,piano::lsp::kParamEqBand3Q},
+        {piano::lsp::kParamEqBand4Type,piano::lsp::kParamEqBand4Mode,piano::lsp::kParamEqBand4Mute,piano::lsp::kParamEqBand4Freq,piano::lsp::kParamEqBand4Gain,piano::lsp::kParamEqBand4Q},
+        {piano::lsp::kParamEqBand5Type,piano::lsp::kParamEqBand5Mode,piano::lsp::kParamEqBand5Mute,piano::lsp::kParamEqBand5Freq,piano::lsp::kParamEqBand5Gain,piano::lsp::kParamEqBand5Q},
+        {piano::lsp::kParamEqBand6Type,piano::lsp::kParamEqBand6Mode,piano::lsp::kParamEqBand6Mute,piano::lsp::kParamEqBand6Freq,piano::lsp::kParamEqBand6Gain,piano::lsp::kParamEqBand6Q},
+        {piano::lsp::kParamEqBand7Type,piano::lsp::kParamEqBand7Mode,piano::lsp::kParamEqBand7Mute,piano::lsp::kParamEqBand7Freq,piano::lsp::kParamEqBand7Gain,piano::lsp::kParamEqBand7Q},
+        {piano::lsp::kParamEqBand8Type,piano::lsp::kParamEqBand8Mode,piano::lsp::kParamEqBand8Mute,piano::lsp::kParamEqBand8Freq,piano::lsp::kParamEqBand8Gain,piano::lsp::kParamEqBand8Q},
+        {piano::lsp::kParamEqBand9Type,piano::lsp::kParamEqBand9Mode,piano::lsp::kParamEqBand9Mute,piano::lsp::kParamEqBand9Freq,piano::lsp::kParamEqBand9Gain,piano::lsp::kParamEqBand9Q},
+        {piano::lsp::kParamEqBand10Type,piano::lsp::kParamEqBand10Mode,piano::lsp::kParamEqBand10Mute,piano::lsp::kParamEqBand10Freq,piano::lsp::kParamEqBand10Gain,piano::lsp::kParamEqBand10Q},
+        {piano::lsp::kParamEqBand11Type,piano::lsp::kParamEqBand11Mode,piano::lsp::kParamEqBand11Mute,piano::lsp::kParamEqBand11Freq,piano::lsp::kParamEqBand11Gain,piano::lsp::kParamEqBand11Q},
+        {piano::lsp::kParamEqBand12Type,piano::lsp::kParamEqBand12Mode,piano::lsp::kParamEqBand12Mute,piano::lsp::kParamEqBand12Freq,piano::lsp::kParamEqBand12Gain,piano::lsp::kParamEqBand12Q},
+        {piano::lsp::kParamEqBand13Type,piano::lsp::kParamEqBand13Mode,piano::lsp::kParamEqBand13Mute,piano::lsp::kParamEqBand13Freq,piano::lsp::kParamEqBand13Gain,piano::lsp::kParamEqBand13Q},
+        {piano::lsp::kParamEqBand14Type,piano::lsp::kParamEqBand14Mode,piano::lsp::kParamEqBand14Mute,piano::lsp::kParamEqBand14Freq,piano::lsp::kParamEqBand14Gain,piano::lsp::kParamEqBand14Q},
+        {piano::lsp::kParamEqBand15Type,piano::lsp::kParamEqBand15Mode,piano::lsp::kParamEqBand15Mute,piano::lsp::kParamEqBand15Freq,piano::lsp::kParamEqBand15Gain,piano::lsp::kParamEqBand15Q},
+    };
+    const int portOffsets[] = {0, 1, 4, 5, 7, 8};
+    for (int band = 0; band < 16; ++band) {
+        for (int parameter = 0; parameter < 6; ++parameter) {
+            const auto* p = piano::lsp::paramPortFor(piano::lsp::kSlotEq, bandIds[band][parameter]);
+            assert(p && p->port == 28 + band * 11 + portOffsets[parameter]);
+        }
+        assert(piano::lsp::paramPortFor(piano::lsp::kSlotEq, bandIds[band][0])->def == 0.f);
+    }
+    const auto* eqUi = piano::lsp::paramDescriptors(piano::lsp::kSlotEq, tableCount);
+    assert(tableCount == 99);
+    assert(eqUi[3].id == 30 && eqUi[3].defaultValue == 0.f);
+    assert(eqUi[3 + 15 * 6].id == piano::lsp::kParamEqBand15Type && eqUi[3 + 15 * 6].defaultValue == 0.f);
+    for (int band = 0; band < 16; ++band) assert(eqUi[3 + band * 6].defaultValue == 0.f);
     // Mapped EQ frequency default overrides descriptor-derived value at port 33.
     assert(observed[33] == 1000.f);
+    const uint32_t band0Freq = bandIds[0][3], band0Gain = bandIds[0][4];
+    const uint32_t band15Freq = bandIds[15][3], band15Gain = bandIds[15][4];
+    effect.setParameter(band0Freq, 250.f);
+    effect.setParameter(band0Gain, 2.f);
+    effect.setParameter(band15Freq, 12000.f);
+    effect.setParameter(band15Gain, 3.f);
+    assert(effect.getParameter(band0Freq) == 250.f && effect.getParameter(band0Gain) == 2.f);
+    assert(effect.getParameter(band15Freq) == 12000.f && effect.getParameter(band15Gain) == 3.f);
+    effect.process(l, r, 64);
+    assert(observed[33] == 250.f && observed[35] == 2.f);
+    assert(observed[198] == 12000.f && observed[200] == 3.f);
     for (int n = 0; n < 64; ++n) l[n] = 2.f, r[n] = 3.f;
     effect.setBypassed(true); effect.process(l, r, 64);
     assert(l[0] == 2.f && r[0] == 3.f);

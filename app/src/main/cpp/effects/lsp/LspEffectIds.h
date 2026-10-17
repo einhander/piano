@@ -89,13 +89,28 @@ enum ParamId : uint32_t {
     kParamLimReleaseMs    = 23,
     kParamLimKneeDb       = 24,
 
-    // Parametric EQ (band 0 only in the first iteration).
+    // Parametric EQ. Band 0 IDs are persisted and must remain unchanged.
     kParamEqBand0Type     = 30,
     kParamEqBand0Mode     = 31,
     kParamEqBand0Mute     = 32,
     kParamEqBand0Freq     = 33,
     kParamEqBand0Gain     = 34,
     kParamEqBand0Q        = 35,
+    kParamEqBand1Type = 130, kParamEqBand1Mode, kParamEqBand1Mute, kParamEqBand1Freq, kParamEqBand1Gain, kParamEqBand1Q,
+    kParamEqBand2Type = 140, kParamEqBand2Mode, kParamEqBand2Mute, kParamEqBand2Freq, kParamEqBand2Gain, kParamEqBand2Q,
+    kParamEqBand3Type = 150, kParamEqBand3Mode, kParamEqBand3Mute, kParamEqBand3Freq, kParamEqBand3Gain, kParamEqBand3Q,
+    kParamEqBand4Type = 160, kParamEqBand4Mode, kParamEqBand4Mute, kParamEqBand4Freq, kParamEqBand4Gain, kParamEqBand4Q,
+    kParamEqBand5Type = 170, kParamEqBand5Mode, kParamEqBand5Mute, kParamEqBand5Freq, kParamEqBand5Gain, kParamEqBand5Q,
+    kParamEqBand6Type = 180, kParamEqBand6Mode, kParamEqBand6Mute, kParamEqBand6Freq, kParamEqBand6Gain, kParamEqBand6Q,
+    kParamEqBand7Type = 190, kParamEqBand7Mode, kParamEqBand7Mute, kParamEqBand7Freq, kParamEqBand7Gain, kParamEqBand7Q,
+    kParamEqBand8Type = 200, kParamEqBand8Mode, kParamEqBand8Mute, kParamEqBand8Freq, kParamEqBand8Gain, kParamEqBand8Q,
+    kParamEqBand9Type = 210, kParamEqBand9Mode, kParamEqBand9Mute, kParamEqBand9Freq, kParamEqBand9Gain, kParamEqBand9Q,
+    kParamEqBand10Type = 220, kParamEqBand10Mode, kParamEqBand10Mute, kParamEqBand10Freq, kParamEqBand10Gain, kParamEqBand10Q,
+    kParamEqBand11Type = 230, kParamEqBand11Mode, kParamEqBand11Mute, kParamEqBand11Freq, kParamEqBand11Gain, kParamEqBand11Q,
+    kParamEqBand12Type = 240, kParamEqBand12Mode, kParamEqBand12Mute, kParamEqBand12Freq, kParamEqBand12Gain, kParamEqBand12Q,
+    kParamEqBand13Type = 250, kParamEqBand13Mode, kParamEqBand13Mute, kParamEqBand13Freq, kParamEqBand13Gain, kParamEqBand13Q,
+    kParamEqBand14Type = 260, kParamEqBand14Mode, kParamEqBand14Mute, kParamEqBand14Freq, kParamEqBand14Gain, kParamEqBand14Q,
+    kParamEqBand15Type = 270, kParamEqBand15Mode, kParamEqBand15Mute, kParamEqBand15Freq, kParamEqBand15Gain, kParamEqBand15Q,
 };
 
 // Per-effect LADSPA port index for a stable parameter id. Returns -1 if the

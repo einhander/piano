@@ -3,7 +3,7 @@
 namespace piano {
 namespace lsp {
 
-// ── Parametric EQ (band 0 only) ──
+// ── Parametric EQ ──
 static const ParamPort kEqPorts[] = {
     {kParamBypass,       4,   0.0f,    1.0f,        0.0f, false, false, true},
     {kParamInputGain,    5,   0.0f,    10.0f,       1.0f, true,  false, false},
@@ -14,6 +14,17 @@ static const ParamPort kEqPorts[] = {
     {kParamEqBand0Freq,  33,  10.0f,   24000.0f,    1000.0f, true,  false, false},
     {kParamEqBand0Gain,  35,  0.01585f, 63.0957f,   1.0f, true,  false, false},
     {kParamEqBand0Q,     36,  0.0f,    100.0f,      1.0f, false, false, false},
+#define EQ_BAND(N, ID) \
+    {kParamEqBand##N##Type, 28 + (N) * 11, 0.0f, 11.0f, 0.0f, false, true, false}, \
+    {kParamEqBand##N##Mode, 29 + (N) * 11, 0.0f, 6.0f, 0.0f, false, true, false}, \
+    {kParamEqBand##N##Mute, 32 + (N) * 11, 0.0f, 1.0f, 0.0f, false, false, true}, \
+    {kParamEqBand##N##Freq, 33 + (N) * 11, 10.0f, 24000.0f, 1000.0f, true, false, false}, \
+    {kParamEqBand##N##Gain, 35 + (N) * 11, 0.01585f, 63.0957f, 1.0f, true, false, false}, \
+    {kParamEqBand##N##Q, 36 + (N) * 11, 0.0f, 100.0f, 1.0f, false, false, false}
+    EQ_BAND(1, 0), EQ_BAND(2, 0), EQ_BAND(3, 0), EQ_BAND(4, 0), EQ_BAND(5, 0),
+    EQ_BAND(6, 0), EQ_BAND(7, 0), EQ_BAND(8, 0), EQ_BAND(9, 0), EQ_BAND(10, 0),
+    EQ_BAND(11, 0), EQ_BAND(12, 0), EQ_BAND(13, 0), EQ_BAND(14, 0), EQ_BAND(15, 0),
+#undef EQ_BAND
 };
 
 // ── Compressor ──
@@ -101,6 +112,16 @@ static const EffectParameterDescriptor kEqDescriptors[] = {
     {kParamEqBand0Freq, "band0_freq",   "Band 0 freq",  10.0f,   24000.0f,    1000.0f, true,  false, false},
     {kParamEqBand0Gain, "band0_gain",   "Band 0 gain",  0.01585f, 63.0957f,   1.0f, true,  false, false},
     {kParamEqBand0Q,   "band0_q",       "Band 0 Q",     0.0f,    100.0f,      1.0f, false, false, false},
+#define EQ_DESC(N) \
+    {kParamEqBand##N##Type, "band" #N "_type", "Band " #N " type", 0.f, 11.f, 0.f, false, true, false}, \
+    {kParamEqBand##N##Mode, "band" #N "_mode", "Band " #N " mode", 0.f, 6.f, 0.f, false, true, false}, \
+    {kParamEqBand##N##Mute, "band" #N "_mute", "Band " #N " mute", 0.f, 1.f, 0.f, false, false, true}, \
+    {kParamEqBand##N##Freq, "band" #N "_freq", "Band " #N " freq", 10.f, 24000.f, 1000.f, true, false, false}, \
+    {kParamEqBand##N##Gain, "band" #N "_gain", "Band " #N " gain", .01585f, 63.0957f, 1.f, true, false, false}, \
+    {kParamEqBand##N##Q, "band" #N "_q", "Band " #N " Q", 0.f, 100.f, 1.f, false, false, false}
+    EQ_DESC(1), EQ_DESC(2), EQ_DESC(3), EQ_DESC(4), EQ_DESC(5), EQ_DESC(6), EQ_DESC(7),
+    EQ_DESC(8), EQ_DESC(9), EQ_DESC(10), EQ_DESC(11), EQ_DESC(12), EQ_DESC(13), EQ_DESC(14), EQ_DESC(15),
+#undef EQ_DESC
 };
 
 static const EffectParameterDescriptor kCompDescriptors[] = {

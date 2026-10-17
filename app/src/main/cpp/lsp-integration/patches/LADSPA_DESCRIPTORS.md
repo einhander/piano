@@ -115,8 +115,8 @@ chain delay compensation. Hint bits decoded: `0x4`=logarithmic, `0x20`=toggled,
 
 Band N (1..15) repeats with stride 11 from band 0: `type=28+N*11`,
 `mode=29+N*11`, `mute=32+N*11`, `freq=33+N*11`, `gain=35+N*11`,
-`q=36+N*11`. Band 0 is the only one wired in the first UI iteration; the
-remaining bands default to `type=0` (off) so the EQ is flat by default.
+`q=36+N*11`. All bands are exposed as parameters; each defaults to
+`type=0` (off), so each remains independently disabled and the EQ is flat by default.
 
 ## Runtime enumeration ✅
 
