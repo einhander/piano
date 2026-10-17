@@ -54,7 +54,7 @@ static const ParamPort kLimPorts[] = {
     {kParamLimThreshold,    16,  0.00398107f, 1.0f,   1.0f, true,  false, false},
     {kParamLimLookaheadMs,  19,  0.1f,    20.0f,      3.0f, false, false, false},
     {kParamLimAttackMs,     20,  0.25f,   20.0f,      10.0f, false, false, false},
-    {kParamLimReleaseMs,    21,  0.25f,   20.0f,      100.0f, false, false, false},
+    {kParamLimReleaseMs,    21,  0.25f,   20.0f,      5.0f, false, false, false},
     {kParamLimKneeDb,       44,  -48.0f,  0.0f,       0.0f, false, false, false},
 };
 
@@ -128,7 +128,7 @@ static const EffectParameterDescriptor kLimDescriptors[] = {
     {kParamLimThreshold,   "threshold",   "Threshold",    0.00398107f, 1.0f,   1.0f, true,  false, false},
     {kParamLimLookaheadMs, "lookahead",   "Lookahead (ms)", 0.1f, 20.0f,    3.0f, false, false, false},
     {kParamLimAttackMs,    "attack",      "Attack (ms)",   0.25f,   20.0f,     10.0f, false, false, false},
-    {kParamLimReleaseMs,   "release",     "Release (ms)",  0.25f,   20.0f,     100.0f, false, false, false},
+    {kParamLimReleaseMs,   "release",     "Release (ms)",  0.25f,   20.0f,     5.0f, false, false, false},
     {kParamLimKneeDb,      "knee_db",     "Knee (dB)",    -48.0f,  0.0f,       0.0f, false, false, false},
 };
 

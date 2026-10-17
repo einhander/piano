@@ -1,6 +1,7 @@
 #include "LadspaEffect.h"
 
 #include <cmath>
+#include <algorithm>
 #include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
@@ -8,6 +9,48 @@
 
 namespace piano {
 namespace ladspa {
+
+namespace {
+float inputControlDefault(const LADSPA_PortRangeHint& hint, double sampleRate) {
+    const auto flags = hint.HintDescriptor;
+    const bool hasMin = LADSPA_IS_HINT_BOUNDED_BELOW(flags);
+    const bool hasMax = LADSPA_IS_HINT_BOUNDED_ABOVE(flags);
+    const float scale = LADSPA_IS_HINT_SAMPLE_RATE(flags)
+            ? static_cast<float>(sampleRate) : 1.0f;
+    const float lo = hint.LowerBound * scale;
+    const float hi = hint.UpperBound * scale;
+    float value = 0.0f;
+    switch (flags & LADSPA_HINT_DEFAULT_MASK) {
+        case LADSPA_HINT_DEFAULT_MINIMUM: value = hasMin ? lo : 0.0f; break;
+        case LADSPA_HINT_DEFAULT_LOW:
+        case LADSPA_HINT_DEFAULT_MIDDLE:
+        case LADSPA_HINT_DEFAULT_HIGH:
+        case LADSPA_HINT_DEFAULT_MAXIMUM: {
+            if (!hasMin || !hasMax) break;
+            const float t = (flags & LADSPA_HINT_DEFAULT_MASK) == LADSPA_HINT_DEFAULT_LOW ? 0.25f
+                    : (flags & LADSPA_HINT_DEFAULT_MASK) == LADSPA_HINT_DEFAULT_MIDDLE ? 0.5f
+                    : (flags & LADSPA_HINT_DEFAULT_MASK) == LADSPA_HINT_DEFAULT_HIGH ? 0.75f : 1.0f;
+            if (t == 1.0f) value = hi;
+            else if (LADSPA_IS_HINT_LOGARITHMIC(flags) && lo > 0.0f && hi > 0.0f)
+                value = std::exp(std::log(lo) * (1.0f - t) + std::log(hi) * t);
+            else value = lo * (1.0f - t) + hi * t;
+            break;
+        }
+        case LADSPA_HINT_DEFAULT_0: value = 0.0f; break;
+        case LADSPA_HINT_DEFAULT_1: value = 1.0f; break;
+        case LADSPA_HINT_DEFAULT_100: value = 100.0f; break;
+        case LADSPA_HINT_DEFAULT_440: value = 440.0f; break;
+        // DEFAULT_NONE (and unknown encodings) supplies no suggested value:
+        // start at host-neutral zero, then honor any declared bounds below.
+        default: value = 0.0f; break;
+    }
+    if (LADSPA_IS_HINT_TOGGLED(flags)) value = value > 0.0f ? 1.0f : 0.0f;
+    if (LADSPA_IS_HINT_INTEGER(flags)) value = std::round(value);
+    if (hasMin) value = std::max(value, lo);
+    if (hasMax) value = std::min(value, hi);
+    return value;
+}
+}
 
 // Write a one-line marker to <filesDir>/lsp_prepare_marker.log so that when
 // the LSP instantiate/connect_port/activate call aborts the process, the
@@ -65,10 +108,17 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
         return false;
     }
 
-    // Allocate the control-port storage (one float per port). Owned for the
-    // lifetime of the instance; zeroed so all control ports start at 0.
+    // Allocate control storage and initialize LADSPA input controls from hints.
     mPortValues = std::make_unique<float[]>(mPortCount);
     std::memset(mPortValues.get(), 0, mPortCount * sizeof(float));
+    if (mDescriptor->PortDescriptors && mDescriptor->PortRangeHints) {
+        for (unsigned long p = 0; p < mPortCount; ++p) {
+            if (LADSPA_IS_PORT_CONTROL(mDescriptor->PortDescriptors[p]) &&
+                LADSPA_IS_PORT_INPUT(mDescriptor->PortDescriptors[p])) {
+                mPortValues[p] = inputControlDefault(mDescriptor->PortRangeHints[p], sampleRate);
+            }
+        }
+    }
 
     // Instantiate at the actual sample rate. Log plugin identity + sample rate
     // for diagnostics — the LSP-side instantiate() also writes sub-step markers
