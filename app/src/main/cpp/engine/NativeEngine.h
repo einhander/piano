@@ -150,6 +150,9 @@ public:
     bool isMasterEffectEnabled(int slot) const;
     bool isMasterEffectAvailable(int slot) const;
     std::array<float, 6> getMasterEffectMeterSnapshot(int slot) const noexcept;
+    void setSpectrumCaptureEnabled(bool enabled) noexcept;
+    uint32_t readSpectrumCapture(float* stereo, uint32_t frames) noexcept;
+    uint32_t getSpectrumCaptureDropped() const noexcept;
     void setMasterEffectParameter(int slot, int parameterId, float value);
     float getMasterEffectParameter(int slot, int parameterId) const;
     // The stable id of the effect at a slot (e.g. "lsp.compressor"), or "".

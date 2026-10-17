@@ -899,6 +899,24 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterEffectMeterSnapshot(
     return out;
 }
 
+JNIEXPORT void JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeSetSpectrumCaptureEnabled(JNIEnv*, jclass, jboolean enabled) {
+    if (auto* inst = NativeEngine::getInstance()) inst->setSpectrumCaptureEnabled(enabled == JNI_TRUE);
+}
+JNIEXPORT jint JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeReadSpectrumCapture(JNIEnv* env, jclass, jfloatArray output, jint maxFrames) {
+    if (!output || maxFrames <= 0 ||
+        static_cast<uint32_t>(maxFrames) > piano::SpectrumCaptureRing<>::kCapacity ||
+        env->GetArrayLength(output) < maxFrames * 2) return 0;
+    auto* inst = NativeEngine::getInstance(); if (!inst) return 0;
+    std::vector<float> samples(static_cast<size_t>(maxFrames) * 2);
+    const uint32_t n = inst->readSpectrumCapture(samples.data(), static_cast<uint32_t>(maxFrames));
+    env->SetFloatArrayRegion(output, 0, static_cast<jsize>(n * 2), samples.data());
+    return static_cast<jint>(n);
+}
+JNIEXPORT jint JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeGetSpectrumCaptureDropped(JNIEnv*, jclass) {
+    if (auto* inst = NativeEngine::getInstance()) return static_cast<jint>(inst->getSpectrumCaptureDropped());
+    return 0;
+}
+
 JNIEXPORT void JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeSetMasterEffectParameter(
     JNIEnv* env, jclass, jint slot, jint parameterId, jfloat value) {

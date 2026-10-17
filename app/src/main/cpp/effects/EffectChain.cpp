@@ -202,6 +202,8 @@ void EffectChain::process(float* interleaved, int numFrames) noexcept {
         }
     }
     if (!anyActive) {
+        if (mCaptureEnabled.load(std::memory_order_relaxed))
+            mCapture.write(interleaved, static_cast<uint32_t>(numFrames));
         return;
     }
 
@@ -211,11 +213,20 @@ void EffectChain::process(float* interleaved, int numFrames) noexcept {
         mRight[i] = interleaved[i * 2 + 1];
     }
 
-    // Run the fixed chain on the planar data (in-place on mLeft/mRight).
+    // Run EQ, capture its output, then run compressor and limiter.
     for (int i = 0; i < lsp::kMasterEffectCount; ++i) {
         if (mEffects[i] && mEffects[i]->isAvailable()) {
             mEffects[i]->process(mLeft, mRight, numFrames);
         }
+        if (i == lsp::kSlotEq && mCaptureEnabled.load(std::memory_order_relaxed)) {
+            for (int f = 0; f < numFrames; ++f) {
+                interleaved[f * 2] = mLeft[f];
+                interleaved[f * 2 + 1] = mRight[f];
+            }
+            mCapture.write(interleaved, static_cast<uint32_t>(numFrames));
+        }
+        // If EQ is bypassed, planar data remains original input: this is the
+        // requested post-EQ passthrough point.
     }
 
     // Interleave once back into the caller's buffer.
@@ -223,6 +234,16 @@ void EffectChain::process(float* interleaved, int numFrames) noexcept {
         interleaved[i * 2]     = mLeft[i];
         interleaved[i * 2 + 1] = mRight[i];
     }
+}
+
+void EffectChain::setSpectrumCaptureEnabled(bool enabled) noexcept {
+    const bool wasEnabled = mCaptureEnabled.load(std::memory_order_relaxed);
+    if (enabled && !wasEnabled) mCapture.clear();
+    mCaptureEnabled.store(enabled, std::memory_order_release);
+}
+
+uint32_t EffectChain::readSpectrumCapture(float* stereo, uint32_t frames) noexcept {
+    return mCapture.read(stereo, frames);
 }
 
 AudioEffect* EffectChain::effect(int slot) const {

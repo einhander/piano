@@ -827,6 +827,10 @@ std::array<float, 6> NativeEngine::getMasterEffectMeterSnapshot(int slot) const 
     return mMasterEffects.meterSnapshot(slot);
 }
 
+void NativeEngine::setSpectrumCaptureEnabled(bool enabled) noexcept { mMasterEffects.setSpectrumCaptureEnabled(enabled); }
+uint32_t NativeEngine::readSpectrumCapture(float* stereo, uint32_t frames) noexcept { return mMasterEffects.readSpectrumCapture(stereo, frames); }
+uint32_t NativeEngine::getSpectrumCaptureDropped() const noexcept { return mMasterEffects.spectrumCaptureDropped(); }
+
 void NativeEngine::setMasterEffectParameter(int slot, int parameterId, float value) {
     if (auto* e = mMasterEffects.effect(slot)) {
         e->setParameter(static_cast<uint32_t>(parameterId), value);

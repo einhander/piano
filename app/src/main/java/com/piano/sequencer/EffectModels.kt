@@ -79,4 +79,8 @@ class EffectRepository(private val service: com.piano.sequencer.service.Playback
     fun setParameter(slot: Int, parameterId: Int, value: Float) =
         service.setMasterEffectParameter(slot, parameterId, value)
     fun meterSnapshot(slot: Int): FloatArray? = service.getMasterEffectMeterSnapshot(slot)
+    fun setSpectrumCaptureEnabled(enabled: Boolean) = service.setSpectrumCaptureEnabled(enabled)
+    fun readSpectrumCapture(output: FloatArray, maxFrames: Int): Int = service.readSpectrumCapture(output, maxFrames)
+    fun getSpectrumCaptureDropped(): Int = service.getSpectrumCaptureDropped()
+    fun getSampleRate(): Int = service.getSampleRate()
 }

@@ -58,6 +58,9 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
             this@PlaybackService.isMasterEffectEnabled(slot)
         fun isMasterEffectAvailable(slot: Int): Boolean =
             this@PlaybackService.isMasterEffectAvailable(slot)
+        fun setSpectrumCaptureEnabled(enabled: Boolean) = this@PlaybackService.setSpectrumCaptureEnabled(enabled)
+        fun readSpectrumCapture(output: FloatArray, maxFrames: Int): Int = this@PlaybackService.readSpectrumCapture(output, maxFrames)
+        fun getSpectrumCaptureDropped(): Int = this@PlaybackService.getSpectrumCaptureDropped()
         fun setMasterEffectParameter(slot: Int, parameterId: Int, value: Float) =
             this@PlaybackService.setMasterEffectParameter(slot, parameterId, value)
         fun getMasterEffectParameter(slot: Int, parameterId: Int): Float =
@@ -353,6 +356,9 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     /** Worker-thread snapshot; linear amplitude [inL,inR,outL,outR,GRL,GRR], NaN when unavailable. */
     fun getMasterEffectMeterSnapshot(slot: Int): FloatArray? =
         NativeEngineBridge.nativeGetMasterEffectMeterSnapshot(slot)
+    fun setSpectrumCaptureEnabled(enabled: Boolean) = NativeEngineBridge.nativeSetSpectrumCaptureEnabled(enabled)
+    fun readSpectrumCapture(output: FloatArray, maxFrames: Int): Int = NativeEngineBridge.nativeReadSpectrumCapture(output, maxFrames)
+    fun getSpectrumCaptureDropped(): Int = NativeEngineBridge.nativeGetSpectrumCaptureDropped()
     fun setMasterEffectParameter(slot: Int, parameterId: Int, value: Float) =
         NativeEngineBridge.nativeSetMasterEffectParameter(slot, parameterId, value)
     fun getMasterEffectParameter(slot: Int, parameterId: Int): Float =

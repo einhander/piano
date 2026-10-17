@@ -259,6 +259,9 @@ object NativeEngineBridge {
     external fun nativeIsMasterEffectAvailable(slot: Int): Boolean
     // Linear amplitude [inputL,inputR,outputL,outputR,gainReductionL,gainReductionR]; NaN means absent.
     external fun nativeGetMasterEffectMeterSnapshot(slot: Int): FloatArray?
+    external fun nativeSetSpectrumCaptureEnabled(enabled: Boolean)
+    external fun nativeReadSpectrumCapture(output: FloatArray, maxFrames: Int): Int
+    external fun nativeGetSpectrumCaptureDropped(): Int
     external fun nativeSetMasterEffectParameter(slot: Int, parameterId: Int, value: Float)
     external fun nativeGetMasterEffectParameter(slot: Int, parameterId: Int): Float
     external fun nativeGetMasterEffectStableId(slot: Int): String

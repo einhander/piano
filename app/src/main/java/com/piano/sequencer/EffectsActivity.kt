@@ -24,6 +24,7 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
@@ -57,6 +58,7 @@ class EffectsActivity : AppCompatActivity() {
             CompletableFuture.runAsync({ buildUi() }, mainExecutor)
         }
         override fun onServiceDisconnected(name: ComponentName?) {
+            stopSpectrumCapture()
             service = null
         }
     }
@@ -68,8 +70,26 @@ class EffectsActivity : AppCompatActivity() {
     private lateinit var repository: EffectRepository
     private var meterView: LevelMeterView? = null
     private var meterTask: ScheduledFuture<*>? = null
-    private var screenVisible = false
+    @Volatile private var screenVisible = false
     private val meterUiUpdatePending = AtomicBoolean(false)
+    private var spectrumView: SpectrumPlotView? = null
+    @Volatile private var spectrumEnabled = false
+    private var spectrumToggle: SwitchCompat? = null
+    private var spectrumTask: ScheduledFuture<*>? = null
+    private val spectrumExecutor = Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "EffectsSpectrum").apply { isDaemon = true }
+    }
+    private val spectrumReadBuffer = FloatArray(SPECTRUM_MAX_FRAMES * 2)
+    private val spectrumLeft = FloatArray(SPECTRUM_FFT_SIZE)
+    private val spectrumRight = FloatArray(SPECTRUM_FFT_SIZE)
+    private val spectrumLeftBins = FloatArray(SPECTRUM_BINS)
+    private val spectrumRightBins = FloatArray(SPECTRUM_BINS)
+    private val spectrumAnalyzer = SpectrumAnalyzer(SPECTRUM_FFT_SIZE)
+    private val spectrumUiUpdatePending = AtomicBoolean(false)
+    private val spectrumGeneration = AtomicInteger(0)
+    // Accessed only by spectrumExecutor.
+    private var spectrumCaptureArmed = false
+    private var spectrumSampleRate = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,6 +110,8 @@ class EffectsActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         stopMeterPolling()
+        stopSpectrumCapture()
+        spectrumExecutor.shutdown()
         mainExecutor.shutdown()
         super.onDestroy()
         try {
@@ -108,6 +130,7 @@ class EffectsActivity : AppCompatActivity() {
     override fun onStop() {
         screenVisible = false
         stopMeterPolling()
+        stopSpectrumCapture()
         super.onStop()
     }
 
@@ -264,15 +287,144 @@ class EffectsActivity : AppCompatActivity() {
             startMeterPolling()
         } else if (stableId == "lsp.parametric_eq") {
             panel.addView(TextView(this).apply {
-                text = "Response unavailable — faithful LSP response data is not connected."
+                text = "LIVE POST-EQ SIGNAL SPECTRUM\nShows audio passing through EQ. This is not an EQ response curve."
                 textSize = 13f
-                setPadding(0, 12, 0, 12)
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(0, 16, 0, 6)
             })
+            val analyzerToggle = SwitchCompat(this).apply {
+                text = "Live analyzer"
+                isChecked = spectrumEnabled
+                spectrumToggle = this
+                setOnCheckedChangeListener { _, checked ->
+                    spectrumEnabled = checked
+                    if (checked) startSpectrumCapture() else stopSpectrumCapture()
+                }
+            }
+            panel.addView(analyzerToggle)
+            val plot = SpectrumPlotView(this)
+            spectrumView = plot
+            panel.addView(plot, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, (220 * resources.displayMetrics.density).toInt()
+            ))
         }
         instance.parameters.filter { it.writable }.forEach { p ->
             panel.addView(buildParamRow(instance.slot, p, p.value.rawValue, instance.available))
         }
         return panel
+    }
+
+    private fun startSpectrumCapture() {
+        if (!spectrumEnabled || !screenVisible || editorSlot == null || spectrumTask != null || isFinishing || isDestroyed) return
+        val generation = spectrumGeneration.incrementAndGet()
+        spectrumTask = spectrumExecutor.scheduleWithFixedDelay({
+            if (!isSpectrumRequestCurrent(generation)) return@scheduleWithFixedDelay
+            try {
+                val repo = repository
+                val actualRate = repo.getSampleRate()
+                if (actualRate <= 0) return@scheduleWithFixedDelay
+                if (spectrumSampleRate != actualRate) {
+                    // Discard buffered samples from an old device rate before interpreting new frames.
+                    if (spectrumCaptureArmed) repo.setSpectrumCaptureEnabled(false)
+                    spectrumCaptureArmed = false
+                    spectrumSampleRate = actualRate
+                }
+                if (!spectrumCaptureArmed) {
+                    if (!isSpectrumRequestCurrent(generation)) return@scheduleWithFixedDelay
+                    repo.setSpectrumCaptureEnabled(true)
+                    spectrumCaptureArmed = true
+                }
+                if (!isSpectrumRequestCurrent(generation)) return@scheduleWithFixedDelay
+                val frames = repo.readSpectrumCapture(spectrumReadBuffer, SPECTRUM_MAX_FRAMES).coerceIn(0, SPECTRUM_MAX_FRAMES)
+                if (frames >= SPECTRUM_FFT_SIZE) {
+                    val start = frames - SPECTRUM_FFT_SIZE
+                    for (i in 0 until SPECTRUM_FFT_SIZE) {
+                        spectrumLeft[i] = spectrumReadBuffer[(start + i) * 2]
+                        spectrumRight[i] = spectrumReadBuffer[(start + i) * 2 + 1]
+                    }
+                    spectrumAnalyzer.spectrum(spectrumLeft, actualRate, spectrumLeftBins)
+                    spectrumAnalyzer.spectrum(spectrumRight, actualRate, spectrumRightBins)
+                    val left = spectrumLeftBins.copyOf()
+                    val right = spectrumRightBins.copyOf()
+                    if (isSpectrumRequestCurrent(generation) && spectrumUiUpdatePending.compareAndSet(false, true)) runOnUiThread {
+                        try {
+                            if (isSpectrumRequestCurrent(generation) && !isFinishing && !isDestroyed)
+                                spectrumView?.setSpectrum(left, right, actualRate)
+                        }
+                        finally { spectrumUiUpdatePending.set(false) }
+                    }
+                }
+            } catch (e: Throwable) {
+                AppLogger.error("EffectsActivity", "Spectrum analyzer failed: ${e.message}")
+            }
+        }, 0, 50, TimeUnit.MILLISECONDS)
+    }
+
+    private fun isSpectrumRequestCurrent(generation: Int): Boolean =
+        spectrumGeneration.get() == generation && spectrumEnabled && screenVisible && !isFinishing && !isDestroyed
+
+    private fun stopSpectrumCapture() {
+        spectrumGeneration.incrementAndGet()
+        spectrumTask?.cancel(false)
+        spectrumTask = null
+        spectrumEnabled = false
+        spectrumToggle?.isChecked = false
+        if (!spectrumExecutor.isShutdown) {
+            try {
+                spectrumExecutor.execute {
+                    if (!spectrumCaptureArmed) return@execute
+                    try { repository.setSpectrumCaptureEnabled(false) }
+                    catch (e: Throwable) { AppLogger.error("EffectsActivity", "Could not stop spectrum capture: ${e.message}") }
+                    finally { spectrumCaptureArmed = false }
+                }
+            } catch (_: java.util.concurrent.RejectedExecutionException) {
+                // Executor already shutting down; queued stop normally runs before shutdown.
+            }
+        }
+        spectrumView?.setSpectrum(null, null)
+    }
+
+    private class SpectrumPlotView(context: Context) : View(context) {
+        private val density = resources.displayMetrics.density
+        private val grid = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xffdce5e1.toInt(); strokeWidth = density }
+        private val label = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xff52635c.toInt(); textSize = 10f * density }
+        private val leftPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xff008f70.toInt(); strokeWidth = 2f * density; style = Paint.Style.STROKE; strokeJoin = Paint.Join.ROUND }
+        private val rightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xffd16b38.toInt(); strokeWidth = 2f * density; style = Paint.Style.STROKE; strokeJoin = Paint.Join.ROUND }
+        private var left: FloatArray? = null
+        private var right: FloatArray? = null
+        private var sampleRate = 48000
+        fun setSpectrum(l: FloatArray?, r: FloatArray?, rate: Int = sampleRate) { left = l; right = r; if (rate > 0) sampleRate = rate; invalidate() }
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val x0 = 38f * density; val x1 = width - 8f * density
+            val y0 = 10f * density; val y1 = height - 27f * density
+            for (db in intArrayOf(0, -20, -40, -60, -80)) {
+                val y = y0 + (-db / 80f) * (y1 - y0)
+                canvas.drawLine(x0, y, x1, y, grid); canvas.drawText("${db} dBFS", 1f, y + 4f * density, label)
+            }
+            val nyquist = sampleRate / 2f
+            val freqs = intArrayOf(20, 100, 1000, 10000).filter { it < nyquist }
+            for (hz in freqs) {
+                val x = x0 + (kotlin.math.ln(hz / 20f) / kotlin.math.ln(nyquist / 20f)) * (x1 - x0)
+                canvas.drawLine(x, y0, x, y1, grid)
+                canvas.drawText(if (hz >= 1000) "${hz / 1000}k" else "$hz", x - 8f * density, height - 5f * density, label)
+            }
+            val nyquistLabel = if (nyquist >= 1000f) "${(nyquist / 1000f).toInt()}k" else "${nyquist.toInt()}"
+            canvas.drawText(nyquistLabel, x1 - label.measureText(nyquistLabel), height - 5f * density, label)
+            fun draw(values: FloatArray?, paint: Paint) {
+                if (values == null) return
+                val path = android.graphics.Path()
+                values.forEachIndexed { i, value ->
+                    // Each trace sample represents center of its logarithmic band.
+                    val x = x0 + (i + 0.5f) / values.size * (x1 - x0)
+                    val y = y0 + ((0f - value.coerceIn(-80f, 0f)) / 80f) * (y1 - y0)
+                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                canvas.drawPath(path, paint)
+            }
+            draw(left, leftPaint); draw(right, rightPaint)
+            canvas.drawText("L", x0, height - 5f * density, leftPaint); canvas.drawText("R", x0 + 18f * density, height - 5f * density, rightPaint)
+        }
     }
 
     /** Draws only the six native snapshot values; NaN remains explicitly unavailable. */
@@ -514,6 +666,9 @@ class EffectsActivity : AppCompatActivity() {
 
     companion object {
         private const val SEEKBAR_STEPS = 1000
+        private const val SPECTRUM_MAX_FRAMES = 8192
+        private const val SPECTRUM_FFT_SIZE = 2048
+        private const val SPECTRUM_BINS = 96
         const val EXTRA_EFFECT_SLOT = "effect_slot"
     }
 }
