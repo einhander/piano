@@ -147,6 +147,7 @@ public:
     int getMasterEffectCount() const;
     void setMasterEffectEnabled(int slot, bool enabled);
     bool isMasterEffectEnabled(int slot) const;
+    bool isMasterEffectAvailable(int slot) const;
     void setMasterEffectParameter(int slot, int parameterId, float value);
     float getMasterEffectParameter(int slot, int parameterId) const;
     // The stable id of the effect at a slot (e.g. "lsp.compressor"), or "".

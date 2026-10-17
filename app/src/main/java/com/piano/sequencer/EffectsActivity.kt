@@ -25,8 +25,9 @@ import kotlin.math.pow
 /**
  * Master effect chain UI (Milestone 7).
  *
- * Presents the fixed 3-effect chain (EQ → Compressor → Limiter) as cards, each
- * with an enable toggle and a slider per exposed parameter. Parameter ranges
+ * Presents the fixed 3-effect chain as compact rows. Parameter controls remain
+ * available in an explicitly expanded section until dedicated editors arrive.
+ * Parameter ranges
  * and flags come from the native descriptor tables (queried via JNI), so the UI
  * never duplicates DSP metadata. All JNI calls run on a worker executor (direct
  * JNI calls, never the main thread). Persistence of user tweaks is kept in the
@@ -100,10 +101,15 @@ class EffectsActivity : AppCompatActivity() {
             }
             return
         }
+        runOnUiThread { statusText.text = getString(R.string.master_effects_loading) }
         val available = try {
             svc.isMasterEffectChainAvailable()
         } catch (e: Throwable) {
-            false
+            AppLogger.error("EffectsActivity", "Could not query effect chain: ${e.message}")
+            runOnUiThread {
+                statusText.text = getString(R.string.master_effects_error)
+            }
+            return
         }
         if (!available) {
             runOnUiThread {
@@ -112,7 +118,11 @@ class EffectsActivity : AppCompatActivity() {
             return
         }
 
-        val instances = try { repository.snapshot() } catch (e: Exception) { emptyList() }
+        val instances = try { repository.snapshot() } catch (e: Exception) {
+            AppLogger.error("EffectsActivity", "Could not read effect chain: ${e.message}")
+            runOnUiThread { statusText.text = getString(R.string.master_effects_error) }
+            return
+        }
         val count = instances.size
         if (count <= 0) {
             runOnUiThread {
@@ -123,56 +133,51 @@ class EffectsActivity : AppCompatActivity() {
         // Gather metadata + current values on the worker thread, then build
         // views on the main thread.
         runOnUiThread {
-            statusText.text = getString(R.string.master_effects_available, count)
+            statusText.text = getString(R.string.master_effects_chain_heading)
             isRestoringState = true
             for ((slot, instance) in instances.withIndex()) {
-                container.addView(buildEffectCard(
-                    slot, friendlyEffectTitle(instance.descriptor.stableId, slot), instance.enabled,
-                    instance.parameters, instance.parameters.map { it.value.rawValue }.toFloatArray()
-                ))
+                container.addView(buildEffectCard(slot, friendlyEffectTitle(instance.descriptor.stableId), instance))
             }
             isRestoringState = false
         }
     }
 
-    private fun friendlyEffectTitle(stableId: String, slot: Int): String {
+    private fun friendlyEffectTitle(stableId: String): String {
         return when (stableId) {
             "lsp.parametric_eq" -> getString(R.string.master_effects_eq)
             "lsp.compressor"   -> getString(R.string.master_effects_compressor)
             "lsp.limiter"      -> getString(R.string.master_effects_limiter)
-            else -> "${slot + 1}. $stableId"
+            else -> stableId
         }
     }
 
     private fun buildEffectCard(
         slot: Int,
         title: String,
-        enabled: Boolean,
-        params: List<EffectParameter>,
-        values: FloatArray
+        instance: EffectInstance
     ): View {
         val ctx = this
         val card = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = ContextCompat.getDrawable(ctx, R.drawable.card_frame)
-            val pad = (12 * resources.displayMetrics.density).toInt()
+            val pad = (14 * resources.displayMetrics.density).toInt()
             setPadding(pad, pad, pad, pad)
             val lp = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
-            lp.bottomMargin = (16 * resources.displayMetrics.density).toInt()
+            lp.bottomMargin = (10 * resources.displayMetrics.density).toInt()
             layoutParams = lp
         }
 
-        // Header row: title + enable switch.
+        // Compact title row and truthful enabled/bypassed state.
         val header = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             val lp = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
-            lp.bottomMargin = (8 * resources.displayMetrics.density).toInt()
+            lp.bottomMargin = (2 * resources.displayMetrics.density).toInt()
             layoutParams = lp
         }
         val titleView = TextView(ctx).apply {
@@ -181,15 +186,30 @@ class EffectsActivity : AppCompatActivity() {
             setTypeface(typeface, Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
+        val stateLabel = TextView(ctx).apply {
+            text = getString(when { !instance.available -> R.string.master_effects_unavailable_state; instance.enabled -> R.string.master_effects_enabled_state; else -> R.string.master_effects_bypassed_state })
+            textSize = 12f
+            setTextColor(ContextCompat.getColor(ctx, if (instance.available && instance.enabled) R.color.effects_accent else android.R.color.darker_gray))
+        }
         val enableSwitch = SwitchCompat(ctx).apply {
-            text = getString(R.string.master_effects_enable)
-            isChecked = enabled
+            contentDescription = getString(R.string.master_effects_enable)
+            isChecked = instance.enabled
+            isEnabled = instance.available
             setOnCheckedChangeListener { _, isChecked ->
                 if (isRestoringState) return@setOnCheckedChangeListener
-                val svc = service ?: return@setOnCheckedChangeListener
+                stateLabel.text = getString(if (isChecked) R.string.master_effects_enabled_state else R.string.master_effects_bypassed_state)
+                stateLabel.setTextColor(ContextCompat.getColor(ctx, if (isChecked) R.color.effects_accent else android.R.color.darker_gray))
                 CompletableFuture.runAsync({
-                    repository.setEnabled(slot, isChecked)
-                    prefs().edit().putBoolean(fxEnabledKey(slot), isChecked).apply()
+                    try {
+                        repository.setEnabled(slot, isChecked)
+                        prefs().edit().putBoolean(fxEnabledKey(slot), isChecked).apply()
+                    } catch (e: Exception) {
+                        AppLogger.error("EffectsActivity", "Could not change ${instance.descriptor.displayName} state: ${e.message}")
+                        runOnUiThread {
+                            stateLabel.text = getString(R.string.master_effects_error_state)
+                            stateLabel.setTextColor(ContextCompat.getColor(ctx, android.R.color.holo_red_dark))
+                        }
+                    }
                 }, mainExecutor)
             }
         }
@@ -197,16 +217,23 @@ class EffectsActivity : AppCompatActivity() {
         header.addView(enableSwitch)
         card.addView(header)
 
-        // Parameter sliders.
-        for (i in params.indices) {
-            val p = params[i]
-            val value = values[i]
-            card.addView(buildParamRow(slot, p, value))
+        card.addView(stateLabel)
+
+        val parameterArea = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        val editButton = android.widget.Button(ctx).apply {
+            text = getString(R.string.master_effects_parameters, instance.parameters.size)
+            isEnabled = instance.available
+            setOnClickListener {
+                parameterArea.visibility = if (parameterArea.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            }
         }
+        card.addView(editButton)
+        for (p in instance.parameters) parameterArea.addView(buildParamRow(slot, p, p.value.rawValue, instance.available))
+        card.addView(parameterArea)
         return card
     }
 
-    private fun buildParamRow(slot: Int, p: EffectParameter, value: Float): View {
+    private fun buildParamRow(slot: Int, p: EffectParameter, value: Float, enabled: Boolean): View {
         val ctx = this
         val row = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -221,10 +248,12 @@ class EffectsActivity : AppCompatActivity() {
         val label = TextView(ctx).apply {
             text = formatParamLabel(p, value)
             textSize = 13f
+            isEnabled = enabled
         }
         row.addView(label)
 
         val seek = SeekBar(ctx).apply {
+            isEnabled = enabled
             max = SEEKBAR_STEPS
             progress = valueToProgress(p, value)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -235,10 +264,15 @@ class EffectsActivity : AppCompatActivity() {
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
                 override fun onStopTrackingTouch(sb: SeekBar?) {
                     val v = progressToValue(p, sb?.progress ?: 0)
-                    val svc = service ?: return
+                    if (service == null) return
                     CompletableFuture.runAsync({
-                        repository.setParameter(slot, p.stableId.toInt(), v)
-                        prefs().edit().putFloat(fxParamKey(slot, p.stableId.toInt()), v).apply()
+                        try {
+                            repository.setParameter(slot, p.stableId.toInt(), v)
+                            prefs().edit().putFloat(fxParamKey(slot, p.stableId.toInt()), v).apply()
+                        } catch (e: Exception) {
+                            AppLogger.error("EffectsActivity", "Could not set ${p.displayName}: ${e.message}")
+                            runOnUiThread { android.widget.Toast.makeText(ctx, R.string.master_effects_error, android.widget.Toast.LENGTH_SHORT).show() }
+                        }
                     }, mainExecutor)
                 }
             })

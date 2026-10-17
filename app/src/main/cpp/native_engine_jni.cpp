@@ -878,6 +878,14 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeIsMasterEffectEnabled(
     return JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeIsMasterEffectAvailable(
+        JNIEnv*, jclass, jint slot) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (inst) return static_cast<jboolean>(inst->isMasterEffectAvailable(static_cast<int>(slot)));
+    return JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeSetMasterEffectParameter(
     JNIEnv* env, jclass, jint slot, jint parameterId, jfloat value) {

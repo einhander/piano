@@ -68,9 +68,16 @@
     <string name="master_effects_unavailable">Master effects unavailable (chain bypassed). The LSP bundle did not load.</string>
     <string name="master_effects_engine_not_ready">Engine not ready yet — reopen this screen.</string>
     <string name="master_effects_enable">Enable</string>
-    <string name="master_effects_eq">1. Parametric EQ</string>
-    <string name="master_effects_compressor">2. Compressor</string>
-    <string name="master_effects_limiter">3. Limiter</string>
+    <string name="master_effects_eq">Parametric EQ</string>
+    <string name="master_effects_compressor">Compressor</string>
+    <string name="master_effects_limiter">Limiter</string>
     <string name="master_effects_on">On</string>
     <string name="master_effects_off">Off</string>
+    <string name="master_effects_chain_heading">MASTER EFFECT CHAIN</string>
+    <string name="master_effects_enabled_state">Enabled · processing</string>
+    <string name="master_effects_bypassed_state">Bypassed · audio passes through</string>
+    <string name="master_effects_unavailable_state">Unavailable · effect could not be prepared</string>
+    <string name="master_effects_parameters">Parameters · %1$d</string>
+    <string name="master_effects_error">Effect chain status could not be read. See App Log.</string>
+    <string name="master_effects_error_state">Error · see App Log</string>
 </resources>

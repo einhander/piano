@@ -818,6 +818,11 @@ bool NativeEngine::isMasterEffectEnabled(int slot) const {
     return false;
 }
 
+bool NativeEngine::isMasterEffectAvailable(int slot) const {
+    auto* e = mMasterEffects.effect(slot);
+    return e && e->isAvailable();
+}
+
 void NativeEngine::setMasterEffectParameter(int slot, int parameterId, float value) {
     if (auto* e = mMasterEffects.effect(slot)) {
         e->setParameter(static_cast<uint32_t>(parameterId), value);

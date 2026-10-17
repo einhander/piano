@@ -56,6 +56,8 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
             this@PlaybackService.setMasterEffectEnabled(slot, enabled)
         fun isMasterEffectEnabled(slot: Int): Boolean =
             this@PlaybackService.isMasterEffectEnabled(slot)
+        fun isMasterEffectAvailable(slot: Int): Boolean =
+            this@PlaybackService.isMasterEffectAvailable(slot)
         fun setMasterEffectParameter(slot: Int, parameterId: Int, value: Float) =
             this@PlaybackService.setMasterEffectParameter(slot, parameterId, value)
         fun getMasterEffectParameter(slot: Int, parameterId: Int): Float =
@@ -346,6 +348,8 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         NativeEngineBridge.nativeSetMasterEffectEnabled(slot, enabled)
     fun isMasterEffectEnabled(slot: Int): Boolean =
         NativeEngineBridge.nativeIsMasterEffectEnabled(slot)
+    fun isMasterEffectAvailable(slot: Int): Boolean =
+        NativeEngineBridge.nativeIsMasterEffectAvailable(slot)
     fun setMasterEffectParameter(slot: Int, parameterId: Int, value: Float) =
         NativeEngineBridge.nativeSetMasterEffectParameter(slot, parameterId, value)
     fun getMasterEffectParameter(slot: Int, parameterId: Int): Float =

@@ -26,7 +26,8 @@ data class EffectInstance(
     val slot: Int,
     val descriptor: EffectDescriptor,
     val enabled: Boolean,
-    val parameters: List<EffectParameter>
+    val parameters: List<EffectParameter>,
+    val available: Boolean = true
 )
 
 /** Pure decoder for native [id, min, max, default, log, integer, toggled] metadata. */
@@ -69,7 +70,8 @@ class EffectRepository(private val service: com.piano.sequencer.service.Playback
                 else -> stable
             }
             val descriptor = EffectDescriptor(stable, title, params)
-            EffectInstance(slot, descriptor, service.isMasterEffectEnabled(slot), params)
+            EffectInstance(slot, descriptor, service.isMasterEffectEnabled(slot), params,
+                service.isMasterEffectAvailable(slot))
         }
     }
 

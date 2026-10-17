@@ -256,6 +256,7 @@ object NativeEngineBridge {
     external fun nativeGetMasterEffectCount(): Int
     external fun nativeSetMasterEffectEnabled(slot: Int, enabled: Boolean)
     external fun nativeIsMasterEffectEnabled(slot: Int): Boolean
+    external fun nativeIsMasterEffectAvailable(slot: Int): Boolean
     external fun nativeSetMasterEffectParameter(slot: Int, parameterId: Int, value: Float)
     external fun nativeGetMasterEffectParameter(slot: Int, parameterId: Int): Float
     external fun nativeGetMasterEffectStableId(slot: Int): String
