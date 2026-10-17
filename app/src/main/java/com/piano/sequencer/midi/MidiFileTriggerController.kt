@@ -6,6 +6,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.widget.Toast
 import com.piano.sequencer.AppLogger
+import com.piano.sequencer.TrackedTaskExecutor
 import com.piano.sequencer.service.PlaybackService
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -61,6 +62,11 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     private val slotExecutor = Executors.newFixedThreadPool(4) { r ->
         Thread(r, "MidiFileSlotWorker").apply { isDaemon = true }
     }
+    private val trackedSlotExecutor = TrackedTaskExecutor(slotExecutor)
+
+    /** Gate new trigger producers and await every accepted task, including nested tasks. */
+    fun awaitIdle(onIdle: () -> Unit) = trackedSlotExecutor.awaitIdle(onIdle)
+    fun resumeAfterAbortedExit() = trackedSlotExecutor.resume()
 
     /** Per-slot mutex: prevents the 4-thread pool from interleaving tasks on the same slot.
      *  The C++ workerBusy CAS only guards load() (I/O + buffer copy); the Kotlin
@@ -357,7 +363,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         } else current
         if (exactCurrent == null || exactCurrent.filePath != cell.filePath) return
 
-        slotExecutor.execute {
+        trackedSlotExecutor.execute {
             val svc = service ?: return@execute
             val key = cell.triggerKey()
             val slot = allocateSlot(key)
@@ -440,7 +446,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         if (slot != null) {
             noteStateMachine.stopPlaying(key)
             resetPressDetector(key)
-            slotExecutor.execute {
+            trackedSlotExecutor.execute {
                 synchronized(slotLocks[slot]) {
                     val svc = service
                     if (svc != null) svc.freeMidiFileSlot(slot)
@@ -459,7 +465,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     /** Stop a slot for an encoded trigger key without freeing it. */
     fun stopSlotForTrigger(key: Int) {
         val slot = triggerSlotMap[key] ?: return
-        slotExecutor.execute {
+        trackedSlotExecutor.execute {
             synchronized(slotLocks[slot]) {
                 val svc = service
                 if (svc != null) svc.stopMidiFileSlot(slot)
@@ -561,7 +567,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         selectedTracks: List<Int>?,
         trackChannels: Map<Int, Int>
     ) {
-        slotExecutor.execute {
+        trackedSlotExecutor.execute {
             synchronized(slotLocks[testPlaySlot]) {
                 val svc = service ?: return@synchronized
                 val gen = testPlayGeneration + 1
@@ -612,7 +618,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 }
                 testPlayRunnable = Runnable {
                     if (testPlayGeneration == gen) {
-                        slotExecutor.execute {
+                        trackedSlotExecutor.execute {
                             synchronized(slotLocks[testPlaySlot]) {
                                 // Re-check under lock: a new test-play may have started
                                 // after the outer check (which only avoids queueing no-ops).
@@ -643,7 +649,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      * machines so the first press after the recording is TOGGLE_ON.
      */
     fun stopAllForRecording() {
-        slotExecutor.execute {
+        trackedSlotExecutor.execute {
             val svc = service ?: return@execute
             for (key in triggerSlotMap.keys) {
                 val slot = triggerSlotMap[key] ?: continue
@@ -677,7 +683,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      * live-update a running slot).
      */
     fun onSettingChanged(key: Int, loop: Boolean, tempo: Double, channel: Int) {
-        slotExecutor.execute {
+        trackedSlotExecutor.execute {
             val svc = service ?: return@execute
             val slot = triggerSlotMap[key] ?: return@execute
             val cell = store?.all()?.firstOrNull { it.triggerKey() == key } ?: return@execute
@@ -720,7 +726,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         if (updated.mode == MODE_CHORD || updated.filePath.isEmpty()) return
         s.set(updated)
 
-        slotExecutor.execute {
+        trackedSlotExecutor.execute {
             val svc = service ?: return@execute
             val slot = triggerSlotMap[updated.triggerKey()] ?: return@execute
             synchronized(slotLocks[slot]) {
@@ -808,7 +814,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      * has no readable track list. Never call from the audio thread.
      */
     fun fetchTrackNames(filePath: String, onResult: (Array<String>?) -> Unit) {
-        slotExecutor.execute {
+        trackedSlotExecutor.execute {
             val names = service?.getMidiFileTracks(filePath)
             mainHandler.post { onResult(names) }
         }
@@ -816,7 +822,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
 
     /** Worker-thread: warm the parsed-event cache for a file (no slot involved). */
     fun preloadFile(filePath: String) {
-        slotExecutor.execute {
+        trackedSlotExecutor.execute {
             val svc = service ?: return@execute
             svc.preloadMidiFile(filePath)
         }

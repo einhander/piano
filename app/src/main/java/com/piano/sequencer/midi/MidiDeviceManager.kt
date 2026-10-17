@@ -236,6 +236,11 @@ class MidiDeviceManager(
     fun isConnected(): Boolean = snapshot.connected || snapshot.connecting
 
     fun close() {
+        close { }
+    }
+
+    /** Handler barrier: callback runs after active ports/device have been closed. */
+    fun close(onClosed: () -> Unit) {
         closed = true
         midiHandler.post {
             closeActiveOnHandler(notify = true)
@@ -243,6 +248,7 @@ class MidiDeviceManager(
             // queued open callback after close. Its generation/closed guards
             // must run so returned device resources are closed.
             midiHandlerThread.quitSafely()
+            onClosed()
         }
     }
 }

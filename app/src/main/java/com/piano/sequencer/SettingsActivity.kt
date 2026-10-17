@@ -360,7 +360,7 @@ class SettingsActivity : AppCompatActivity() {
         val autoTune = getSharedPreferences("piano_prefs", MODE_PRIVATE).getInt("auto_tune", 1)
 
         runOnUiThread {
-            seekBarPolyphony.progress = polyphony.coerceIn(1, 256)
+            seekBarPolyphony.progress = polyphony.coerceIn(1, 2048)
             tvPolyphony.text = getString(R.string.settings_polyphony_value, polyphony)
 
             seekBarMasterGain.progress = gainProgress

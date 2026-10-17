@@ -127,6 +127,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     override fun onCreate() {
         super.onCreate()
+        (application as? com.piano.sequencer.PianoApp)?.playbackServiceCreated(this)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioWorker.execute {
             recordingCache = NativeEngineBridge.nativeIsRecording()
@@ -151,6 +152,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         audioWorker.shutdown()
         NativeEngineBridge.nativeStopAudio()
         super.onDestroy()
+        (application as? com.piano.sequencer.PianoApp)?.playbackServiceDestroyed()
     }
 
     fun startAudio() {
@@ -277,6 +279,17 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         intentionalStop = true
         NativeEngineBridge.nativeStopAudio()
         AppLogger.info("PlaybackService", "Audio stopped for maintenance")
+    }
+
+    /** Stop recovery/start paths and audio before explicit process termination. */
+    fun prepareForExplicitExit(onStopped: () -> Unit) {
+        intentionalStop = true
+        startWhenFocusGained = false
+        audioWorker.execute {
+            val result = NativeEngineBridge.nativeStopAudio()
+            if (result != 0) AppLogger.warn("PlaybackService", "Audio stop during explicit exit returned $result; process termination will release stream")
+            onStopped()
+        }
     }
 
     fun restartAfterMaintenance() {

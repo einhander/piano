@@ -1,6 +1,7 @@
 #include "FluidSynthEngine.h"
 #include <fluidsynth/synth.h>
 #include <cstring>
+#include <algorithm>
 #include <thread>
 #include <chrono>
 #include <omp.h>
@@ -95,13 +96,9 @@ bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
         // Disable FluidSynth audio driver — we render PCM ourselves via write_float
         fluid_settings_setstr(mSettings[i], "audio.driver", "none");
 
-        // m4: pre-size the voice pool to the UI maximum (256) on the worker
-        // thread so a runtime polyphony change (≤ 256) in the audio callback
-        // never allocates (fluid_synth_set_polyphony only grows the pool when the
-        // new value exceeds the current one). The user's setting (mPolyphony) is
-        // the ACTIVE cap, applied by applyDesiredState below (a decrease → no
-        // allocation).
-        fluid_synth_set_polyphony(mSynth[i], 256);
+        // Pre-size on worker so runtime changes through UI maximum do not
+        // allocate in the audio callback. The user's setting is the active cap.
+        fluid_synth_set_polyphony(mSynth[i], kMaxPolyphony);
 
         // Apply the default (desired) settings to both slots so they start in
         // sync. The audio thread keeps them in sync on later changes (and the
@@ -268,10 +265,8 @@ void FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
         if (mSynth[target]) {
             // Disable FluidSynth audio driver — we render PCM ourselves.
             fluid_settings_setstr(mSettings[target], "audio.driver", "none");
-            // m4: pre-size the voice pool to the UI max (256) so runtime
-            // polyphony changes (≤ 256) never allocate in the audio callback.
-            // The user's setting (mPolyphony) is the active cap (applyDesiredState).
-            fluid_synth_set_polyphony(mSynth[target], 256);
+            // Pre-size to UI maximum; user's setting remains the active cap.
+            fluid_synth_set_polyphony(mSynth[target], kMaxPolyphony);
             // Reload ALL currently-loaded SF2s into the new synth.
             // [perf]: measure the reload duration for the one-time [perf] dump.
             for (const std::string& path : sfPaths) {
@@ -675,6 +670,7 @@ void FluidSynthEngine::panic() {
 
 void FluidSynthEngine::setPolyphony(int polyphony) {
     if (!mInitialized.load()) return;
+    polyphony = std::clamp(polyphony, 1, kMaxPolyphony);
     mPolyphony.store(polyphony, std::memory_order_relaxed);
     SynthCmd c;
     makeCmd(c, SynthCmdType::SET_POLYPHONY, polyphony);

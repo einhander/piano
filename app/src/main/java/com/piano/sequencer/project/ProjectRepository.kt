@@ -9,6 +9,7 @@ import java.io.IOException
 class ProjectRepository(private val context: Context) {
     private val projectsDir = File(context.filesDir, "projects")
     private val workerThread = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val durableWriteFailures = DurableFailureTracker()
 
     // SAF project directory URI (optional)
     private var projectUri: Uri? = null
@@ -38,8 +39,10 @@ class ProjectRepository(private val context: Context) {
                 val file = getProjectFile(project.id)
                 val json = ProjectSerializer.toJson(project)
                 file.writeText(json)
+                durableWriteFailures.succeeded("project-save")
                 callback(Result.success(Unit))
-            } catch (e: IOException) {
+            } catch (e: Exception) {
+                durableWriteFailures.failed("project-save", e)
                 callback(Result.failure(e))
             }
         }
@@ -80,9 +83,11 @@ class ProjectRepository(private val context: Context) {
         workerThread.submit {
             try {
                 val file = getProjectFile(projectId)
-                if (file.exists()) file.delete()
+                if (file.exists() && !file.delete()) throw IOException("Could not delete project: $projectId")
+                durableWriteFailures.succeeded("project-delete")
                 callback(Result.success(Unit))
             } catch (e: IOException) {
+                durableWriteFailures.failed("project-delete", e)
                 callback(Result.failure(e))
             }
         }
@@ -94,6 +99,15 @@ class ProjectRepository(private val context: Context) {
 
     fun shutdown() {
         workerThread.shutdown()
+    }
+
+    /** Non-destructive barrier behind all currently queued repository work. */
+    fun awaitIdle(callback: (Result<Unit>) -> Unit) {
+        workerThread.execute {
+            val failure = durableWriteFailures.firstFailure()
+            if (failure == null) callback(Result.success(Unit))
+            else callback(Result.failure(failure))
+        }
     }
 
     // Import a resource file (MIDI, audio, etc.) into the project directory
@@ -109,8 +123,10 @@ class ProjectRepository(private val context: Context) {
                     }
                 } ?: throw IOException("Could not open input stream for $sourceUri")
 
+                durableWriteFailures.succeeded("resource-import")
                 callback(Result.success(fileName))
-            } catch (e: IOException) {
+            } catch (e: Exception) {
+                durableWriteFailures.failed("resource-import", e)
                 callback(Result.failure(e))
             }
         }

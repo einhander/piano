@@ -54,6 +54,7 @@ struct InstrumentInfo {
 // (processOneMidi), pre-allocated, no locks.
 class FluidSynthEngine {
 public:
+    static constexpr int kMaxPolyphony = 2048;
     // Callback admission: exactly one non-blocking attempt per callback.
     bool tryEnterAudioCallback();
     void leaveAudioCallback();
