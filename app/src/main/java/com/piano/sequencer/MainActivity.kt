@@ -313,6 +313,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 AppLogger.info("MainActivity", "Engine initialized (${actualRate}Hz, 512 buffer)")
 
+                // Prepare plugins before the first audio callback. Bundle failure is
+                // non-fatal: the engine continues with its passthrough chain.
+                loadMasterEffectBundle(svc)
+
                 // Restore persisted state (SF2, polyphony, master gain, channel programs)
                 restorePersistedState(svc)
 
@@ -967,6 +971,20 @@ class MainActivity : AppCompatActivity() {
      * Effects are loaded DISABLED (bypassed); the UI enables them on opt-in.
      */
     private fun loadMasterEffectBundle(svc: PlaybackService) {
+        // Activity recreation must reuse the process-level chain instead of
+        // reloading/rebuilding plugins that are already prepared.
+        if (runCatching { svc.isMasterEffectChainAvailable() }.getOrDefault(false)) {
+            AppLogger.info("MainActivity", "LSP master effect chain already prepared")
+            return
+        }
+        // Register the packaged LADSPA bundle with Android's linker before the
+        // native registry attempts dlopen. LSP is optional, so preload failures
+        // are logged and playback continues with the passthrough chain.
+        try {
+            NativeEngineBridge.preloadLspBundle(this)
+        } catch (e: Throwable) {
+            AppLogger.warn("MainActivity", "LSP preload failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
         // The bundle is packaged as a jniLib (lib/arm64-v8a/liblsp-plugins-ladspa.so).
         // It is pre-loaded via System.loadLibrary above so the linker registers its
         // soname; the native dlopen then resolves it by soname fallback even if the
@@ -988,36 +1006,13 @@ class MainActivity : AppCompatActivity() {
         }
         if (available > 0) {
             AppLogger.info("MainActivity", "LSP master effects available: $available/${svc.getMasterEffectCount()}")
-            restorePersistedEffectState(svc, available)
+            EffectStateRestore.restore(this, svc, available)
         } else {
             val reason = runCatching { svc.getMasterEffectLoadError() }.getOrDefault("")
             AppLogger.error(
                 "MainActivity",
                 "LSP master effects unavailable (chain bypassed). Reason: ${reason.ifEmpty { "none reported" }}"
             )
-        }
-    }
-
-    /**
-     * Re-apply persisted master-effect enable flags and parameter values after
-     * the bundle is (re)loaded. Effects default to bypassed; this restores the
-     * user's last choices across process death. Worker thread only (direct JNI).
-     */
-    private fun restorePersistedEffectState(svc: PlaybackService, effectCount: Int) {
-        val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
-        for (slot in 0 until effectCount) {
-            val paramCount = try { svc.getMasterEffectParamCount(slot) } catch (e: Exception) { continue }
-            for (index in 0 until paramCount) {
-                val info = svc.getMasterEffectParamInfo(slot, index) ?: continue
-                if (info.size < 1) continue
-                val paramId = info[0].toInt()
-                if (prefs.contains("fx_param_${slot}_$paramId")) {
-                    val v = prefs.getFloat("fx_param_${slot}_$paramId", info[3])
-                    try { svc.setMasterEffectParameter(slot, paramId, v) } catch (e: Exception) { }
-                }
-            }
-            val enabled = prefs.getBoolean("fx_enabled_$slot", false)
-            try { svc.setMasterEffectEnabled(slot, enabled) } catch (e: Exception) { }
         }
     }
 
