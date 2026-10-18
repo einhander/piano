@@ -130,6 +130,7 @@ public:
 
     // Set master gain (enqueued).
     void setMasterGain(float gain);
+    void setAudioDuck(bool ducked);
 
     // Set reverb on/off (enqueued).
     void setReverb(bool on);
@@ -268,6 +269,7 @@ private:
     // the audio thread applies them to the synths; getters read the atomics.
     std::atomic<int> mPolyphony{64};
     std::atomic<float> mGain{1.0f};
+    std::atomic<float> mDuckGain{1.0f};
     std::atomic<int> mReverbOn{1};
     std::atomic<int> mChorusOn{1};
     std::atomic<int> mInterps{4};

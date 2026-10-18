@@ -234,6 +234,10 @@ void NativeEngine::setMasterGain(float gain) {
     }
 }
 
+void NativeEngine::setAudioDuck(bool ducked) {
+    if (mSynth) mSynth->setAudioDuck(ducked);
+}
+
 void NativeEngine::setPolyphony(int polyphony) {
     if (mSynth) {
         mSynth->setPolyphony(polyphony);
@@ -314,6 +318,11 @@ int NativeEngine::getUnderrunCount() const {
     OboeOutput* inst = OboeOutput::getInstance();
     if (!inst) return 0;
     return static_cast<int>(inst->getUnderrunCount());
+}
+
+int NativeEngine::getAudioStreamError() const {
+    OboeOutput* inst = OboeOutput::getInstance();
+    return inst ? inst->getLastError() : 0;
 }
 
 // ── Diagnostics (worker-thread reads of atomics / benign ints) ──

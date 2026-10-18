@@ -209,6 +209,7 @@ oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, voi
 }
 
 void OboeOutput::onErrorAfterClose(oboe::AudioStream* stream, oboe::Result error) {
+    mLastError.store(static_cast<int32_t>(error), std::memory_order_relaxed);
     mState.store(oboe::StreamState::Closed);
 }
 

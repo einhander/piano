@@ -226,6 +226,12 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetUnderrunCount(JNIEnv* env, 
     return static_cast<jint>(inst->getUnderrunCount());
 }
 
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetAudioStreamError(JNIEnv*, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    return inst ? static_cast<jint>(inst->getAudioStreamError()) : 0;
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeInitEngine(JNIEnv* env, jclass, jint sampleRate, jint bufferSize) {
     NativeEngine* inst = NativeEngine::getInstance();
@@ -289,6 +295,12 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeSetMasterGain(JNIEnv* env, jcl
     if (inst) {
         inst->setMasterGain(static_cast<float>(gain));
     }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetAudioDuck(JNIEnv*, jclass, jboolean ducked) {
+    auto* inst = NativeEngine::getInstance();
+    if (inst) inst->setAudioDuck(ducked == JNI_TRUE);
 }
 
 JNIEXPORT void JNICALL

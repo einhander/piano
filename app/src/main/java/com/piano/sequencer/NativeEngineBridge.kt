@@ -121,6 +121,7 @@ object NativeEngineBridge {
     external fun nativeGetAudioState(): Int
     external fun nativeIsEngineInitialized(): Boolean
     external fun nativeGetUnderrunCount(): Int
+    external fun nativeGetAudioStreamError(): Int
     external fun nativeOpenAudio(): Int
 
     // NativeEngine
@@ -130,6 +131,7 @@ object NativeEngineBridge {
     external fun nativeNoteOff(channel: Int, note: Int)
     external fun nativePanic()
     external fun nativeSetMasterGain(gain: Float)
+    external fun nativeSetAudioDuck(ducked: Boolean)
     external fun nativeSetPolyphony(polyphony: Int)
     external fun nativeGetPolyphony(): Int
     external fun nativeGetMasterGain(): Float

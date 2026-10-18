@@ -36,6 +36,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     @Volatile private var audioFocusGranted = false
     @Volatile private var intentionalStop = false
     @Volatile private var startWhenFocusGained = false
+    @Volatile private var duckedForFocus = false
 
     inner class PlaybackBinder : Binder() {
         fun getService(): PlaybackService = this@PlaybackService
@@ -247,6 +248,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     private val perfLoggerThread: Thread by lazy {
         Thread {
             var lastUnderruns = 0
+            var lastStreamError = 0
             while (true) {
                 try {
                     Thread.sleep(1000)
@@ -255,8 +257,13 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
                 }
                 if (!NativeEngineBridge.nativeIsAudioPlaying()) {
                     val state = NativeEngineBridge.nativeGetAudioState()
+                    val error = NativeEngineBridge.nativeGetAudioStreamError()
+                    if (error != 0 && error != lastStreamError) {
+                        AppLogger.warn("PlaybackService", "Oboe stream closed state=$state error=$error")
+                    }
+                    lastStreamError = error
                     if (!intentionalStop && audioFocusGranted && (state == 12 || state == 13)) {
-                        AppLogger.warn("PlaybackService", "Audio stream state=$state; reopening on worker")
+                        AppLogger.warn("PlaybackService", "Audio stream state=$state error=$error; reopening on worker")
                         val open = NativeEngineBridge.nativeOpenAudio()
                         if (open == 0) AppLogger.info("PlaybackService", "Audio recovery start=${NativeEngineBridge.nativeStartAudio()}")
                         else AppLogger.warn("PlaybackService", "Audio recovery open=$open")
@@ -529,6 +536,19 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         audioFocusRequest = null
         audioFocusGranted = false
         startWhenFocusGained = false
+        // releaseAudioFocus() is called from onDestroy(), which may run on the
+        // main thread. Keep the JNI call on the service worker like other engine
+        // controls; queued work drains before audioWorker.shutdown() completes.
+        if (duckedForFocus) {
+            duckedForFocus = false
+            audioWorker.execute { NativeEngineBridge.nativeSetAudioDuck(false) }
+        }
+    }
+
+    private fun clearAudioDuck() {
+        if (!duckedForFocus) return
+        duckedForFocus = false
+        NativeEngineBridge.nativeSetAudioDuck(false)
     }
 
     override fun onAudioFocusChange(focusChange: Int) {
@@ -545,14 +565,19 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
             AppLogger.info("PlaybackService", "Audio focus change=$focusChange name=$focusName before state=$beforeState playing=$beforePlaying intentionalStop=$intentionalStop resumeAfterFocus=$resumeAfterFocus startPending=$startWhenFocusGained granted=$audioFocusGranted")
             when (focusChange) {
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                -> {
                     if (NativeEngineBridge.nativeIsAudioPlaying()) {
                         resumeAfterFocus = true
                         audioFocusGranted = false
                         NativeEngineBridge.nativeStopAudio()
                     }
                 }
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                    duckedForFocus = true
+                    NativeEngineBridge.nativeSetAudioDuck(true)
+                }
                 AudioManager.AUDIOFOCUS_LOSS -> {
+                    clearAudioDuck()
                     resumeAfterFocus = false
                     startWhenFocusGained = false
                     audioFocusGranted = false
@@ -560,6 +585,10 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
                 }
                 AudioManager.AUDIOFOCUS_GAIN -> {
                     audioFocusGranted = true
+                    if (duckedForFocus) {
+                        duckedForFocus = false
+                        NativeEngineBridge.nativeSetAudioDuck(false)
+                    }
                     if (resumeAfterFocus || startWhenFocusGained) {
                         resumeAfterFocus = false
                         startWhenFocusGained = false

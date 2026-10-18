@@ -25,6 +25,7 @@ public:
     int32_t getFramesPerBurst() const { return mFramesPerBurst; }
     int32_t getUnderrunCount() const { return mUnderrunCount.load(); }
     oboe::StreamState getState() const { return mState.load(); }
+    int32_t getLastError() const { return mLastError.load(std::memory_order_relaxed); }
 
     // ── Diagnostics (worker-thread reads; benign races are acceptable) ──
     int64_t getProcessedFrames() const { return mProcessedFrames.load(); }
@@ -80,6 +81,7 @@ private:
 
     oboe::AudioStream* mStream = nullptr;
     std::atomic<oboe::StreamState> mState{oboe::StreamState::Uninitialized};
+    std::atomic<int32_t> mLastError{0};
     int32_t mSampleRate = 0;
     int32_t mFramesPerBurst = 0;
     std::atomic<int32_t> mUnderrunCount{0};

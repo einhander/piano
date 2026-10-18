@@ -120,7 +120,7 @@ bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
 void FluidSynthEngine::applyDesiredState(fluid_synth_t* synth) {
     if (!synth) return;
     fluid_synth_set_polyphony(synth, mPolyphony.load());
-    fluid_synth_set_gain(synth, mGain.load());
+    fluid_synth_set_gain(synth, mGain.load() * mDuckGain.load());
     fluid_synth_reverb_on(synth, -1, mReverbOn.load());
     fluid_synth_chorus_on(synth, -1, mChorusOn.load());
     fluid_synth_set_interp_method(synth, -1, mInterps.load());
@@ -478,7 +478,7 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             fluid_synth_set_polyphony(synth, cmd.a);
             break;
         case SynthCmdType::SET_GAIN:
-            fluid_synth_set_gain(synth, cmd.f);
+            fluid_synth_set_gain(synth, cmd.f * mDuckGain.load(std::memory_order_relaxed));
             break;
         case SynthCmdType::SET_REVERB:
             fluid_synth_reverb_on(synth, -1, cmd.a);
@@ -682,6 +682,14 @@ void FluidSynthEngine::setMasterGain(float gain) {
     mGain.store(gain, std::memory_order_relaxed);
     SynthCmd c;
     makeCmd(c, SynthCmdType::SET_GAIN, 0, 0, gain);
+    mCmdQueue.push(c);
+}
+
+void FluidSynthEngine::setAudioDuck(bool ducked) {
+    mDuckGain.store(ducked ? 0.2f : 1.0f, std::memory_order_relaxed);
+    if (!mInitialized.load(std::memory_order_relaxed)) return;
+    SynthCmd c;
+    makeCmd(c, SynthCmdType::SET_GAIN, 0, 0, mGain.load(std::memory_order_relaxed) * mDuckGain.load(std::memory_order_relaxed));
     mCmdQueue.push(c);
 }
 

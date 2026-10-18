@@ -63,6 +63,7 @@ public:
     // Master controls (all enqueue to the lock-free command queue — applied by
     // the audio thread, so they never block the audio callback).
     void setMasterGain(float gain);
+    void setAudioDuck(bool ducked);
     void setPolyphony(int polyphony);
     void setReverb(bool on);
     void setChorus(bool on);
@@ -225,6 +226,7 @@ public:
     // Getters
     int getSampleRate() const;
     int getUnderrunCount() const;
+    int getAudioStreamError() const;
 
     // ── Diagnostics (worker-thread reads of atomics/benign ints) ──
     int64_t getProcessedFrames() const;
