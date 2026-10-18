@@ -66,11 +66,13 @@ class MidiInputReceiver private constructor(
 
     fun setCallback(callback: Callback?) {
         callbackHolder.callback = callback
+        if (callback == null) HeldMidiNotes.process.clear()
     }
 
     fun deactivate() {
         synchronized(lifecycleLock) {
             active = false
+            HeldMidiNotes.process.clearSource(source)
             callbackHolder.portPolicies.remove(source)
         }
     }
@@ -132,16 +134,22 @@ class MidiInputReceiver private constructor(
         try {
             parser.parse(data, offset, length, object : MidiMessageParser.Handler {
                 override fun onNoteOn(channel: Int, note: Int, velocity: Int) {
+                    if (routeForPort(source) == MidiIngressRouter.PortRoute.NORMAL)
+                        HeldMidiNotes.process.note(source, channel, note, velocity)
                     parsedEvents++
                     AppLogger.info("MIDI", "Parsed NOTE ON source=$source ch=${channel + 1} data=$note,$velocity")
                     safe { cb.onNoteOn(channel, note, velocity, source) }
                 }
                 override fun onNoteOff(channel: Int, note: Int, velocity: Int) {
+                    if (routeForPort(source) == MidiIngressRouter.PortRoute.NORMAL)
+                        HeldMidiNotes.process.note(source, channel, note, 0)
                     parsedEvents++
                     AppLogger.info("MIDI", "Parsed NOTE OFF source=$source ch=${channel + 1} data=$note,$velocity")
                     safe { cb.onNoteOff(channel, note, velocity, source) }
                 }
                 override fun onControlChange(channel: Int, controller: Int, value: Int) {
+                    if (routeForPort(source) == MidiIngressRouter.PortRoute.NORMAL && (controller == 120 || controller in 123..127))
+                        HeldMidiNotes.process.clearChannel(source, channel)
                     parsedEvents++
                     safe { cb.onControlChange(channel, controller, value, source) }
                 }

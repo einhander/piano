@@ -229,13 +229,14 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                 setOnClickListener { editMapping(mapping, p) }
             })
         }
-        addView(Button(this@InstrumentEffectsActivity).apply {
-            text = "MIDI Learn"
-            isEnabled = p.maximum > p.minimum
-            setOnClickListener { learn(id, p) }
-        })
+        val controlRow = LinearLayout(this@InstrumentEffectsActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+        }
+        addView(controlRow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         if (p.type == EffectParameterType.BOOLEAN) {
-            addView(SwitchCompat(this@InstrumentEffectsActivity).apply {
+            controlRow.addView(SwitchCompat(this@InstrumentEffectsActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 text = p.displayName
                 isChecked = p.value.rawValue >= 0.5f
                 setOnCheckedChangeListener { button, checked ->
@@ -244,7 +245,8 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                 }
             })
         } else {
-            addView(SeekBar(this@InstrumentEffectsActivity).apply {
+            controlRow.addView(SeekBar(this@InstrumentEffectsActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 max = 1000
                 progress = instrumentParameterProgress(p, p.value.rawValue)
                 contentDescription = p.displayName
@@ -272,6 +274,15 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                 })
             })
         }
+        controlRow.addView(Button(this@InstrumentEffectsActivity).apply {
+            text = "MIDI Learn"
+            contentDescription = "MIDI Learn: ${p.displayName}"
+            minWidth = 0
+            minimumWidth = 0
+            maxWidth = dp(112)
+            isEnabled = p.maximum > p.minimum
+            setOnClickListener { learn(id, p) }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
     }
 
     private fun label(value: String) = TextView(this).apply { text = value; textSize = 14f }

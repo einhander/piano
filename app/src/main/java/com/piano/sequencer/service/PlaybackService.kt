@@ -322,7 +322,10 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     fun noteOff(channel: Int, note: Int) = NativeEngineBridge.nativeNoteOff(channel, note)
 
-    fun panic() = NativeEngineBridge.nativePanic()
+    fun panic() {
+        com.piano.sequencer.midi.HeldMidiNotes.process.clear()
+        NativeEngineBridge.nativePanic()
+    }
 
     fun sendMidiMessage(status: Int, data1: Int, data2: Int) =
         NativeEngineBridge.nativeSendMidiMessage(status, data1, data2)

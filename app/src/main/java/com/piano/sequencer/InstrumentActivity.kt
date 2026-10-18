@@ -46,6 +46,33 @@ class InstrumentActivity : AppCompatActivity() {
 
     // Instrument name label for each MIDI channel (0-15)
     private val rowNameLabels = arrayOfNulls<TextView>(16)
+    private val noteIndicators = arrayOfNulls<View>(16)
+    private var observingNotes = false
+    private val noteListener: () -> Unit = {
+        runOnUiThread { if (observingNotes) renderHeldNotes() }
+    }
+
+    private fun renderHeldNotes() {
+        val held = com.piano.sequencer.midi.HeldMidiNotes.process.snapshot()
+        held.forEachIndexed { channel, active ->
+            noteIndicators[channel]?.apply {
+                visibility = if (active) View.VISIBLE else View.INVISIBLE
+            }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        observingNotes = true
+        com.piano.sequencer.midi.HeldMidiNotes.process.addListener(noteListener)
+        renderHeldNotes()
+    }
+
+    override fun onStop() {
+        observingNotes = false
+        com.piano.sequencer.midi.HeldMidiNotes.process.removeListener(noteListener)
+        super.onStop()
+    }
 
     // Deduplicated preset list of the loaded SoundFont (empty when no SF2)
     private var instruments: List<Instrument> = emptyList()
@@ -147,7 +174,7 @@ class InstrumentActivity : AppCompatActivity() {
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
             }
-            channelLabel.layoutParams = LinearLayout.LayoutParams(dp(112), LinearLayout.LayoutParams.WRAP_CONTENT)
+            channelLabel.layoutParams = LinearLayout.LayoutParams(dp(94), LinearLayout.LayoutParams.WRAP_CONTENT)
 
             val nameLabel = TextView(this).apply {
                 text = getString(R.string.instrument_unknown)
@@ -158,6 +185,16 @@ class InstrumentActivity : AppCompatActivity() {
             nameLabel.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
 
             row.addView(channelLabel)
+            row.addView(View(this).apply {
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.OVAL
+                    setColor(Color.rgb(46, 125, 50))
+                }
+                layoutParams = LinearLayout.LayoutParams(dp(10), dp(10)).apply { marginEnd = dp(8) }
+                visibility = View.INVISIBLE
+                contentDescription = getString(R.string.instrument_note_held, ch + 1)
+                noteIndicators[ch] = this
+            })
             row.addView(nameLabel)
             row.addView(android.widget.Button(this).apply {
                 text = getString(R.string.instrument_effects_action)

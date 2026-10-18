@@ -64,6 +64,7 @@ class SessionViewModel : ViewModel() {
     }
 
     fun onPanic() {
+        com.piano.sequencer.midi.HeldMidiNotes.process.clear()
         NativeEngineBridge.nativePanic()
     }
 
