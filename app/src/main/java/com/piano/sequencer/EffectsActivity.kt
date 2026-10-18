@@ -648,13 +648,8 @@ class EffectsActivity : AppCompatActivity() {
     }
 
     private fun formatParamLabel(p: EffectParameter, value: Float): String {
-        val v = if (p.type == EffectParameterType.BOOLEAN) {
-            if (value >= 0.5f) getString(R.string.master_effects_on) else getString(R.string.master_effects_off)
-        } else if (p.type == EffectParameterType.INTEGER) {
-            value.toInt().toString()
-        } else {
-            "%.3f".format(value)
-        }
+        val v = formatEffectParameterValue(p, value,
+            getString(R.string.master_effects_on), getString(R.string.master_effects_off))
         return "${p.displayName}: $v"
     }
 
