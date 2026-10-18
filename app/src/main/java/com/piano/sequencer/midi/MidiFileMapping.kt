@@ -410,11 +410,14 @@ object MidiFileLearnState {
     private var _state = State.IDLE
 
     private var _callback: ((LearnedEvent) -> Unit)? = null
+    @Volatile var onStarting: (() -> Unit)? = null
 
     fun getState(): State = _state
+    fun <T> withTransitionLock(action: () -> T): T = synchronized(this) { action() }
 
     fun startLearning(callback: (LearnedEvent) -> Unit) {
         synchronized(this) {
+            onStarting?.invoke()
             // m7: cancel any previous learn before starting new one
             cancelLocked()
             _state = State.LEARNING

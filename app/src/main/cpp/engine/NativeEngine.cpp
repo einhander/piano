@@ -1,4 +1,9 @@
 #include "NativeEngine.h"
+#include <android/log.h>
+#include "effects/lsp/LspEffectIds.h"
+#include "effects/ladspa/LadspaRegistry.h"
+#include <limits>
+#include <cstring>
 #include "audio/OboeOutput.h"
 #include "synth/FluidSynthEngine.h"
 #include "realtime/MidiQueue.h"
@@ -99,6 +104,10 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     }
     mMixer.init(16, mMaxSynthFrames);
     mMasterBus.init(mMaxSynthFrames);
+    mSynthChannelBuffers.assign(static_cast<size_t>(16) * mMaxSynthFrames * 2, 0.0f);
+    mSynthReturnBuffer.assign(static_cast<size_t>(mMaxSynthFrames) * 2, 0.0f);
+    for (int ch = 0; ch < 16; ++ch)
+        mSynthChannelPtrs[ch] = mSynthChannelBuffers.data() + static_cast<size_t>(ch) * mMaxSynthFrames * 2;
 
     // Prepare the master effect chain scratch buffers at the same max as
     // Mixer/MasterBus (plan Phase 7). The LSP bundle is NOT loaded here — it
@@ -106,6 +115,7 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     // PlaybackService worker thread after the engine is up, once the prebuilt
     // .so path is known). With the bundle absent, process() is a passthrough.
     mMasterEffects.prepare(sampleRate, mMaxSynthFrames);
+    mInstrumentEffects.prepare(sampleRate, mMaxSynthFrames);
 
     // Route FluidSynth output through Mixer track 0
     mMixer.setVolume(0, 1.0f);
@@ -447,7 +457,6 @@ void NativeEngine::handleSampleRateChange(int newRate) {
     if (!mInitialized.load()) return;   // init path handles the first rate
     if (newRate == mPublishedSampleRate.load(std::memory_order_acquire)) return;  // no change
     mPendingSynthReprepareRate.store(newRate, std::memory_order_release);
-    (void)updateSampleRate(newRate);
     if (mSynth) {
         // Reload ALL currently-loaded SF2s into the new synth (multi-SF2).
         std::vector<std::string> sfPaths;
@@ -455,7 +464,16 @@ void NativeEngine::handleSampleRateChange(int newRate) {
             sfPaths.push_back(sf.path);
         }
         const int32_t requested = mPendingSynthReprepareRate.exchange(0, std::memory_order_acq_rel);
-        if (requested > 0) mSynth->reprepareAtNewRate(requested, sfPaths);
+        const bool synthReady = requested > 0 && mSynth->reprepareAtNewRate(requested, sfPaths);
+        if (synthReady) {
+            (void)updateSampleRate(requested);
+            FluidSynthEngine::WorkerAccessGuard callbackQuiescence(*mSynth);
+            if (!mInstrumentEffects.reprepareQuiescent(static_cast<double>(requested), mMaxSynthFrames)) {
+                __android_log_print(ANDROID_LOG_ERROR, "NativeEngine",
+                    "Instrument effects reprepare failed (status=%d); retrying on next sample-rate change",
+                    static_cast<int>(mInstrumentEffects.prepareStatus()));
+            }
+        }
     }
 }
 
@@ -588,19 +606,44 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
 
         // Immediate queue first; sequencer events render at their frame offsets.
         float* track0 = mMixer.getTrackBuffer(0);
+        std::memset(track0, 0, static_cast<size_t>(safeFrames) * 2 * sizeof(float));
         int offset = 0;
         for (int32_t i = 0; i < sequencerEventCount; ++i) {
             int eventOffset = static_cast<int>(mSequencerStaging[i].targetFrame - framePos);
             if (eventOffset < offset) eventOffset = offset;
             if (eventOffset > safeFrames) eventOffset = safeFrames;
             if (eventOffset > offset) {
-                mSynth->render(track0 + offset * 2, eventOffset - offset);
+                for (int ch = 0; ch < 16; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
+                float* sharedReturn = mSynthReturnBuffer.data() + offset * 2;
+                mSynth->renderChannels(mSynthSegmentPtrs, sharedReturn, eventOffset - offset);
+                mInstrumentEffects.process(mSynthSegmentPtrs,eventOffset-offset);
+                for (int f = offset; f < eventOffset; ++f)
+                    for (int ch = 0; ch < 16; ++ch) {
+                        track0[f * 2] += mSynthChannelPtrs[ch][f * 2];
+                        track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
+                    }
+                for (int f = offset; f < eventOffset; ++f) {
+                    track0[f * 2] += sharedReturn[f * 2];
+                    track0[f * 2 + 1] += sharedReturn[f * 2 + 1];
+                }
             }
             mSynth->processOneMidi(mSequencerStaging[i].message);
             offset = eventOffset;
         }
         if (offset < safeFrames) {
-            mSynth->render(track0 + offset * 2, safeFrames - offset);
+            for (int ch = 0; ch < 16; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
+            float* sharedReturn = mSynthReturnBuffer.data() + offset * 2;
+            mSynth->renderChannels(mSynthSegmentPtrs, sharedReturn, safeFrames - offset);
+            mInstrumentEffects.process(mSynthSegmentPtrs,safeFrames-offset);
+            for (int f = offset; f < safeFrames; ++f)
+                for (int ch = 0; ch < 16; ++ch) {
+                    track0[f * 2] += mSynthChannelPtrs[ch][f * 2];
+                    track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
+                }
+            for (int f = offset; f < safeFrames; ++f) {
+                track0[f * 2] += sharedReturn[f * 2];
+                track0[f * 2 + 1] += sharedReturn[f * 2 + 1];
+            }
         }
 
         mSynth->endSynthAccess();
@@ -898,6 +941,27 @@ const char* NativeEngine::getMasterEffectParamName(int slot, int index) const {
     }
     return descriptors[index].displayName ? descriptors[index].displayName : "";
 }
+
+namespace {
+int instrumentSlot(const char* id) {
+    if(!id)return -1;
+    for(int s=0;s<piano::lsp::kMasterEffectCount;++s) if(std::strcmp(id,piano::lsp::kBindings[s].stableId)==0)return s;
+    return -1;
+}
+}
+int NativeEngine::loadInstrumentEffectBundle(const char* path) {
+    return path && piano::ladspa::LadspaRegistry::instance().open(path) ? piano::lsp::kMasterEffectCount : 0;
+}
+bool NativeEngine::setInstrumentRackEnabled(int c,bool on){if(c<0||c>=16)return false;mInstrumentEffects.setRackEnabled(c,on);return true;}
+bool NativeEngine::isInstrumentRackEnabled(int c)const{return c>=0&&c<16&&mInstrumentEffects.rackEnabled(c);}
+bool NativeEngine::setInstrumentEffectEnabled(int c,const char* id,bool on){int s=instrumentSlot(id);return s>=0&&mInstrumentEffects.setEffectEnabledChecked(c,s,on);}
+bool NativeEngine::isInstrumentEffectEnabled(int c,const char* id)const{int s=instrumentSlot(id);return s>=0&&mInstrumentEffects.effectEnabled(c,s);}
+bool NativeEngine::isInstrumentEffectAvailable(int c,const char* id)const{int s=instrumentSlot(id);return s>=0&&mInstrumentEffects.isAvailable(c,s);}
+bool NativeEngine::setInstrumentEffectParameter(int c,const char* id,int p,float v){int s=instrumentSlot(id);return s>=0&&p>=0&&mInstrumentEffects.setParameterChecked(c,s,static_cast<uint32_t>(p),v);}
+float NativeEngine::getInstrumentEffectParameter(int c,const char* id,int p)const{float v=std::numeric_limits<float>::quiet_NaN();int s=instrumentSlot(id);if(s>=0&&p>=0)mInstrumentEffects.getParameterChecked(c,s,static_cast<uint32_t>(p),v);return v;}
+int NativeEngine::getInstrumentEffectParamCount(const char* id)const{int s=instrumentSlot(id);return s<0?0:mInstrumentEffects.paramCount(s);}
+bool NativeEngine::getInstrumentEffectParamInfo(const char* id,int i,uint32_t& p,float& lo,float& hi,float& def,bool& log,bool& integer,bool& toggled)const{int s=instrumentSlot(id);return s>=0&&mInstrumentEffects.paramInfo(s,i,p,lo,hi,def,log,integer,toggled);}
+const char* NativeEngine::getInstrumentEffectParamName(const char* id,int i)const{int s=instrumentSlot(id);return s<0?"":mInstrumentEffects.paramName(s,i);}
 
 void NativeEngine::addClip(int32_t clipId, int32_t trackId, int64_t startTick, int64_t lengthTicks,
                            const uint8_t* events, int32_t eventCount) {

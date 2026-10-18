@@ -381,6 +381,31 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun getMasterEffectParamName(slot: Int, index: Int): String =
         NativeEngineBridge.nativeGetMasterEffectParamName(slot, index)
 
+    // Instrument effects: direct JNI calls, worker-thread only. Effect IDs are stable strings, never UI indices.
+    fun loadInstrumentEffectBundle(soPath: String): Int = NativeEngineBridge.nativeLoadInstrumentEffectBundle(soPath)
+    fun setInstrumentRackEnabled(channel: Int, enabled: Boolean): Boolean {
+        val ok = NativeEngineBridge.nativeSetInstrumentRackEnabled(channel, enabled)
+        if (ok) com.piano.sequencer.EffectStateRestore.persistInstrumentRack(this, channel, enabled)
+        return ok
+    }
+    fun isInstrumentRackEnabled(channel: Int): Boolean = NativeEngineBridge.nativeIsInstrumentRackEnabled(channel)
+    fun setInstrumentEffectEnabled(channel: Int, effectId: String, enabled: Boolean): Boolean {
+        val ok = NativeEngineBridge.nativeSetInstrumentEffectEnabled(channel, effectId, enabled)
+        if (ok) com.piano.sequencer.EffectStateRestore.persistInstrumentEffect(this, channel, effectId, enabled)
+        return ok
+    }
+    fun isInstrumentEffectEnabled(channel: Int, effectId: String): Boolean = NativeEngineBridge.nativeIsInstrumentEffectEnabled(channel, effectId)
+    fun isInstrumentEffectAvailable(channel: Int, effectId: String): Boolean = NativeEngineBridge.nativeIsInstrumentEffectAvailable(channel, effectId)
+    fun setInstrumentEffectParameter(channel: Int, effectId: String, parameterId: Int, value: Float): Boolean {
+        val ok = NativeEngineBridge.nativeSetInstrumentEffectParameter(channel, effectId, parameterId, value)
+        if (ok) com.piano.sequencer.EffectStateRestore.persistInstrumentParameter(this, channel, effectId, parameterId, value)
+        return ok
+    }
+    fun getInstrumentEffectParameter(channel: Int, effectId: String, parameterId: Int): Float = NativeEngineBridge.nativeGetInstrumentEffectParameter(channel, effectId, parameterId)
+    fun getInstrumentEffectParamCount(effectId: String): Int = NativeEngineBridge.nativeGetInstrumentEffectParamCount(effectId)
+    fun getInstrumentEffectParamInfo(effectId: String, index: Int): FloatArray? = NativeEngineBridge.nativeGetInstrumentEffectParamInfo(effectId, index)
+    fun getInstrumentEffectParamName(effectId: String, index: Int): String = NativeEngineBridge.nativeGetInstrumentEffectParamName(effectId, index)
+
     // Reverb / Chorus / Interpolation (Fix #10-12). Worker thread only.
     fun setReverb(on: Boolean) = NativeEngineBridge.nativeSetReverb(on)
     fun setChorus(on: Boolean) = NativeEngineBridge.nativeSetChorus(on)

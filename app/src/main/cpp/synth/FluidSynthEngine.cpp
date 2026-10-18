@@ -15,6 +15,9 @@ FluidSynthEngine::FluidSynthEngine() {
     for (int i = 0; i < 16; i++) {
         mChannelPrograms[i].store(-1, std::memory_order_relaxed);
     }
+    for (int i = 0; i < kAudioGroups * 2; ++i) mRenderAudioPtrs[i] = mRenderAudio[i];
+    mRenderFxPtrs[0] = mRenderFx[0];
+    mRenderFxPtrs[1] = mRenderFx[1];
 }
 
 bool FluidSynthEngine::tryEnterAudioCallback() {
@@ -84,6 +87,12 @@ bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
             return false;
         }
         fluid_settings_setnum(mSettings[i], "synth.sample-rate", sampleRate);
+        fluid_settings_setint(mSettings[i], "synth.audio-groups", kAudioGroups);
+        fluid_settings_setint(mSettings[i], "synth.audio-channels", kAudioGroups);
+        // Preserve FluidSynth's default single shared effects unit. Its return
+        // is mixed after dry channel buses; it is deliberately not attributed
+        // to any individual MIDI channel.
+        fluid_settings_setint(mSettings[i], "synth.effects-groups", 1);
         fluid_settings_setint(mSettings[i], "synth.cpu-cores", 1);
         fluid_settings_setint(mSettings[i], "audio.periods", 2);
 
@@ -233,8 +242,8 @@ int FluidSynthEngine::prepareInactiveSlot(const std::vector<std::string>& sfPath
 // (e.g. BT device switch 44.1k→48k) — the init() path is idempotent, so a
 // reopen at a new rate would otherwise leave the transport tempo + FluidSynth
 // pitch off by the rate ratio.
-void FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::string>& sfPaths) {
-    if (!mInitialized.load()) return;
+bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::string>& sfPaths) {
+    if (!mInitialized.load() || newRate <= 0) return false;
     // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
     // Worker-thread blocking is allowed; the audio thread never takes this lock.
     WorkerAccessGuard workerAccess(*this);
@@ -244,44 +253,50 @@ void FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
     // processCommands skips it (no shared fluid_synth_t across threads).
     mPreparing[target].store(true, std::memory_order_release);
 
-    // Free the old synth in the target slot (it's inactive, so the audio
-    // thread doesn't touch it).
-    if (mSynth[target]) {
-        delete_fluid_synth(mSynth[target]);
-        mSynth[target] = nullptr;
-    }
-    if (mSettings[target]) {
-        delete_fluid_settings(mSettings[target]);
-        mSettings[target] = nullptr;
-    }
-
-    // Create a new synth at the new rate.
-    mSettings[target] = new_fluid_settings();
-    if (mSettings[target]) {
-        fluid_settings_setnum(mSettings[target], "synth.sample-rate", newRate);
-        fluid_settings_setint(mSettings[target], "synth.cpu-cores", 1);
-        fluid_settings_setint(mSettings[target], "audio.periods", 2);
-        mSynth[target] = new_fluid_synth(mSettings[target]);
-        if (mSynth[target]) {
+    // Preserve target until replacement synth is fully initialized.
+    fluid_settings_t* newSettings = new_fluid_settings();
+    fluid_synth_t* newSynth = nullptr;
+    bool success = newSettings != nullptr;
+    if (success) {
+        fluid_settings_setnum(newSettings, "synth.sample-rate", newRate);
+        fluid_settings_setint(newSettings, "synth.audio-groups", kAudioGroups);
+        fluid_settings_setint(newSettings, "synth.audio-channels", kAudioGroups);
+        fluid_settings_setint(newSettings, "synth.effects-groups", 1);
+        fluid_settings_setint(newSettings, "synth.cpu-cores", 1);
+        fluid_settings_setint(newSettings, "audio.periods", 2);
+        newSynth = new_fluid_synth(newSettings);
+        success = newSynth != nullptr;
+        if (success) {
             // Disable FluidSynth audio driver — we render PCM ourselves.
-            fluid_settings_setstr(mSettings[target], "audio.driver", "none");
+            fluid_settings_setstr(newSettings, "audio.driver", "none");
             // Pre-size to UI maximum; user's setting remains the active cap.
-            fluid_synth_set_polyphony(mSynth[target], kMaxPolyphony);
+            fluid_synth_set_polyphony(newSynth, kMaxPolyphony);
             // Reload ALL currently-loaded SF2s into the new synth.
             // [perf]: measure the reload duration for the one-time [perf] dump.
             for (const std::string& path : sfPaths) {
                 if (path.empty()) continue;
                 auto t0 = std::chrono::steady_clock::now();
-                fluid_synth_sfload(mSynth[target], path.c_str(), 1);
+                if (fluid_synth_sfload(newSynth, path.c_str(), 1) < 0) success = false;
                 auto t1 = std::chrono::steady_clock::now();
                 mLastSf2LoadMs.store(
                     std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count(),
                     std::memory_order_relaxed);
             }
             // M2: apply the current desired state to the prepared slot.
-            applyDesiredState(mSynth[target]);
+            if (success) applyDesiredState(newSynth);
         }
     }
+
+    if (!success) {
+        if (newSynth) delete_fluid_synth(newSynth);
+        if (newSettings) delete_fluid_settings(newSettings);
+        mPreparing[target].store(false, std::memory_order_release);
+        return false;
+    }
+    if (mSynth[target]) delete_fluid_synth(mSynth[target]);
+    if (mSettings[target]) delete_fluid_settings(mSettings[target]);
+    mSynth[target] = newSynth;
+    mSettings[target] = newSettings;
 
     // Flip the active index — the audio thread picks up the new synth on the
     // next callback.
@@ -298,6 +313,7 @@ void FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
 
     // Update the sample rate.
     mSampleRate = newRate;
+    return true;
 }
 
 int FluidSynthEngine::loadSoundFont(const char* filePath) {
@@ -606,8 +622,67 @@ void FluidSynthEngine::render(float* output, int numFrames) {
         std::memset(output, 0, numFrames * 2 * sizeof(float));
         return;
     }
-    // Render stereo float buffer directly (no lock — audio thread only).
-    fluid_synth_write_float(synth, numFrames, output, 0, 2, output, 1, 2);
+    if (numFrames <= 0 || numFrames > kRenderCapacity) { std::memset(output, 0, static_cast<size_t>(std::max(numFrames, 0)) * 2 * sizeof(float)); return; }
+    for (int i = 0; i < 32; ++i) std::memset(mRenderAudio[i], 0, static_cast<size_t>(numFrames) * sizeof(float));
+    std::memset(mRenderFx[0], 0, static_cast<size_t>(numFrames) * sizeof(float));
+    std::memset(mRenderFx[1], 0, static_cast<size_t>(numFrames) * sizeof(float));
+    if (fluid_synth_process(synth, numFrames, 2, mRenderFxPtrs, 32, mRenderAudioPtrs) != FLUID_OK) {
+        std::memset(output, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
+        return;
+    }
+    for (int i = 0; i < numFrames; ++i) {
+        output[i * 2] = output[i * 2 + 1] = 0.0f;
+        for (int ch = 0; ch < 16; ++ch) {
+            output[i * 2] += mRenderAudio[ch * 2][i];
+            output[i * 2 + 1] += mRenderAudio[ch * 2 + 1][i];
+        }
+        output[i * 2] += mRenderFx[0][i];
+        output[i * 2 + 1] += mRenderFx[1][i];
+    }
+}
+
+void FluidSynthEngine::renderChannels(float* const outputs[16], float* sharedReturn, int numFrames) {
+    if (!mInitialized.load() || numFrames <= 0 || numFrames > kRenderCapacity) {
+        for (int ch = 0; ch < 16; ++ch) if (outputs[ch]) std::memset(outputs[ch], 0, static_cast<size_t>(std::max(numFrames, 0)) * 2 * sizeof(float));
+        if (sharedReturn) std::memset(sharedReturn, 0, static_cast<size_t>(std::max(numFrames, 0)) * 2 * sizeof(float));
+        return;
+    }
+    const int idx = mActiveIndex.load(std::memory_order_acquire);
+    fluid_synth_t* synth = mSynth[idx];
+    if (!synth) {
+        for (int ch = 0; ch < 16; ++ch) if (outputs[ch]) std::memset(outputs[ch], 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
+        if (sharedReturn) std::memset(sharedReturn, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
+        return;
+    }
+    // process() accumulates into destination buffers. Clear all dry/return
+    // buffers per segment. One effects group provides a shared stereo return.
+    for (int i = 0; i < 16; ++i) {
+        std::memset(mRenderAudio[i * 2], 0, static_cast<size_t>(numFrames) * sizeof(float));
+        std::memset(mRenderAudio[i * 2 + 1], 0, static_cast<size_t>(numFrames) * sizeof(float));
+    }
+    std::memset(mRenderFx[0], 0, static_cast<size_t>(numFrames) * sizeof(float));
+    std::memset(mRenderFx[1], 0, static_cast<size_t>(numFrames) * sizeof(float));
+    if (fluid_synth_process(synth, numFrames, 2, mRenderFxPtrs, 32, mRenderAudioPtrs) != FLUID_OK) {
+        for (int i = 0; i < 32; ++i) std::memset(mRenderAudio[i], 0, static_cast<size_t>(numFrames) * sizeof(float));
+        std::memset(mRenderFx[0], 0, static_cast<size_t>(numFrames) * sizeof(float));
+        std::memset(mRenderFx[1], 0, static_cast<size_t>(numFrames) * sizeof(float));
+        for (int ch = 0; ch < 16; ++ch) if (outputs[ch]) std::memset(outputs[ch], 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
+        if (sharedReturn) std::memset(sharedReturn, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
+        return;
+    }
+    for (int ch = 0; ch < 16; ++ch) {
+        if (!outputs[ch]) continue;
+        for (int i = 0; i < numFrames; ++i) {
+            outputs[ch][i * 2] = mRenderAudio[ch * 2][i];
+            outputs[ch][i * 2 + 1] = mRenderAudio[ch * 2 + 1][i];
+        }
+    }
+    if (sharedReturn) {
+        for (int i = 0; i < numFrames; ++i) {
+            sharedReturn[i * 2] = mRenderFx[0][i];
+            sharedReturn[i * 2 + 1] = mRenderFx[1][i];
+        }
+    }
 }
 
 // ── Worker-thread entry points (JNI/settings) — all enqueue, no locks ────────

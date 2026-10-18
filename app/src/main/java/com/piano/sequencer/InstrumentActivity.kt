@@ -159,6 +159,15 @@ class InstrumentActivity : AppCompatActivity() {
 
             row.addView(channelLabel)
             row.addView(nameLabel)
+            row.addView(android.widget.Button(this).apply {
+                text = getString(R.string.instrument_effects_action)
+                contentDescription = getString(R.string.instrument_effects_channel_title, ch + 1)
+                minWidth = dp(64)
+                setOnClickListener {
+                    startActivity(Intent(this@InstrumentActivity, InstrumentEffectsActivity::class.java)
+                        .putExtra(InstrumentEffectsActivity.EXTRA_CHANNEL, ch))
+                }
+            })
             row.setOnClickListener { onChannelTapped(ch) }
 
             rowNameLabels[ch] = nameLabel

@@ -44,4 +44,34 @@ class MidiIngressRouter(
         AppLogger.info("MIDI", "NOTE OFF ch=${channel + 1} note=$note velocity=$velocity outcome=${if (consumed) "consumed" else "not-consumed/forwarded"}")
         if (!consumed) dispatch(0x80, note, velocity, channel)
     }
+
+    /** Route CC through source policy before any learn/mapping callback. */
+    fun controlChange(
+        channel: Int,
+        cc: Int,
+        value: Int,
+        source: String? = null,
+        effectLearning: () -> Boolean = { false },
+        effectLearn: () -> Unit = {},
+        trigger: () -> Boolean,
+        effectMapping: () -> Boolean,
+        forward: () -> Unit
+    ) {
+        when (portPolicy(source)) {
+            PortRoute.IGNORE -> return
+            PortRoute.CONTROL_ONLY -> {
+                if (effectLearning()) effectLearn()
+                else if (!trigger()) effectMapping()
+                return
+            }
+            PortRoute.NORMAL -> Unit
+        }
+        if (effectLearning()) {
+            effectLearn()
+            return
+        }
+        if (trigger()) return
+        if (effectMapping()) return
+        forward()
+    }
 }

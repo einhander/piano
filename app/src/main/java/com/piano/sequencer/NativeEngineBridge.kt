@@ -278,6 +278,19 @@ object NativeEngineBridge {
     external fun nativeGetMasterEffectParamInfo(slot: Int, index: Int): FloatArray?
     external fun nativeGetMasterEffectParamName(slot: Int, index: Int): String
 
+    // Instrument effect rack APIs. Call only from worker threads.
+    external fun nativeLoadInstrumentEffectBundle(soPath: String): Int
+    external fun nativeSetInstrumentRackEnabled(channel: Int, enabled: Boolean): Boolean
+    external fun nativeIsInstrumentRackEnabled(channel: Int): Boolean
+    external fun nativeSetInstrumentEffectEnabled(channel: Int, effectId: String, enabled: Boolean): Boolean
+    external fun nativeIsInstrumentEffectEnabled(channel: Int, effectId: String): Boolean
+    external fun nativeIsInstrumentEffectAvailable(channel: Int, effectId: String): Boolean
+    external fun nativeSetInstrumentEffectParameter(channel: Int, effectId: String, parameterId: Int, value: Float): Boolean
+    external fun nativeGetInstrumentEffectParameter(channel: Int, effectId: String, parameterId: Int): Float
+    external fun nativeGetInstrumentEffectParamCount(effectId: String): Int
+    external fun nativeGetInstrumentEffectParamInfo(effectId: String, index: Int): FloatArray?
+    external fun nativeGetInstrumentEffectParamName(effectId: String, index: Int): String
+
     // Count-in metronome
     external fun nativeStartCountIn(beats: Int): Long
     external fun nativeIsCountingIn(): Boolean

@@ -58,6 +58,16 @@ public:
     // Callback admission: exactly one non-blocking attempt per callback.
     bool tryEnterAudioCallback();
     void leaveAudioCallback();
+    class WorkerAccessGuard {
+    public:
+        explicit WorkerAccessGuard(FluidSynthEngine& engine);
+        ~WorkerAccessGuard();
+        WorkerAccessGuard(const WorkerAccessGuard&) = delete;
+        WorkerAccessGuard& operator=(const WorkerAccessGuard&) = delete;
+    private:
+        FluidSynthEngine& mEngine;
+        std::unique_lock<std::mutex> mWorkerLock;
+    };
     FluidSynthEngine();
     ~FluidSynthEngine();
 
@@ -110,6 +120,10 @@ public:
     // Render PCM float buffer (stereo) from the active synth.
     // Audio thread only (inside the synth access region). NO allocations.
     void render(float* output, int numFrames);
+
+    // Render 16 dry stereo MIDI-channel buses plus FluidSynth's distinct
+    // shared stereo reverb/chorus return. All destinations are interleaved.
+    void renderChannels(float* const outputs[16], float* sharedReturn, int numFrames);
 
     // ── Worker-thread entry points (JNI/settings) — all enqueue, no locks ──
 
@@ -183,7 +197,7 @@ public:
     // Used on a mid-session rate change (e.g. BT device switch 44.1k→48k) — the
     // init() path is idempotent, so a reopen at a new rate would otherwise
     // leave the transport tempo + FluidSynth pitch off by the rate ratio.
-    void reprepareAtNewRate(int newRate, const std::vector<std::string>& sfPaths);
+    bool reprepareAtNewRate(int newRate, const std::vector<std::string>& sfPaths);
 
     // Enumerate all presets of all loaded SoundFonts (worker thread, NOT audio
     // callback). Synchronized with the audio thread via the sequence lock.
@@ -197,17 +211,6 @@ public:
     int getLastRearmVelocity() const { return mLastRearmVel; }
 
 private:
-    class WorkerAccessGuard {
-    public:
-        explicit WorkerAccessGuard(FluidSynthEngine& engine);
-        ~WorkerAccessGuard();
-        WorkerAccessGuard(const WorkerAccessGuard&) = delete;
-        WorkerAccessGuard& operator=(const WorkerAccessGuard&) = delete;
-    private:
-        FluidSynthEngine& mEngine;
-        std::unique_lock<std::mutex> mWorkerLock;
-    };
-
     static constexpr uint32_t kAudioGateBit = uint32_t{1} << 31;
     static constexpr uint32_t kAudioReaderMask = ~kAudioGateBit;
     std::atomic<uint32_t> mAudioAccess{0};
@@ -260,6 +263,15 @@ private:
 
     int mSampleRate = 48000;
     int mBufferSize = 0;
+    // Fixed-size planar scratch for FluidSynth process() (16 stereo audio
+    // groups + FluidSynth's shared stereo effects return). Allocated once on
+    // the control thread and reused for every event-split segment.
+    static constexpr int kAudioGroups = 16;
+    static constexpr int kRenderCapacity = 8192;
+    float mRenderAudio[kAudioGroups * 2][kRenderCapacity]{};
+    float mRenderFx[2][kRenderCapacity]{};
+    float* mRenderAudioPtrs[kAudioGroups * 2]{};
+    float* mRenderFxPtrs[2]{};
     std::atomic<bool> mInitialized{false};
 
     // Lock-free control command queue (worker → audio thread).

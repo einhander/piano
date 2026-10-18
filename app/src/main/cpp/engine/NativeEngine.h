@@ -24,6 +24,7 @@
 #include "engine/MidiFilePlayer.h"
 #include "synth/FluidSynthEngine.h"
 #include "effects/EffectChain.h"
+#include "effects/InstrumentEffectManager.h"
 
 class OboeOutput;
 
@@ -171,6 +172,17 @@ public:
                                  /*out*/ bool& integer,
                                  /*out*/ bool& toggled) const;
     const char* getMasterEffectParamName(int slot, int index) const;
+    int loadInstrumentEffectBundle(const char* soPath);
+    bool setInstrumentRackEnabled(int channel, bool enabled);
+    bool isInstrumentRackEnabled(int channel) const;
+    bool setInstrumentEffectEnabled(int channel, const char* effectId, bool enabled);
+    bool isInstrumentEffectEnabled(int channel, const char* effectId) const;
+    bool isInstrumentEffectAvailable(int channel, const char* effectId) const;
+    bool setInstrumentEffectParameter(int channel, const char* effectId, int parameterId, float value);
+    float getInstrumentEffectParameter(int channel, const char* effectId, int parameterId) const;
+    int getInstrumentEffectParamCount(const char* effectId) const;
+    bool getInstrumentEffectParamInfo(const char* effectId, int index, uint32_t& id, float& minValue, float& maxValue, float& defaultValue, bool& logarithmic, bool& integer, bool& toggled) const;
+    const char* getInstrumentEffectParamName(const char* effectId, int index) const;
 
     // Project loading (called from worker thread, NOT audio callback)
     void loadProject(const char* json);
@@ -338,6 +350,7 @@ private:
     // bundle is not loaded or all effects are bypassed, process() is a no-op
     // passthrough — the engine behaves exactly as before LSP integration.
     piano::EffectChain mMasterEffects;
+    piano::InstrumentEffectManager mInstrumentEffects;
 
     // Clip storage (owned by NativeEngine, safe for audio thread access)
     static constexpr int32_t kMaxClips = 64;
@@ -358,6 +371,10 @@ private:
     // case of a mid-session reopen at a LARGER capacity (silence tail is then
     // acceptable; the buffers are not grown at runtime).
     int mMaxSynthFrames = kMaxSynthFrames;
+    std::vector<float> mSynthChannelBuffers;
+    std::vector<float> mSynthReturnBuffer;
+    float* mSynthChannelPtrs[16]{};
+    float* mSynthSegmentPtrs[16]{};
 
     // Count-in metronome state
     std::atomic<bool> mCountingIn{false};

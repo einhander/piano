@@ -240,6 +240,7 @@ class MainActivity : AppCompatActivity() {
             }
             playbackService = binder.getService()
             serviceBound = true
+            (application as PianoApp).instrumentEffectCcController.attach(playbackService!!)
             if (exitPending) return
 
             // Bind trigger controller (singleton) — cheap ref storage, safe on main thread
@@ -316,6 +317,10 @@ class MainActivity : AppCompatActivity() {
                 // Prepare plugins before the first audio callback. Bundle failure is
                 // non-fatal: the engine continues with its passthrough chain.
                 loadMasterEffectBundle(svc)
+                loadInstrumentEffectBundle(svc)
+                // attach() can precede native initialization; refresh after the
+                // registry and persisted rack state are ready.
+                (application as PianoApp).instrumentEffectCcController.refreshCache()
 
                 // Restore persisted state (SF2, polyphony, master gain, channel programs)
                 restorePersistedState(svc)
@@ -644,24 +649,23 @@ class MainActivity : AppCompatActivity() {
             }
             override fun onControlChange(channel: Int, controller: Int, value: Int, source: String) {
                 withMidiIngress {
-                // Delegate to trigger controller — consumed while learning (first CC
-                // of the session is captured) or when a cell is mapped to this CC
-                // (press toggles the cell's file; repeats are consumed too).
-                val consumed = MidiFileTriggerController.get(this@MainActivity).onControlChange(channel, controller, value, source)
-                if (consumed) {
-                    AppLogger.info("MIDI", "CC ch=${channel + 1} controller=$controller value=$value outcome=consumed")
-                    return
-                }
-                MidiInputTrace.routine("cc-outcome-$channel-$controller", value.toString()) {
-                    "CC ch=${channel + 1} controller=$controller value=$value outcome=not-consumed/forwarded"
-                }
-                if (controller in 0..1) {
-                    // Modulation / breath follow the keyboard's current channel
-                    val base = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
-                    sendToTargets(0xB0, controller, value, base)
-                } else {
-                    sendToTargets(0xB0, controller, value, intArrayOf(channel))
-                }
+                val effectController = (application as PianoApp).instrumentEffectCcController
+                midiIngress.controlChange(
+                    channel, controller, value, source,
+                    effectLearning = { effectController.isLearning() },
+                    effectLearn = { effectController.onControlChange(source, channel, controller, value) },
+                    trigger = { MidiFileTriggerController.get(this@MainActivity).onControlChange(channel, controller, value, source) },
+                    effectMapping = { effectController.onControlChange(source, channel, controller, value) },
+                    forward = {
+                        MidiInputTrace.routine("cc-outcome-$channel-$controller", value.toString()) {
+                            "CC ch=${channel + 1} controller=$controller value=$value outcome=not-consumed/forwarded"
+                        }
+                        if (controller in 0..1) {
+                            val base = PitchBendChannelResolver.resolve(lastNoteChannel, pitchBendChannelsMask)
+                            sendToTargets(0xB0, controller, value, base)
+                        } else sendToTargets(0xB0, controller, value, intArrayOf(channel))
+                    }
+                )
                 }
             }
             override fun onProgramChange(channel: Int, program: Int, source: String) {
@@ -1013,6 +1017,20 @@ class MainActivity : AppCompatActivity() {
                 "MainActivity",
                 "LSP master effects unavailable (chain bypassed). Reason: ${reason.ifEmpty { "none reported" }}"
             )
+        }
+    }
+
+    /** Register bundle for channel racks without rebuilding the prepared master chain. EngineBoot worker only. */
+    private fun loadInstrumentEffectBundle(svc: PlaybackService) {
+        val path = "${applicationInfo.nativeLibraryDir}/liblsp-plugins-ladspa.so"
+        val count = runCatching { svc.loadInstrumentEffectBundle(path) }.getOrElse {
+            AppLogger.warn("MainActivity", "Instrument LSP registry load failed: ${it.message}")
+            0
+        }
+        if (count > 0) {
+            EffectStateRestore.restoreInstruments(this, svc, true)
+        } else {
+            AppLogger.warn("MainActivity", "Instrument LSP effects unavailable; saved rack state retained")
         }
     }
 
@@ -1554,6 +1572,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        playbackService?.let { (application as PianoApp).instrumentEffectCcController.detach(it) }
         midiWorker.shutdown()
         projectIoWorker.shutdown()
         super.onDestroy()

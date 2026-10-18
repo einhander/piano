@@ -20,6 +20,8 @@ import java.util.Locale
  * the app's private filesDir.
  */
 class PianoApp : Application() {
+    lateinit var instrumentEffectCcController: com.piano.sequencer.midi.InstrumentEffectCcController
+        private set
     @Volatile private var playbackServiceAlive = false
     @Volatile private var playbackService: com.piano.sequencer.service.PlaybackService? = null
     @Volatile private var exitAfterServiceStop: (() -> Unit)? = null
@@ -49,6 +51,8 @@ class PianoApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        instrumentEffectCcController = com.piano.sequencer.midi.InstrumentEffectCcController(this)
+        com.piano.sequencer.midi.MidiFileLearnState.onStarting = { instrumentEffectCcController.cancelLearnWithResult() }
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {

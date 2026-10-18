@@ -73,4 +73,40 @@ class MidiIngressRouterTest {
             events
         )
     }
+
+    @Test fun ccPoliciesAndEffectLearnOrdering() {
+        val calls = mutableListOf<String>()
+        val router = MidiIngressRouter(
+            { _, _, _, _ -> false }, { _, _, _, _ -> false }, { _, _, _, _ -> },
+            { _, _, _ -> },
+            { source -> when (source) {
+                "ignore" -> MidiIngressRouter.PortRoute.IGNORE
+                "control" -> MidiIngressRouter.PortRoute.CONTROL_ONLY
+                else -> MidiIngressRouter.PortRoute.NORMAL
+            } }
+        )
+        fun cc(source: String, learning: Boolean = false, trigger: Boolean = false, effect: Boolean = false) =
+            router.controlChange(0, 1, 2, source,
+                effectLearning = { learning }, effectLearn = { calls += "learn" },
+                trigger = { calls += "trigger"; trigger },
+                effectMapping = { calls += "effect"; effect },
+                forward = { calls += "forward" })
+
+        cc("ignore", learning = true)
+        assertTrue(calls.isEmpty())
+        cc("control", learning = true)
+        assertEquals(listOf("learn"), calls)
+        calls.clear()
+        cc("control", trigger = true)
+        assertEquals(listOf("trigger"), calls)
+        calls.clear()
+        cc("control", effect = true)
+        assertEquals(listOf("trigger", "effect"), calls)
+        calls.clear()
+        cc("normal", learning = true)
+        assertEquals(listOf("learn"), calls)
+        calls.clear()
+        cc("normal")
+        assertEquals(listOf("trigger", "effect", "forward"), calls)
+    }
 }

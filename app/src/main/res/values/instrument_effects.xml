@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="instrument_effects_action">Effects</string>
+    <string name="instrument_effects_channel_title">Channel %1$d effects</string>
+    <string name="instrument_effects_hint">Only this MIDI channel is affected. Preset selection and other channels stay unchanged.</string>
+    <string name="instrument_effects_rack">Enable channel effects rack</string>
+    <string name="instrument_effects_unavailable">Plugin unavailable. Channel audio continues without this effect.</string>
+    <string name="instrument_effects_error">Could not apply change. Showing current channel settings.</string>
+    <string name="instrument_effects_disconnected">Service disconnected. Reopen this screen to reconnect.</string>
+    <string name="instrument_effects_configure">Configure</string>
+    <string name="instrument_effects_hide">Hide parameters</string>
+    <string name="instrument_effects_bypass">Rack bypassed. Effect settings are kept for when the rack is enabled.</string>
+</resources>

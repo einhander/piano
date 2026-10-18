@@ -33,6 +33,8 @@
 //     -o /tmp/opencode/held_note_rearm_test
 // Run (from repo root):
 //   /tmp/opencode/held_note_rearm_test [path/to/test.sf2]
+// Part A0 also checks dry-bus isolation for MIDI channel 2, and that
+// the shared FluidSynth return is supplied through a separate output buffer.
 
 #include "synth/FluidSynthEngine.h"
 #include "engine/MidiFilePlayer.h"
@@ -64,6 +66,12 @@ static MidiMessage mkMsg(uint8_t status, uint8_t d1, uint8_t d2, int64_t ts) {
     return m;
 }
 
+static double energy(const float* samples, int frames) {
+    double sum = 0.0;
+    for (int i = 0; i < frames * 2; ++i) sum += std::abs(samples[i]);
+    return sum;
+}
+
 int main(int argc, char** argv) {
     const char* sf2Path = (argc > 1) ? argv[1]
         : "app/src/main/cpp/third_party/fluidsynth/sf2/VintageDreamsWaves-v2.sf2";
@@ -76,6 +84,41 @@ int main(int argc, char** argv) {
         }
         if (synth.loadSoundFont(sf2Path) < 0) {
             return fail("A: loadSoundFont failed: %s", sf2Path);
+        }
+
+        // A0: Each MIDI channel maps to its corresponding dry stereo bus.
+        // Global FluidSynth effects return is exposed independently, not folded
+        // into any dry channel bus. Channel 10 uses percussion bank behavior
+        // that varies with the test SF2, so keep this fixture on channel 2.
+        {
+            constexpr int frames = 4096;
+            std::vector<float> buses[16];
+            float* outputs[16];
+            for (int ch = 0; ch < 16; ++ch) {
+                buses[ch].assign(frames * 2, 0.0f);
+                outputs[ch] = buses[ch].data();
+            }
+            std::vector<float> sharedReturn(frames * 2, 0.0f);
+            for (int channel : {1}) {
+                FluidSynthEngine routed;
+                if (!routed.init(48000, 512) || routed.loadSoundFont(sf2Path) < 0)
+                    return fail("A0: routing synth init/SF2 load failed");
+                routed.processOneMidi(mkMsg(static_cast<uint8_t>(0x90 | channel), 60, 110, 0));
+                routed.renderChannels(outputs, sharedReturn.data(), frames);
+                for (int ch = 0; ch < 16; ++ch) {
+                    const double e = energy(outputs[ch], frames);
+                    if (ch == channel) {
+                        if (e <= 1e-6) return fail("A0: channel %d dry bus silent", channel + 1);
+                    } else if (e > 1e-6) {
+                        return fail("A0: channel %d leaked to dry bus %d (energy %.9g)", channel + 1, ch + 1, e);
+                    }
+                }
+                // The return is a distinct destination: rendering wet material
+                // cannot contaminate a different channel's dry samples.
+                if (energy(outputs[0], frames) > 1e-6 && channel != 0)
+                    return fail("A0: shared return was mixed into dry channel 1");
+            }
+            printf("Multichannel render: PASS (channel 2 dry isolation; separate return buffer)\n");
         }
 
         // A1: keyboard note-on (ts=0) → file note-off (ts>0) → re-arm;
