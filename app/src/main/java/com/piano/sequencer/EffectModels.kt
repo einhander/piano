@@ -53,6 +53,23 @@ internal fun effectParameterFromNativeInfo(
         id.toString(), displayName.ifEmpty { "Param $id" }, EffectParameterValue(rawValue),
         info[1], info[2], info[3], type, info[4] != 0f
     )
+    // Presentation follows native stable IDs and pinned compressor/limiter meta
+    // unit declarations. Bounds, defaults and slider scaling remain native-owned.
+    if (effectStableId == "lsp.compressor") return when (id) {
+        1, 2, 11, 15, 16, 17, 19 -> parameter.copy(unit = "dB", scale = "linear-amplitude")
+        12, 13, 111 -> parameter.withDisplayUnit("ms")
+        14 -> parameter.copy(unit = "ratio")
+        18 -> parameter.withDisplayUnit("%")
+        10 -> parameter.copy(enumValues = COMP_MODES)
+        110 -> parameter.copy(enumValues = COMP_SIDECHAIN_MODES)
+        else -> parameter
+    }
+    if (effectStableId == "lsp.limiter") return when (id) {
+        1, 2, 20 -> parameter.copy(unit = "dB", scale = "linear-amplitude")
+        21, 22, 23 -> parameter.withDisplayUnit("ms")
+        24 -> parameter.withDisplayUnit("dB") // Already decibels, not amplitude.
+        else -> parameter
+    }
     if (effectStableId != "lsp.parametric_eq") return parameter
     // Stable IDs: effects/lsp/LspEffectIds.h. Names: pinned LSP 1.2.34
     // modules/lsp-plugins-para-equalizer/src/main/meta/para_equalizer.cpp.
@@ -74,6 +91,22 @@ internal fun effectParameterFromNativeInfo(
     }
 }
 
+/** Remove only a matching trailing unit annotation; retain the control's identity. */
+private fun EffectParameter.withDisplayUnit(unit: String): EffectParameter = copy(
+    displayName = displayName.removeSuffix(" ($unit)"), unit = unit
+)
+
+private fun formatMilliseconds(value: Float, locale: Locale): String {
+    // Three fractional digits keep the native sidechain default readable, while
+    // smaller nonzero values retain three significant digits instead of becoming zero.
+    val digits = if (value.isFinite() && abs(value) > 0f && abs(value) < 0.001f) {
+        (2 - kotlin.math.floor(log10(abs(value).toDouble())).toInt()).coerceAtMost(12)
+    } else 3
+    val number = String.format(locale, "%.${digits}f", value)
+    val separator = java.text.DecimalFormatSymbols.getInstance(locale).decimalSeparator
+    return if (separator in number) number.trimEnd('0').trimEnd(separator) else number
+}
+
 private val EQ_FILTER_TYPES = listOf(
     "Off", "Bell", "Hi-pass", "Hi-shelf", "Lo-pass", "Lo-shelf", "Notch",
     "Resonance", "Allpass", "Bandpass", "Ladder-pass", "Ladder-rej"
@@ -82,6 +115,12 @@ private val EQ_FILTER_TYPES = listOf(
 private val EQ_FILTER_MODES = listOf(
     "RLC (BT)", "RLC (MT)", "BWC (BT)", "BWC (MT)", "LRX (BT)", "LRX (MT)", "APO (DR)"
 ).mapIndexed { index, name -> index.toFloat() to name }
+
+// Exact comp_modes / comp_sc_modes names from pinned compressor.cpp.
+private val COMP_MODES = listOf("Down", "Up", "Boot")
+    .mapIndexed { index, name -> index.toFloat() to name }
+private val COMP_SIDECHAIN_MODES = listOf("Peak", "RMS", "LPF", "SMA")
+    .mapIndexed { index, name -> index.toFloat() to name }
 
 /** Presentation only: never feed converted units back into DSP or preferences. */
 internal fun formatEffectParameterValue(
@@ -107,6 +146,10 @@ internal fun formatEffectParameterValue(
         }
     }
     p.unit == "Hz" -> String.format(locale, "%.1f Hz", value)
+    p.unit == "ms" -> "${formatMilliseconds(value, locale)} ms"
+    p.unit == "%" -> String.format(locale, "%.1f %%", value)
+    p.unit == "ratio" -> String.format(locale, "%.1f:1", value)
+    p.unit == "dB" -> if (abs(value) < 0.05f) "0.0 dB" else String.format(locale, "%+.1f dB", value)
     p.type == EffectParameterType.INTEGER -> value.toInt().toString()
     else -> String.format(locale, "%.3f", value)
 }

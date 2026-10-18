@@ -65,7 +65,7 @@ class EqParameterPresentationTest {
     }
 
     @Test fun nonEqAndMissingContextStayUnchanged() {
-        for (effect in listOf(null, "lsp.compressor", "lsp.limiter")) {
+        for (effect in listOf(null, "unknown.effect")) {
             for (id in listOf(1, 2, 30, 31, 33, 34, 35, 133, 274)) {
                 val p = parameter(id, effect = effect)
                 assertEquals("Native name", p.displayName)
