@@ -191,6 +191,30 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeStopAudio(JNIEnv* env, jclass)
 }
 
 JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeStartAudioRecording(JNIEnv*, jclass, jint fd) {
+    NativeEngine* engine = NativeEngine::getInstance();
+    return engine && engine->startAudioRecording(fd);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeStopAudioRecording(JNIEnv*, jclass) {
+    NativeEngine* engine = NativeEngine::getInstance();
+    return engine && engine->stopAudioRecording();
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeIsAudioRecording(JNIEnv*, jclass) {
+    NativeEngine* engine = NativeEngine::getInstance();
+    return engine && engine->isAudioRecording();
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetAudioRecordingState(JNIEnv*, jclass) {
+    NativeEngine* engine = NativeEngine::getInstance();
+    return engine ? static_cast<jint>(engine->audioRecordingState()) : 0;
+}
+
+JNIEXPORT jboolean JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeIsAudioPlaying(JNIEnv* env, jclass) {
     OboeOutput* inst = OboeOutput::getInstance();
     if (inst == nullptr) {

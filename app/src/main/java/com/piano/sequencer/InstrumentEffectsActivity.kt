@@ -51,11 +51,11 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder) {
             if (isFinishing || isDestroyed) return
             service = (binder as PlaybackService.PlaybackBinder).getService()
-            ccController.attach(service!!)
+            ccController.attach(this@InstrumentEffectsActivity, service!!)
             refresh()
         }
         override fun onServiceDisconnected(name: ComponentName?) {
-            service?.let(ccController::detach)
+            service?.let { ccController.detach(this@InstrumentEffectsActivity, it) }
             service = null
             container.removeAllViews()
             status.text = getString(R.string.instrument_effects_disconnected)
@@ -90,7 +90,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         // explicitly rather than leave an invisible capture after recreation.
         if (ownsLearn) ccController.cancelLearn()
         learnDialog?.dismiss()
-        service?.let(ccController::detach)
+        service?.let { ccController.detach(this@InstrumentEffectsActivity, it) }
         service = null
         if (bound) unbindService(connection)
         worker.shutdown() // Accepted writes finish and persist, even when navigating back.

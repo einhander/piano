@@ -47,6 +47,13 @@ NativeEngine::NativeEngine()
 }
 
 NativeEngine::~NativeEngine() {
+    // NativeEngine owns callback-visible recorder storage. Stop/close the
+    // process singleton stream before that storage can be destroyed.
+    if (OboeOutput* output = OboeOutput::getInstance()) {
+        (void)output->stop();
+        output->close();
+    }
+    (void)mAudioRecorder.stop();
     stopMidiThread();
     shutdown();
     if (sInstance.load(std::memory_order_acquire) == this) {
@@ -495,11 +502,13 @@ void NativeEngine::enqueueMidiMessage(uint8_t status, uint8_t data1, uint8_t dat
 // thread polls mLiveMidiQueue for recording only.
 
 void NativeEngine::onAudioFrame(float* output, int numFrames) {
+    Mp3AudioRecorder::CallbackToken recordingCallback(mAudioRecorder);
     AudioCallbackGuard callbackGuard(mSynth);
     if (!callbackGuard.enter()) {
         // Maintenance gate drops this callback: transport pauses and queued
         // MIDI/events remain untouched for the next admitted callback.
         std::memset(output, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
+        if (recordingCallback.accepted()) mAudioRecorder.capture(output, numFrames);
         return;
     }
     // M2: clamp to mMaxSynthFrames (max(kMaxSynthFrames, Oboe capacity), set in
@@ -689,6 +698,19 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
         std::memset(output + safeFrames * 2, 0,
                     (numFrames - safeFrames) * 2 * sizeof(float));
     }
+    // Final Oboe format: float, interleaved stereo, after master effects and
+    // MasterBus. Device sample rate is queried from the negotiated Oboe stream.
+    if (recordingCallback.accepted()) mAudioRecorder.capture(output, numFrames);
+}
+
+bool NativeEngine::startAudioRecording(int fd) {
+    OboeOutput* output = OboeOutput::getInstance();
+    if (!output || !output->isOpen() || output->getSampleRate() <= 0) return false;
+    return mAudioRecorder.start(fd, output->getSampleRate());
+}
+
+bool NativeEngine::stopAudioRecording() {
+    return mAudioRecorder.stop();
 }
 
 void NativeEngine::setBPM(double bpm) {

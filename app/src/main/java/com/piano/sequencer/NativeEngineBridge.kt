@@ -123,6 +123,12 @@ object NativeEngineBridge {
     external fun nativeGetUnderrunCount(): Int
     external fun nativeGetAudioStreamError(): Int
     external fun nativeOpenAudio(): Int
+    // Pass detached writable fd from SAF. Native owns/closes it only on true.
+    // Start/stop may block and must be invoked from a worker thread.
+    external fun nativeStartAudioRecording(fd: Int): Boolean
+    external fun nativeStopAudioRecording(): Boolean
+    external fun nativeIsAudioRecording(): Boolean
+    external fun nativeGetAudioRecordingState(): Int
 
     // NativeEngine
     external fun nativeInitEngine(sampleRate: Int, bufferSize: Int): Boolean

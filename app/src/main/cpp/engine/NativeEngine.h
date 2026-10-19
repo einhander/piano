@@ -25,6 +25,7 @@
 #include "synth/FluidSynthEngine.h"
 #include "effects/EffectChain.h"
 #include "effects/InstrumentEffectManager.h"
+#include "audio/Mp3AudioRecorder.h"
 
 class OboeOutput;
 
@@ -287,6 +288,10 @@ public:
     // Callback hook — called from OboeOutput audio callback
     // MUST be real-time safe: no allocations, no locks, no syscalls
     void onAudioFrame(float* output, int numFrames);
+    bool startAudioRecording(int fd);
+    bool stopAudioRecording();
+    bool isAudioRecording() const noexcept { return mAudioRecorder.isRecording(); }
+    int audioRecordingState() const noexcept { return static_cast<int>(mAudioRecorder.state()); }
 
     // MIDI queue — called from audio callback (real-time safe)
     void enqueueMidiMessage(uint8_t status, uint8_t data1, uint8_t data2, int64_t timestamp);
@@ -348,6 +353,9 @@ private:
     // Mixer + MasterBus (audio mixing pipeline)
     Mixer mMixer;
     MasterBus mMasterBus;
+    // Fixed ring storage is part of the process-lifetime NativeEngine. Never
+    // resize/reallocate it while Oboe callbacks can enter.
+    Mp3AudioRecorder mAudioRecorder;
     // Fixed LSP master effect chain (EQ → Compressor → Limiter). When the
     // bundle is not loaded or all effects are bypassed, process() is a no-op
     // passthrough — the engine behaves exactly as before LSP integration.

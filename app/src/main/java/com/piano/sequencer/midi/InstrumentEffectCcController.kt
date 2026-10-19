@@ -19,6 +19,7 @@ class InstrumentEffectCcController(context: Context) {
     private val pending = LinkedHashMap<ParamKey, Pending>()
     private val cache = HashMap<ParamKey, Cached>()
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "effect-cc-worker").apply { isDaemon = true } }
+    private val serviceAttachments = ServiceAttachmentRegistry<PlaybackService>()
     @Volatile private var service: PlaybackService? = null
     @Volatile private var cacheReady = false
     private data class ParamKey(val target: Int, val effect: String, val parameter: String)
@@ -29,8 +30,9 @@ class InstrumentEffectCcController(context: Context) {
     private var draining = false
 
     init { coordinator.restore(decode(prefs.getString(KEY, null))) }
-    fun attach(svc: PlaybackService) {
-        service = svc
+    fun attach(owner: Any, svc: PlaybackService) {
+        serviceAttachments.attach(owner, svc)
+        service = serviceAttachments.active()
         cacheReady = false
         executor.execute {
             refreshCache(svc)
@@ -39,7 +41,10 @@ class InstrumentEffectCcController(context: Context) {
             }
         }
     }
-    fun detach(svc: PlaybackService) { if (service === svc) service = null }
+    fun detach(owner: Any, svc: PlaybackService) {
+        serviceAttachments.detach(owner, svc)
+        service = serviceAttachments.active()
+    }
     /** Refresh descriptors after native effect bundles and persisted state are ready. */
     fun refreshCache() {
         val svc = service ?: return

@@ -12,6 +12,7 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.text.util.Linkify
 import android.view.Gravity
@@ -81,6 +82,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var midiStatusText: TextView
     private lateinit var midiDeviceButton: Button
     private lateinit var multiChannelButton: Button
+    private lateinit var recordButton: Button
+    private var audioRecordingActive = false
+    private var audioRecordingStarting = false
+    private var audioRecordingStopping = false
 
     private var selectedDeviceName: String? = null
 
@@ -223,6 +228,17 @@ class MainActivity : AppCompatActivity() {
         if (uri != null) saveProjectToUri(uri)
     }
 
+    private val audioRecordingLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("audio/mpeg")
+    ) { uri ->
+        if (uri == null) {
+            audioRecordingStarting = false
+            if (::recordButton.isInitialized) recordButton.isEnabled = true
+            return@registerForActivityResult
+        }
+        startAudioRecordingForUri(uri)
+    }
+
     // SAF document opener for .pseq project load. MIME is unreliable for
     // .pseq (same reason as the SF2 picker) — content is validated on load.
     private val loadProjectLauncher = registerForActivityResult(
@@ -240,7 +256,7 @@ class MainActivity : AppCompatActivity() {
             }
             playbackService = binder.getService()
             serviceBound = true
-            (application as PianoApp).instrumentEffectCcController.attach(playbackService!!)
+            (application as PianoApp).instrumentEffectCcController.attach(this@MainActivity, playbackService!!)
             if (exitPending) return
 
             // Bind trigger controller (singleton) — cheap ref storage, safe on main thread
@@ -332,6 +348,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 val playing = svc.isAudioPlaying() == true
                 val underruns = svc.getUnderrunCount()
+                // Query only after nativeInit/open/init; binding and Activity
+                // recreation must reflect backend state, never a stale UI flag.
+                val audioRecordingState = svc.audioRecordingState()
 
                 // Warm the MIDI file event cache for all assigned cells
                 MidiFileTriggerController.get(this@MainActivity).preloadAll()
@@ -340,6 +359,7 @@ class MainActivity : AppCompatActivity() {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     statusText.text = if (playing) "Piano Sequencer — running (underruns: $underruns)"
                                       else "Piano Sequencer — audio start failed"
+                    setAudioRecordingState(audioRecordingState)
                 }
             }, "EngineBoot").apply { isDaemon = true }.also { it.start() }
         }
@@ -435,6 +455,131 @@ class MainActivity : AppCompatActivity() {
             names.append(c + 1)
         }
         return "Multi: $names"
+    }
+
+    /**
+     * Recording integration seam, called on the main thread. Launch SAF CreateDocument
+     * here, then start recording on a worker only after a non-null URI is returned.
+     * Call setAudioRecordingActive(true) only after the backend confirms success;
+     * cancellation or failure must leave the button idle.
+     */
+    private fun onStartRecordingRequested() {
+        if (audioRecordingStarting || audioRecordingStopping || audioRecordingActive) return
+        audioRecordingStarting = true
+        recordButton.isEnabled = false
+        val stamp = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.US)
+            .format(LocalDateTime.now())
+        try {
+            audioRecordingLauncher.launch("Piano-$stamp.mp3")
+        } catch (t: Throwable) {
+            audioRecordingStarting = false
+            recordButton.isEnabled = true
+            uiToast("Could not open MP3 save picker: ${t.message}")
+        }
+    }
+
+    /** Stop/finalize on a worker; return to idle only after backend confirmation. */
+    private fun onStopRecordingRequested() {
+        if (audioRecordingStopping || audioRecordingStarting) return
+        audioRecordingStopping = true
+        recordButton.isEnabled = false
+        projectIoWorker.execute {
+            var stopped = false
+            var error: Throwable? = null
+            try {
+                val service = playbackService
+                    ?: throw IllegalStateException("Playback service is disconnected")
+                stopped = service.stopAudioRecording()
+                if (!stopped) error = IllegalStateException("Native recorder did not finalize successfully")
+            } catch (t: Throwable) {
+                error = t
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                audioRecordingStopping = false
+                recordButton.isEnabled = true
+                if (stopped) {
+                    setAudioRecordingActive(false)
+                } else {
+                    val state = runCatching { playbackService?.audioRecordingState() ?: 3 }.getOrDefault(3)
+                    setAudioRecordingState(state)
+                    uiToast(if (state == 3) "Recording incomplete; output may be unusable. ${error?.message ?: "Stop failed"}"
+                        else "Recording stop pending: ${error?.message ?: "unknown error"}")
+                }
+            }
+        }
+    }
+
+    private fun startAudioRecordingForUri(uri: Uri) {
+        projectIoWorker.execute {
+            var parcelFd: ParcelFileDescriptor? = null
+            var detachedFd = -1
+            var transferred = false
+            var error: Throwable? = null
+            try {
+                val service = playbackService
+                    ?: throw IllegalStateException("Playback service is disconnected")
+                parcelFd = contentResolver.openFileDescriptor(uri, "w")
+                    ?: throw IOException("Provider did not open destination")
+                detachedFd = parcelFd.detachFd()
+                parcelFd.close()
+                parcelFd = null
+                transferred = service.startAudioRecording(detachedFd)
+                if (!transferred) throw IllegalStateException("Native recorder rejected destination")
+                detachedFd = -1 // native closes fd after successful finalization
+            } catch (t: Throwable) {
+                error = t
+            } finally {
+                try { parcelFd?.close() } catch (_: Throwable) { }
+                if (!transferred && detachedFd >= 0) {
+                    try { ParcelFileDescriptor.adoptFd(detachedFd).close() } catch (_: Throwable) { }
+                }
+            }
+
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                audioRecordingStarting = false
+                recordButton.isEnabled = true
+                if (transferred) {
+                    setAudioRecordingActive(true)
+                } else {
+                    setAudioRecordingActive(false)
+                    uiToast("Could not start recording: ${error?.message ?: "unknown error"}")
+                }
+            }
+        }
+    }
+
+    /** Render confirmed backend state on the main thread, including after rebinding. */
+    private fun setAudioRecordingActive(active: Boolean) {
+        audioRecordingActive = active
+        recordButton.text = if (active) "Stop recording" else "Record"
+        recordButton.contentDescription = if (active) {
+            "Recording audio. Stop recording"
+        } else {
+            "Record audio to a file"
+        }
+        recordButton.isSelected = active
+    }
+
+    private fun setAudioRecordingState(state: Int) {
+        when (state) {
+            1 -> setAudioRecordingActive(true)
+            2 -> {
+                // stop() timed out while waiting for callback quiescence; allow
+                // another worker-thread stop attempt instead of stranding session.
+                audioRecordingActive = true
+                recordButton.text = "Retry finalization"
+                recordButton.contentDescription = "Recording finalization pending. Retry stop"
+                recordButton.isSelected = false
+                recordButton.isEnabled = true
+            }
+            else -> {
+                setAudioRecordingActive(false)
+                recordButton.isEnabled = true
+                if (state == 3) uiToast("Recording incomplete; output may be unusable")
+            }
+        }
     }
 
     private fun connectToDevice(deviceInfo: MidiDeviceInfo, persist: Boolean = true) {
@@ -627,6 +772,22 @@ class MainActivity : AppCompatActivity() {
             }
         }
         layout.addView(multiChannelButton)
+
+        recordButton = Button(this).apply {
+            isAllCaps = false
+            minHeight = (48 * resources.displayMetrics.density).toInt()
+            setOnClickListener {
+                if (exitPending) return@setOnClickListener
+                if (audioRecordingActive) onStopRecordingRequested()
+                else onStartRecordingRequested()
+            }
+        }
+        layout.addView(recordButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            topMargin = (4 * resources.displayMetrics.density).toInt()
+        })
+        setAudioRecordingActive(false)
 
         // Setup MIDI receiver callback
         midiInputReceiver = MidiInputReceiver()
@@ -1572,7 +1733,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        playbackService?.let { (application as PianoApp).instrumentEffectCcController.detach(it) }
+        playbackService?.let { (application as PianoApp).instrumentEffectCcController.detach(this@MainActivity, it) }
         midiWorker.shutdown()
         projectIoWorker.shutdown()
         super.onDestroy()

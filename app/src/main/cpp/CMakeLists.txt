@@ -26,6 +26,10 @@ set(enable-ipv6 OFF CACHE BOOL "")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/fluidsynth ${CMAKE_CURRENT_BINARY_DIR}/fluidsynth)
 
+# LAME 4.0 encoder library only; sources and notices are vendored from the
+# checksum-pinned upstream release. No command-line frontend or decoder.
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/lame)
+
 # FluidSynth finds OpenMP::OpenMP_C internally; expose matching C++ runtime
 # target to the app for worker-thread OpenMP controls (same NDK runtime).
 find_package(OpenMP REQUIRED COMPONENTS CXX)
@@ -37,6 +41,7 @@ add_library(native-lib SHARED
     audio/RingBuffer.cpp
     audio/AudioClipPlayer.cpp
     audio/AudioDecoderBridge.cpp
+    audio/Mp3AudioRecorder.cpp
     synth/FluidSynthEngine.cpp
     realtime/MidiQueue.cpp
     realtime/SynthCmdQueue.cpp
@@ -81,6 +86,7 @@ target_include_directories(native-lib PRIVATE
 # Link libraries
 target_link_libraries(native-lib
     oboe
+    mp3lame
     libfluidsynth
     OpenMP::OpenMP_CXX
     log

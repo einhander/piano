@@ -53,7 +53,7 @@
     <string name="instrument_search_hint">Search…</string>
     <string name="instrument_bank_suffix">%1$s (bank %2$d)</string>
     <string name="instrument_channel">Ch %d</string>
-    <string name="instrument_channel_drums">Ch 10 (Drums)</string>
+    <string name="instrument_channel_drums">Ch 10</string>
     <string name="instrument_program_fallback">Default</string>
     <string name="instrument_unknown">—</string>
     <string name="instrument_apply_failed">Could not apply instrument</string>

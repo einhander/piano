@@ -24,6 +24,7 @@ import com.piano.sequencer.NativeEngineBridge
 class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     @Volatile private var recordingCache = false
     @Volatile private var recordingCacheReady = false
+    @Volatile private var audioRecordingCache = false
 
     private val binder = PlaybackBinder()
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -92,6 +93,10 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         fun startRecording() = this@PlaybackService.startRecording()
         fun stopRecording() = this@PlaybackService.stopRecording()
         fun isRecording(): Boolean = this@PlaybackService.isRecording()
+        fun startAudioRecording(fd: Int): Boolean = this@PlaybackService.startAudioRecording(fd)
+        fun stopAudioRecording(): Boolean = this@PlaybackService.stopAudioRecording()
+        fun isAudioRecording(): Boolean = this@PlaybackService.isAudioRecording()
+        fun audioRecordingState(): Int = this@PlaybackService.audioRecordingState()
         fun getBPM(): Double = this@PlaybackService.getBPM()
         fun getPpq(): Int = this@PlaybackService.getPpq()
 
@@ -138,6 +143,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         audioWorker.execute {
             recordingCache = NativeEngineBridge.nativeIsRecording()
             recordingCacheReady = true
+            audioRecordingCache = NativeEngineBridge.nativeIsAudioRecording()
         }
         requestAudioFocus()
         startForeground(NOTIFICATION_ID, buildNotification())
@@ -155,8 +161,17 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         intentionalStop = true
         startWhenFocusGained = false
         releaseAudioFocus()
+        // Keep direct JNI calls off the service/main thread. Closing output
+        // first quiesces Oboe callbacks so recorder stop can drain/finalize.
+        audioWorker.execute {
+            NativeEngineBridge.nativeStopAudio()
+            if (NativeEngineBridge.nativeIsAudioRecording()) {
+                val stopped = NativeEngineBridge.nativeStopAudioRecording()
+                if (!stopped) AppLogger.error("PlaybackService", "Audio recording finalization failed during service teardown")
+                audioRecordingCache = NativeEngineBridge.nativeIsAudioRecording()
+            }
+        }
         audioWorker.shutdown()
-        NativeEngineBridge.nativeStopAudio()
         super.onDestroy()
         (application as? com.piano.sequencer.PianoApp)?.playbackServiceDestroyed()
     }
@@ -282,6 +297,28 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     }
 
     fun isAudioPlaying(): Boolean = NativeEngineBridge.nativeIsAudioPlaying()
+
+    // Direct JNI passthroughs. Call only from a worker thread. Native assumes
+    // ownership of fd iff start returns true; on false the caller closes it.
+    fun startAudioRecording(fd: Int): Boolean {
+        val started = NativeEngineBridge.nativeStartAudioRecording(fd)
+        if (started) audioRecordingCache = true
+        return started
+    }
+
+    fun stopAudioRecording(): Boolean {
+        val stopped = NativeEngineBridge.nativeStopAudioRecording()
+        if (stopped) audioRecordingCache = false
+        return stopped
+    }
+
+    fun isAudioRecording(): Boolean {
+        val recording = NativeEngineBridge.nativeIsAudioRecording()
+        audioRecordingCache = recording
+        return recording
+    }
+
+    fun audioRecordingState(): Int = NativeEngineBridge.nativeGetAudioRecordingState()
 
     fun isEngineInitialized(): Boolean = NativeEngineBridge.nativeIsEngineInitialized()
 
