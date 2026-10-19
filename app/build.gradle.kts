@@ -122,6 +122,7 @@ android {
                 arguments += "-DFLUIDSYNTH_ENABLE_DASHBOARD=OFF"
                 arguments += "-DFLUIDSYNTH_ENABLE_READLINE=OFF"
                 arguments += "-DFLUIDSYNTH_ENABLE_SQLITE3=OFF"
+                targets += "native-lib"
             }
         }
 

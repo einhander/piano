@@ -153,7 +153,7 @@ jobs:
         # Bound otherwise-unlimited Gradle/NDK stalls and retain task-level
         # progress in the Actions log while investigating slow native work.
         timeout-minutes: 30
-        run: ./gradlew :app:assembleRelease -x lintVitalRelease --no-daemon --warning-mode none --console=plain --info
+        run: ./gradlew :app:assembleRelease -x lintVitalRelease --no-daemon --warning-mode none --console=plain
 
       - name: Verify release signature
         # Report whether the release APK ended up signed.
