@@ -157,6 +157,8 @@ object NativeEngineBridge {
 
     // Diagnostics (Part A). Worker thread only — never the audio callback.
     external fun nativeGetActiveVoices(): Int
+    external fun nativeGetActiveChannelMask(): Int
+    external fun nativeGetChannelActivityMask(): Int
     external fun nativeGetProcessedFrames(): Long
     external fun nativeGetCallbackCount(): Long
     external fun nativeGetMidiQueueDrops(): Int

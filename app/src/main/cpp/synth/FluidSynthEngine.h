@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <cstring>
 
 // One instrument preset from a loaded SoundFont
 struct InstrumentInfo {
@@ -112,6 +113,12 @@ public:
     // tracking + re-arm). Audio thread only (inside the synth access region).
     // No locks — the held-note bitmap is audio-thread-only state.
     void processOneMidi(const MidiMessage& m);
+    uint16_t getActiveChannelMask() const { return mActiveChannelMask.load(std::memory_order_relaxed); }
+    uint16_t getChannelActivityMask() {
+        const uint16_t recent = mRecentNoteOnMask.exchange(0, std::memory_order_acq_rel);
+        return static_cast<uint16_t>(mActiveChannelMask.load(std::memory_order_relaxed) | recent);
+    }
+    void clearActiveNotesForTest() { std::memset(mActiveNotes, 0, sizeof(mActiveNotes)); mActiveChannelMask.store(0, std::memory_order_relaxed); }
 
     // Batch overload — processes a pre-drained vector. Kept for the host
     // regression test (single-threaded) and any non-audio caller.
@@ -216,6 +223,7 @@ private:
     std::atomic<uint32_t> mAudioAccess{0};
     // Apply a single control command to one synth slot.
     void applyCommandToSynth(fluid_synth_t* synth, const SynthCmd& cmd);
+    void refreshActiveChannelBit(int channel);
 
     // Prepare the inactive synth slot so it contains exactly the given list of
     // SF2 paths (worker thread): unload all SF2s from it, then load each path
@@ -322,6 +330,10 @@ private:
     // fluid_synth_noteon (not queued → invisible to the MIDI recorder).
     uint8_t mHeldNotes[16][128]{};
     uint8_t mHeldVel[16][128]{};
+    uint8_t mActiveNotes[16][128]{};
+    std::atomic<uint16_t> mActiveChannelMask{0};
+    std::atomic<uint16_t> mRecentNoteOnMask{0};
+    std::atomic<bool> mResetActiveNotes{false};
 
     // B3 test seam: re-arm note-on counter (audio-thread-only, plain int).
     int mRearmCount = 0;

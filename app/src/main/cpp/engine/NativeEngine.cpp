@@ -295,6 +295,8 @@ int NativeEngine::getInterps() const {
 int NativeEngine::getActiveVoices() const {
     return mSynth ? mSynth->getActiveVoices() : 0;
 }
+uint16_t NativeEngine::getActiveChannelMask() const { return mSynth ? mSynth->getActiveChannelMask() : 0; }
+uint16_t NativeEngine::getChannelActivityMask() { return mSynth ? mSynth->getChannelActivityMask() : 0; }
 
 int NativeEngine::getSoundFontCount() const {
     return mSynth ? mSynth->getSoundFontCount() : 0;

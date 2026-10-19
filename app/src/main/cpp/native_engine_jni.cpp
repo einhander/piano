@@ -416,6 +416,18 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetActiveVoices(JNIEnv* env, j
     return 0;
 }
 
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetActiveChannelMask(JNIEnv*, jclass) {
+    auto* inst = NativeEngine::getInstance();
+    return inst ? static_cast<jint>(inst->getActiveChannelMask()) : 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetChannelActivityMask(JNIEnv*, jclass) {
+    auto* inst = NativeEngine::getInstance();
+    return inst ? static_cast<jint>(inst->getChannelActivityMask()) : 0;
+}
+
 JNIEXPORT jlong JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeGetProcessedFrames(JNIEnv* env, jclass) {
     NativeEngine* inst = NativeEngine::getInstance();

@@ -313,6 +313,9 @@ bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
 
     // Update the sample rate.
     mSampleRate = newRate;
+    // New FluidSynth instance has no voices. Defer clearing audio-owned
+    // tracking until next callback rather than mutating it from this worker.
+    mResetActiveNotes.store(true, std::memory_order_release);
     return true;
 }
 
@@ -437,6 +440,11 @@ void FluidSynthEngine::endSynthAccess() {
 }
 
 void FluidSynthEngine::processCommands() {
+    if (mResetActiveNotes.exchange(false, std::memory_order_acq_rel)) {
+        std::memset(mActiveNotes, 0, sizeof(mActiveNotes));
+        mActiveChannelMask.store(0, std::memory_order_relaxed);
+        mRecentNoteOnMask.store(0, std::memory_order_relaxed);
+    }
     SynthCmd cmd;
     while (mCmdQueue.pop(cmd)) {
         // Apply to each synth slot, but SKIP slots the worker is currently
@@ -453,16 +461,40 @@ void FluidSynthEngine::processCommands() {
     }
 }
 
+void FluidSynthEngine::refreshActiveChannelBit(int channel) {
+    if (channel < 0 || channel >= 16) return;
+    bool any = false;
+    for (int note = 0; note < 128; ++note) any |= mActiveNotes[channel][note] != 0;
+    const auto bit = static_cast<uint16_t>(1u << channel);
+    if (any) mActiveChannelMask.fetch_or(bit, std::memory_order_relaxed);
+    else mActiveChannelMask.fetch_and(static_cast<uint16_t>(~bit), std::memory_order_relaxed);
+}
+
 void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd& cmd) {
     switch (cmd.type) {
         case SynthCmdType::NOTE_ON:
             fluid_synth_noteon(synth, cmd.a, cmd.b, static_cast<int>(cmd.f));
+            if (cmd.a >= 0 && cmd.a < 16 && cmd.b >= 0 && cmd.b < 128 && cmd.f > 0) {
+                mActiveNotes[cmd.a][cmd.b] = 1;
+                mActiveChannelMask.fetch_or(static_cast<uint16_t>(1u << cmd.a), std::memory_order_relaxed);
+                mRecentNoteOnMask.fetch_or(static_cast<uint16_t>(1u << cmd.a), std::memory_order_relaxed);
+            }
             break;
         case SynthCmdType::NOTE_OFF:
             fluid_synth_noteoff(synth, cmd.a, cmd.b);
+            if (cmd.a >= 0 && cmd.a < 16 && cmd.b >= 0 && cmd.b < 128) {
+                mActiveNotes[cmd.a][cmd.b] = 0;
+                refreshActiveChannelBit(cmd.a);
+            }
             break;
         case SynthCmdType::CC:
             fluid_synth_cc(synth, cmd.a, cmd.b, static_cast<int>(cmd.f));
+            if (cmd.a >= 0 && cmd.a < 16 && (cmd.b == 120 || cmd.b == 123))
+                mRecentNoteOnMask.fetch_and(static_cast<uint16_t>(~(1u << cmd.a)), std::memory_order_relaxed);
+            if (cmd.a >= 0 && cmd.a < 16 && (cmd.b == 120 || cmd.b == 123)) {
+                std::memset(mActiveNotes[cmd.a], 0, sizeof(mActiveNotes[cmd.a]));
+                refreshActiveChannelBit(cmd.a);
+            }
             break;
         case SynthCmdType::PROGRAM_CHANGE:
             fluid_synth_program_change(synth, cmd.a, cmd.b);
@@ -489,6 +521,9 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             // state (no lock). Idempotent if applied to both slots.
             std::memset(mHeldNotes, 0, sizeof(mHeldNotes));
             std::memset(mHeldVel, 0, sizeof(mHeldVel));
+            std::memset(mActiveNotes, 0, sizeof(mActiveNotes));
+            mActiveChannelMask.store(0, std::memory_order_relaxed);
+            mRecentNoteOnMask.store(0, std::memory_order_relaxed);
             break;
         case SynthCmdType::SET_POLYPHONY:
             fluid_synth_set_polyphony(synth, cmd.a);
@@ -540,11 +575,15 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
         case 0x90: // Note On / Note Off
             if (m.data2 > 0) {
                 fluid_synth_noteon(synth, channel, m.data1, m.data2);
+                mActiveNotes[channel][m.data1] = 1;
+                mActiveChannelMask.fetch_or(static_cast<uint16_t>(1u << channel), std::memory_order_relaxed);
+                mRecentNoteOnMask.fetch_or(static_cast<uint16_t>(1u << channel), std::memory_order_relaxed);
                 if (isLive) {
                     mHeldNotes[channel][m.data1] = 1;
                     mHeldVel[channel][m.data1] = m.data2;
                 }
             } else {
+                mActiveNotes[channel][m.data1] = 0;
                 // Clear the bitmap BEFORE the re-arm check: a keyboard's own
                 // note-off must not re-arm itself.
                 if (isLive) {
@@ -555,6 +594,7 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
             }
             break;
         case 0x80: // Note Off
+            mActiveNotes[channel][m.data1] = 0;
             if (isLive) {
                 mHeldNotes[channel][m.data1] = 0;
             }
@@ -566,6 +606,11 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
             break;
         case 0xB0: // Control Change
             fluid_synth_cc(synth, channel, m.data1, m.data2);
+            if (m.data1 == 120 || m.data1 == 123) {
+                std::memset(mActiveNotes[channel], 0, sizeof(mActiveNotes[channel]));
+                refreshActiveChannelBit(channel);
+                mRecentNoteOnMask.fetch_and(static_cast<uint16_t>(~(1u << channel)), std::memory_order_relaxed);
+            }
             break;
         case 0xC0: // Program Change
             fluid_synth_program_change(synth, channel, m.data1);
@@ -599,8 +644,13 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
     // recorder, which consumes the queue, never sees the re-arm artifact.
     if (noteOff && mHeldNotes[channel][m.data1]) {
         fluid_synth_noteon(synth, channel, m.data1, mHeldVel[channel][m.data1]);
+        mActiveNotes[channel][m.data1] = 1;
+        mActiveChannelMask.fetch_or(static_cast<uint16_t>(1u << channel), std::memory_order_relaxed);
         mRearmCount++;
         mLastRearmVel = mHeldVel[channel][m.data1];
+    }
+    if (noteOff) {
+        refreshActiveChannelBit(channel);
     }
 }
 

@@ -126,18 +126,21 @@ int main(int argc, char** argv) {
         {
             std::vector<MidiMessage> b = { mkMsg(0x90, 60, 100, 0) };
             synth.processLiveMidi(b);
+            if ((synth.getActiveChannelMask() & 1) == 0) return fail("A1: live note-on missing channel bit");
             if (synth.getRearmCount() != 0) {
                 return fail("A1: re-arm on plain keyboard note-on (got %d)", synth.getRearmCount());
             }
 
             b = { mkMsg(0x80, 60, 0, 5) };  // file note-off, same (ch, note)
             synth.processLiveMidi(b);
+            if ((synth.getActiveChannelMask() & 1) == 0) return fail("A1: re-armed note lost channel bit");
             if (synth.getRearmCount() != 1) {
                 return fail("A1: expected re-arm after file note-off (got %d)", synth.getRearmCount());
             }
 
             b = { mkMsg(0x80, 60, 0, 0) };  // keyboard's own note-off
             synth.processLiveMidi(b);
+            if ((synth.getActiveChannelMask() & 1) != 0) return fail("A1: final note-off left channel bit set");
             if (synth.getRearmCount() != 1) {
                 return fail("A1: spurious re-arm on keyboard's own note-off (got %d)", synth.getRearmCount());
             }
@@ -208,6 +211,51 @@ int main(int argc, char** argv) {
         }
 
         printf("ReArm: PASS (A1-A5)\n");
+
+        // A6: file-origin notes, velocity-zero note-off, overlapping notes, panic.
+        {
+            (void)synth.getChannelActivityMask(); // discard prior event history
+            std::vector<MidiMessage> b = { mkMsg(0x90, 70, 100, 5) };
+            synth.processLiveMidi(b);
+            if ((synth.getActiveChannelMask() & 1) == 0) return fail("A6: file note-on missing channel bit");
+            b = { mkMsg(0x90, 70, 0, 6) };
+            synth.processLiveMidi(b);
+            if ((synth.getActiveChannelMask() & 1) != 0) return fail("A6: velocity-zero note-on did not clear bit");
+            if ((synth.getChannelActivityMask() & 1) == 0) return fail("A6: short file note missing activity latch");
+            if ((synth.getChannelActivityMask() & 1) != 0) return fail("A6: activity latch did not consume once");
+
+            b = { mkMsg(0x90, 71, 90, 7), mkMsg(0x90, 72, 90, 8) };
+            synth.processLiveMidi(b);
+            if ((synth.getChannelActivityMask() & 1) == 0) return fail("A6: sustained note missing from activity query");
+            b = { mkMsg(0x80, 71, 0, 9) };
+            synth.processLiveMidi(b);
+            if ((synth.getActiveChannelMask() & 1) == 0) return fail("A6: releasing one of multiple notes cleared bit");
+            b = { mkMsg(0x80, 72, 0, 10) };
+            synth.processLiveMidi(b);
+            if ((synth.getActiveChannelMask() & 1) != 0) return fail("A6: all note-offs left bit set");
+
+            b = { mkMsg(0x90, 73, 90, 11) };
+            synth.processLiveMidi(b);
+            synth.panic();
+            synth.beginSynthAccess();
+            synth.processCommands();
+            synth.endSynthAccess();
+            if (synth.getActiveChannelMask() != 0) return fail("A6: panic did not clear channel mask");
+
+            (void)synth.getChannelActivityMask();
+            synth.noteOn(3, 75, 100);
+            synth.beginSynthAccess();
+            synth.processCommands();
+            synth.endSynthAccess();
+            if ((synth.getActiveChannelMask() & (1u << 3)) == 0)
+                return fail("A6: direct note command did not set channel bit");
+            synth.noteOff(3, 75);
+            synth.beginSynthAccess();
+            synth.processCommands();
+            synth.endSynthAccess();
+            if ((synth.getActiveChannelMask() & (1u << 3)) != 0)
+                return fail("A6: direct note-off left channel bit set");
+        }
     }
 
     // ── Part B: MidiFilePlayer timestamp convention (file events must be > 0) ──

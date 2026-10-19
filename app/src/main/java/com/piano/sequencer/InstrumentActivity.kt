@@ -33,6 +33,9 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /**
  * Instrument assignment screen. Lists all 16 MIDI channels; tapping a channel
@@ -47,16 +50,18 @@ class InstrumentActivity : AppCompatActivity() {
     // Instrument name label for each MIDI channel (0-15)
     private val rowNameLabels = arrayOfNulls<TextView>(16)
     private val noteIndicators = arrayOfNulls<View>(16)
-    private var observingNotes = false
+    @Volatile private var observingNotes = false
+    @Volatile private var nativeChannelMask = 0
     private val noteListener: () -> Unit = {
         runOnUiThread { if (observingNotes) renderHeldNotes() }
     }
 
     private fun renderHeldNotes() {
-        val held = com.piano.sequencer.midi.HeldMidiNotes.process.snapshot()
-        held.forEachIndexed { channel, active ->
+        val physical = com.piano.sequencer.midi.HeldMidiNotes.process.snapshot()
+        val mask = nativeChannelMask
+        physical.forEachIndexed { channel, active ->
             noteIndicators[channel]?.apply {
-                visibility = if (active) View.VISIBLE else View.INVISIBLE
+                visibility = if (active || (mask and (1 shl channel) != 0)) View.VISIBLE else View.INVISIBLE
             }
         }
     }
@@ -65,19 +70,33 @@ class InstrumentActivity : AppCompatActivity() {
         super.onStart()
         observingNotes = true
         com.piano.sequencer.midi.HeldMidiNotes.process.addListener(noteListener)
+        maskPoll?.cancel(false)
+        pollChannelMask()
         renderHeldNotes()
     }
 
     override fun onStop() {
         observingNotes = false
+        maskPoll?.cancel(false)
+        maskPoll = null
+        nativeChannelMask = 0
         com.piano.sequencer.midi.HeldMidiNotes.process.removeListener(noteListener)
         super.onStop()
+    }
+
+    private fun pollChannelMask() {
+        if (!observingNotes) return
+        executor.execute {
+            nativeChannelMask = service?.getChannelActivityMask() ?: 0
+            runOnUiThread { if (observingNotes) renderHeldNotes() }
+            if (observingNotes) maskPoll = executor.schedule({ pollChannelMask() }, 80, TimeUnit.MILLISECONDS)
+        }
     }
 
     // Deduplicated preset list of the loaded SoundFont (empty when no SF2)
     private var instruments: List<Instrument> = emptyList()
 
-    private var service: PlaybackService? = null
+    @Volatile private var service: PlaybackService? = null
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder) {
             // Can be delivered after onDestroy (cold start, user closed the
@@ -91,9 +110,10 @@ class InstrumentActivity : AppCompatActivity() {
         }
     }
 
-    private val executor = Executors.newSingleThreadExecutor { r ->
+    private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "InstrumentsMain").apply { isDaemon = true }
     }
+    @Volatile private var maskPoll: ScheduledFuture<*>? = null
 
     // One entry of the JSON array returned by NativeEngineBridge.nativeGetInstruments()
     private data class Instrument(val name: String, val bank: Int, val program: Int)

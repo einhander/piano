@@ -75,6 +75,8 @@ public:
     int getChorus() const;
     int getInterps() const;
     int getActiveVoices() const;
+    uint16_t getActiveChannelMask() const;
+    uint16_t getChannelActivityMask();
     int getSoundFontCount() const;
     std::string getSoundFontPath() const;
     std::vector<FluidSynthEngine::LoadedSf2> getLoadedSoundFonts() const;

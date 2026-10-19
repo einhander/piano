@@ -429,6 +429,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     // Diagnostics (Part A). Worker thread only — never the audio callback.
     fun getActiveVoices(): Int = NativeEngineBridge.nativeGetActiveVoices()
+    fun getChannelActivityMask(): Int = NativeEngineBridge.nativeGetChannelActivityMask()
     fun getProcessedFrames(): Long = NativeEngineBridge.nativeGetProcessedFrames()
     fun getCallbackCount(): Long = NativeEngineBridge.nativeGetCallbackCount()
     fun getMidiQueueDrops(): Int = NativeEngineBridge.nativeGetMidiQueueDrops()
