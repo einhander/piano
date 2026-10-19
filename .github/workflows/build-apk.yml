@@ -150,10 +150,20 @@ jobs:
         # targetSdk is a product decision, not a CI concern; disable the vital
         # lint gate here so the release APK is still produced (signed when the
         # keystore secret is present, unsigned otherwise).
-        # Bound otherwise-unlimited Gradle/NDK stalls and retain task-level
-        # progress in the Actions log while investigating slow native work.
-        timeout-minutes: 30
-        run: ./gradlew :app:assembleRelease -x lintVitalRelease --no-daemon --warning-mode none --console=plain
+        # Bound native stalls and capture the active compiler process.
+        timeout-minutes: 10
+        run: |
+          set +e
+          ./gradlew :app:assembleRelease -x lintVitalRelease --no-daemon --warning-mode none --console=plain &
+          gradle_pid=$!
+          while kill -0 "$gradle_pid" 2>/dev/null; do
+            sleep 30
+            kill -0 "$gradle_pid" 2>/dev/null || break
+            echo "Native build process snapshot ($(date -u +%FT%TZ)):"
+            ps -ww -C ninja -C clang++ -o pid,ppid,etime,pcpu,pmem,rss,args --sort=-pcpu
+          done
+          wait "$gradle_pid"
+          exit $?
 
       - name: Verify release signature
         # Report whether the release APK ended up signed.
