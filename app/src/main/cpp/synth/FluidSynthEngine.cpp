@@ -464,7 +464,12 @@ void FluidSynthEngine::processCommands() {
 void FluidSynthEngine::refreshActiveChannelBit(int channel) {
     if (channel < 0 || channel >= 16) return;
     bool any = false;
-    for (int note = 0; note < 128; ++note) any |= mActiveNotes[channel][note] != 0;
+    for (int note = 0; note < 128; ++note) {
+        if (mActiveNotes[channel][note] != 0) {
+            any = true;
+            break;
+        }
+    }
     const auto bit = static_cast<uint16_t>(1u << channel);
     if (any) mActiveChannelMask.fetch_or(bit, std::memory_order_relaxed);
     else mActiveChannelMask.fetch_and(static_cast<uint16_t>(~bit), std::memory_order_relaxed);
