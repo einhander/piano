@@ -5,107 +5,118 @@ import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.CheckBox
 import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.SeekBar
+import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
+import com.piano.sequencer.R
 
-/**
- * Multi-channel play mode dialog (live performance mode).
- *
- * A mode switch plus a 4×4 grid of channel checkboxes (1–16; bit i of the
- * mask = channel i). This is a LIVE app: there is no OK/apply button — every
- * change (switch or checkbox) calls [onChange] immediately with the new
- * (enabled, mask) pair; the host updates the live fields, persists both to
- * piano_prefs, and refreshes the toolbar button. The only button is Close.
- *
- * While the mode is off the channel grid is disabled (grayed) — the
- * selection only matters with the mode on. The mask is kept while the mode
- * is off, so re-enabling restores the previous selection.
- *
- * House style: all views created programmatically, no layout XML.
- */
+/** Live additive routing and independent, persisted channel-volume controls. */
 object MultiChannelDialog {
-
     fun show(
         context: Context,
         initialEnabled: Boolean,
         initialMask: Int,
+        initialVolumes: IntArray,
+        onVolumeChange: (channel: Int, value: Int) -> Unit,
         onChange: (enabled: Boolean, mask: Int) -> Unit
     ) {
         var enabled = initialEnabled
         var mask = initialMask and 0xFFFF
-
+        fun dp(value: Int) = (value * context.resources.displayMetrics.density).toInt()
         val content = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(context, 16), dp(context, 8), dp(context, 16), dp(context, 8))
+            setPadding(dp(16), 0, dp(16), 0)
         }
-
-        val checks = arrayOfNulls<CheckBox>(16)
-
         val toggle = SwitchCompat(context).apply {
-            text = "Play on selected channels simultaneously"
-            textSize = 14f
+            text = context.getString(R.string.multi_enable)
+            minHeight = dp(48)
             isChecked = enabled
-            setOnCheckedChangeListener { _, checked ->
-                enabled = checked
-                setGridEnabled(checks, checked)
-                onChange(enabled, mask)
-            }
         }
         content.addView(toggle)
-
-        val grid = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, 0, dp(context, 8))
+        val rows = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        val hint = TextView(context).apply {
+            text = context.getString(R.string.multi_routing_hint)
+            textSize = 14f
         }
-        for (row in 0..3) {
-            val rowLayout = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
+        rows.addView(hint)
+        rows.addView(TextView(context).apply {
+            text = context.getString(R.string.multi_volume_hint)
+            textSize = 12f
+            setPadding(0, dp(4), 0, dp(8))
+        })
+        val checks = ArrayList<CheckBox>(16)
+        for (channel in 0..15) {
+            if (channel > 0) rows.addView(android.view.View(context).apply {
+                setBackgroundColor(android.graphics.Color.rgb(224, 224, 224))
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
+            val group = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(4), 0, dp(4))
             }
-            for (col in 0..3) {
-                val ch = row * 4 + col
-                val check = CheckBox(context).apply {
-                    text = (ch + 1).toString()
-                    textSize = 14f
-                    gravity = Gravity.CENTER
-                    isChecked = (mask shr ch) and 1 == 1
-                    setOnCheckedChangeListener { _, _ ->
-                        mask = readMask(checks)
-                        onChange(enabled, mask)
-                    }
-                    layoutParams = LinearLayout.LayoutParams(
-                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
-                    )
+            val heading = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+            val check = CheckBox(context).apply {
+                text = context.getString(R.string.multi_channel, channel + 1)
+                contentDescription = context.getString(R.string.multi_add_channel, channel + 1)
+                minHeight = dp(48)
+                isChecked = mask and (1 shl channel) != 0
+                isEnabled = enabled
+                setOnCheckedChangeListener { _, checked ->
+                    mask = if (checked) mask or (1 shl channel) else mask and (1 shl channel).inv()
+                    onChange(enabled, mask)
                 }
-                checks[ch] = check
-                rowLayout.addView(check)
             }
-            grid.addView(rowLayout)
+            checks.add(check)
+            heading.addView(check, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val value = initialVolumes.getOrElse(channel) { 100 }.coerceIn(0, 127)
+            val valueLabel = TextView(context).apply {
+                text = context.getString(R.string.multi_volume_value, value)
+                textSize = 14f
+                importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }
+            heading.addView(valueLabel)
+            group.addView(heading)
+            group.addView(SeekBar(context).apply {
+                max = 127
+                progress = value
+                minimumHeight = dp(48)
+                contentDescription = context.getString(R.string.multi_channel_volume, channel + 1)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                        valueLabel.text = context.getString(R.string.multi_volume_value, progress)
+                        if (fromUser) onVolumeChange(channel, progress)
+                    }
+                    override fun onStartTrackingTouch(bar: SeekBar?) = Unit
+                    override fun onStopTrackingTouch(bar: SeekBar?) = Unit
+                })
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            rows.addView(group)
         }
-        content.addView(grid)
-        setGridEnabled(checks, enabled)
-
-        AlertDialog.Builder(context)
-            .setTitle("Multi-channel play")
+        val scroll = ScrollView(context).apply {
+            isFillViewport = false
+            addView(rows)
+        }
+        content.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        toggle.setOnCheckedChangeListener { _, checked ->
+            enabled = checked
+            checks.forEach { it.isEnabled = checked }
+            onChange(enabled, mask)
+        }
+        val dialog = AlertDialog.Builder(context)
+            .setTitle(R.string.multi_title)
             .setView(content)
-            .setPositiveButton("Close", null)
-            .show()
-    }
-
-    /** Mask from the checkbox states (the single source of truth). */
-    private fun readMask(checks: Array<CheckBox?>): Int {
-        var m = 0
-        for (c in 0..15) if (checks[c]!!.isChecked) m = m or (1 shl c)
-        return m
-    }
-
-    /** Enable/gray the channel grid: the selection only matters with the mode on. */
-    private fun setGridEnabled(checks: Array<CheckBox?>, on: Boolean) {
-        for (c in 0..15) {
-            checks[c]!!.isEnabled = on
-            checks[c]!!.alpha = if (on) 1f else 0.4f
+            .setPositiveButton(R.string.multi_close, null)
+            .create()
+        // Explanation scrolls with rows so landscape/large text still leaves usable list space.
+        // Title, enable switch and Close stay fixed.
+        dialog.setOnShowListener {
+            val frame = android.graphics.Rect()
+            dialog.window?.decorView?.getWindowVisibleDisplayFrame(frame)
+            val metrics = context.resources.displayMetrics
+            val available = frame.height().takeIf { it > 0 } ?: metrics.heightPixels
+            dialog.window?.setLayout(minOf(metrics.widthPixels, dp(560)), (available * 0.9f).toInt())
         }
+        dialog.show()
     }
-
-    private fun dp(context: Context, value: Int): Int =
-        (value * context.resources.displayMetrics.density).toInt()
 }

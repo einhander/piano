@@ -46,6 +46,7 @@ enum class SynthCmdType : uint8_t {
     SET_CHORUS,
     SET_INTERPS,
     SET_CHANNEL_PROGRAM,
+    SET_CHANNEL_VOLUME,
 };
 
 struct SynthCmd {

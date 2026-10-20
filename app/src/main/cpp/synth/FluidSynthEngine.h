@@ -167,6 +167,8 @@ public:
     // Set bank + program on a channel (enqueued).
     // Returns true if the command was enqueued (applied by the audio thread).
     bool setChannelProgram(int channel, int bank, int program);
+    bool setChannelVolume(int channel, int value);
+    int getChannelVolume(int channel) const;
 
     // Get the bank + program currently set on a channel (worker thread).
     // Returns the desired (enqueued) value, which also tracks live MIDI
@@ -304,6 +306,7 @@ private:
     std::atomic<int> mInterps{4};
     // Packed bank<<8|program per channel; -1 = no explicit program.
     std::atomic<int> mChannelPrograms[16];
+    std::atomic<int> mChannelVolumes[16];
 
     // Active voice count (audio thread refreshes after each render).
     std::atomic<int> mActiveVoices{0};

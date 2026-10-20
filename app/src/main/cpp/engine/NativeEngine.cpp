@@ -325,6 +325,12 @@ std::vector<InstrumentInfo> NativeEngine::getInstruments() const {
 bool NativeEngine::setChannelProgram(int channel, int bank, int program) {
     return mSynth ? mSynth->setChannelProgram(channel, bank, program) : false;
 }
+bool NativeEngine::setChannelVolume(int channel, int value) {
+    return mSynth && mSynth->setChannelVolume(channel, value);
+}
+int NativeEngine::getChannelVolume(int channel) const {
+    return mSynth ? mSynth->getChannelVolume(channel) : 100;
+}
 
 bool NativeEngine::getChannelProgram(int channel, int& bank, int& program) const {
     return mSynth ? mSynth->getChannelProgram(channel, bank, program) : false;

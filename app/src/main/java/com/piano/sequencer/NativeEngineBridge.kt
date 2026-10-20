@@ -195,6 +195,8 @@ object NativeEngineBridge {
     external fun nativeGetInstruments(): String
     external fun nativeSetChannelProgram(channel: Int, bank: Int, program: Int): Boolean
     external fun nativeGetChannelProgram(channel: Int): Int
+    external fun nativeSetChannelVolume(channel: Int, value: Int): Boolean
+    external fun nativeGetChannelVolume(channel: Int): Int
     external fun nativeSendMidiMessage(status: Int, data1: Int, data2: Int)
 
     /**

@@ -68,6 +68,9 @@ class MainActivity : AppCompatActivity() {
         Thread(r, "ProjectIoWorker").apply { isDaemon = true }
     }
     private val projectIoFailure = AtomicReference<Throwable?>(null)
+    // Protected by exitLock. At most one worker task, with one latest value per channel.
+    private val pendingChannelVolumes = IntArray(16) { -1 }
+    private var channelVolumeDrainQueued = false
 
     private lateinit var layout: LinearLayout
     private lateinit var statusText: TextView
@@ -407,6 +410,44 @@ class MainActivity : AppCompatActivity() {
                 return
             }
             midiWorker.execute { for (t in targets) service.sendMidiMessage(statusBase or t, d1, d2) }
+        }
+    }
+
+    private fun queueChannelVolume(channel: Int, value: Int) {
+        synchronized(exitLock) {
+            if (exitPending) return
+            val clamped = ChannelVolumePreferences.save(
+                getSharedPreferences("piano_prefs", MODE_PRIVATE), channel, value
+            )
+            val service = playbackService ?: return
+            pendingChannelVolumes[channel] = clamped
+            if (channelVolumeDrainQueued) return
+            channelVolumeDrainQueued = true
+            midiWorker.execute {
+                try {
+                    while (true) {
+                        val batch = synchronized(exitLock) {
+                            if (pendingChannelVolumes.all { it < 0 }) {
+                                channelVolumeDrainQueued = false
+                                return@execute
+                            }
+                            pendingChannelVolumes.copyOf().also { pendingChannelVolumes.fill(-1) }
+                        }
+                        for (ch in batch.indices) {
+                            if (batch[ch] >= 0 && !service.setChannelVolume(ch, batch[ch])) {
+                                AppLogger.error("MIDI", "Channel volume apply queue full/invalid: channel=$ch value=${batch[ch]}; preference retained")
+                                uiToast("Channel ${ch + 1} volume could not be applied; retry by adjusting it again")
+                            }
+                        }
+                    }
+                } catch (error: Exception) {
+                    synchronized(exitLock) {
+                        channelVolumeDrainQueued = false
+                        pendingChannelVolumes.fill(-1)
+                    }
+                    AppLogger.warn("MIDI", "Channel volume update failed: ${error.message}")
+                }
+            }
         }
     }
 
@@ -818,7 +859,9 @@ class MainActivity : AppCompatActivity() {
                 MultiChannelDialog.show(
                     this@MainActivity,
                     multiChannelEnabled,
-                    multiChannelMask
+                    multiChannelMask,
+                    ChannelVolumePreferences.snapshot(getSharedPreferences("piano_prefs", MODE_PRIVATE)),
+                    onVolumeChange = ::queueChannelVolume
                 ) { enabled, mask ->
                     multiChannelEnabled = enabled
                     multiChannelMask = mask
@@ -985,6 +1028,7 @@ class MainActivity : AppCompatActivity() {
         val triggerDrain = CountDownLatch(1)
         val failure = AtomicReference<Throwable?>(null)
         val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+
         val triggerController = MidiFileTriggerController.get(this)
         // Non-destructive sentinels only: if any durability step fails, all
         // input, service, and executors remain available for retry.
@@ -1260,6 +1304,11 @@ class MainActivity : AppCompatActivity() {
         // means the engine survived (activity recreation) — state intact.
         if (svc.getSoundFontCount() > 0) return
         val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+
+        // Restore configured CC7 even without an SF2; values live in synth desired state.
+        for (ch in 0 until 16) {
+            svc.setChannelVolume(ch, ChannelVolumePreferences.read(prefs, ch))
+        }
 
         // 1. Reload the persisted SoundFonts (file on disk, paths in prefs).
         //    Multi-SF2: "sf2_paths" is a JSON array of paths. Back-compat: the

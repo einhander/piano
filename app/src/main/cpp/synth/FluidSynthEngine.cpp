@@ -14,6 +14,7 @@
 FluidSynthEngine::FluidSynthEngine() {
     for (int i = 0; i < 16; i++) {
         mChannelPrograms[i].store(-1, std::memory_order_relaxed);
+        mChannelVolumes[i].store(100, std::memory_order_relaxed);
     }
     for (int i = 0; i < kAudioGroups * 2; ++i) mRenderAudioPtrs[i] = mRenderAudio[i];
     mRenderFxPtrs[0] = mRenderFx[0];
@@ -152,6 +153,7 @@ void FluidSynthEngine::applyDesiredState(fluid_synth_t* synth) {
     fluid_synth_set_interp_method(synth, -1, mInterps.load());
     // Channel programs (packed bank<<8|program; -1 = no explicit program).
     for (int ch = 0; ch < 16; ch++) {
+        fluid_synth_cc(synth, ch, 7, mChannelVolumes[ch].load(std::memory_order_relaxed));
         int packed = mChannelPrograms[ch].load(std::memory_order_relaxed);
         if (packed >= 0) {
             fluid_synth_bank_select(synth, ch, packed >> 8);
@@ -570,6 +572,14 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
                 fluid_synth_program_change(synth, cmd.a, static_cast<int>(cmd.f));
             }
             break;
+        case SynthCmdType::SET_CHANNEL_VOLUME:
+            if (cmd.a >= 0 && cmd.a < 16) {
+                fluid_synth_cc(synth, cmd.a, 7, cmd.b);
+                // Queue order is authoritative: reconcile desired state here,
+                // after any earlier/later live CC7 already drained this callback.
+                mChannelVolumes[cmd.a].store(cmd.b, std::memory_order_relaxed);
+            }
+            break;
     }
 }
 
@@ -628,6 +638,10 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
             break;
         case 0xB0: // Control Change
             fluid_synth_cc(synth, channel, m.data1, m.data2);
+            // Preserve live CC7 as synth desired state across SF2/rate swaps.
+            if (m.data1 == 7) {
+                mChannelVolumes[channel].store(m.data2, std::memory_order_relaxed);
+            }
             if (m.data1 == 120 || m.data1 == 123) {
                 std::memset(mActiveNotes[channel], 0, sizeof(mActiveNotes[channel]));
                 refreshActiveChannelBit(channel);
@@ -888,6 +902,20 @@ bool FluidSynthEngine::getChannelProgram(int channel, int& bank, int& program) c
     bank = packed >> 8;
     program = packed & 0xFF;
     return true;
+}
+
+bool FluidSynthEngine::setChannelVolume(int channel, int value) {
+    if (channel < 0 || channel >= 16) return false;
+    value = std::clamp(value, 0, 127);
+    mChannelVolumes[channel].store(value, std::memory_order_relaxed);
+    if (!mInitialized.load(std::memory_order_relaxed)) return true;
+    SynthCmd c;
+    makeCmd(c, SynthCmdType::SET_CHANNEL_VOLUME, channel, value);
+    return mCmdQueue.push(c);
+}
+
+int FluidSynthEngine::getChannelVolume(int channel) const {
+    return channel >= 0 && channel < 16 ? mChannelVolumes[channel].load(std::memory_order_relaxed) : 100;
 }
 
 // ── Getters (worker thread — atomic reads of the desired settings) ───────────

@@ -692,6 +692,18 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetChannelProgram(
     return static_cast<jint>((bank << 8) | program);
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetChannelVolume(JNIEnv*, jclass, jint channel, jint value) {
+    auto* inst = NativeEngine::getInstance();
+    return inst && inst->setChannelVolume(channel, value) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetChannelVolume(JNIEnv*, jclass, jint channel) {
+    auto* inst = NativeEngine::getInstance();
+    return inst ? inst->getChannelVolume(channel) : 100;
+}
+
 JNIEXPORT void JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeSendMidiMessage(
     JNIEnv* env, jclass, jint status, jint data1, jint data2) {

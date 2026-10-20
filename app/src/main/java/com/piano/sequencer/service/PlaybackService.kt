@@ -97,6 +97,8 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         fun setChannelProgram(channel: Int, bank: Int, program: Int): Boolean =
             this@PlaybackService.setChannelProgram(channel, bank, program)
         fun getChannelProgram(channel: Int): Int = this@PlaybackService.getChannelProgram(channel)
+        fun setChannelVolume(channel: Int, value: Int): Boolean = this@PlaybackService.setChannelVolume(channel, value)
+        fun getChannelVolume(channel: Int): Int = this@PlaybackService.getChannelVolume(channel)
 
         // Recording control
         fun startRecording() = this@PlaybackService.startRecording()
@@ -523,6 +525,8 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun setChannelProgram(channel: Int, bank: Int, program: Int): Boolean =
         NativeEngineBridge.nativeSetChannelProgram(channel, bank, program)
     fun getChannelProgram(channel: Int): Int = NativeEngineBridge.nativeGetChannelProgram(channel)
+    fun setChannelVolume(channel: Int, value: Int): Boolean = NativeEngineBridge.nativeSetChannelVolume(channel, value.coerceIn(0, 127))
+    fun getChannelVolume(channel: Int): Int = NativeEngineBridge.nativeGetChannelVolume(channel)
 
     // Recording control
     fun startRecording() { NativeEngineBridge.nativeStartRecording(); recordingCache = true }
