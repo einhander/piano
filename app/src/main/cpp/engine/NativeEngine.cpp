@@ -308,6 +308,7 @@ uint16_t NativeEngine::getChannelActivityMask() { return mSynth ? mSynth->getCha
 int NativeEngine::getSoundFontCount() const {
     return mSynth ? mSynth->getSoundFontCount() : 0;
 }
+int64_t NativeEngine::getWorkerGateHeldMicros() const { return mSynth ? mSynth->getWorkerGateHeldMicros() : 0; }
 
 std::string NativeEngine::getSoundFontPath() const {
     return mSynth ? mSynth->getSoundFontPath() : std::string();
@@ -366,6 +367,10 @@ int NativeEngine::getSynthCmdQueueDrops() const {
 
 int NativeEngine::getMidiQueueDepth() const {
     return static_cast<int>(mMidiQueue.size());
+}
+
+int64_t NativeEngine::getGatedCallbackCount() const {
+    return mSynth ? mSynth->getGatedCallbackCount() : 0;
 }
 
 int NativeEngine::getLiveMidiQueueDepth() const {
@@ -505,6 +510,7 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     Mp3AudioRecorder::CallbackToken recordingCallback(mAudioRecorder);
     AudioCallbackGuard callbackGuard(mSynth);
     if (!callbackGuard.enter()) {
+        if (mSynth) mSynth->recordGatedCallback();
         // Maintenance gate drops this callback: transport pauses and queued
         // MIDI/events remain untouched for the next admitted callback.
         std::memset(output, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));

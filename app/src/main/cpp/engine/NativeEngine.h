@@ -249,6 +249,8 @@ public:
     int getMidiQueueDrops() const;
     int getSynthCmdQueueDrops() const;
     int getMidiQueueDepth() const;
+    int64_t getWorkerGateHeldMicros() const;
+    int64_t getGatedCallbackCount() const;
     int getLiveMidiQueueDepth() const;
     // [perf]: number of clips currently in the clip scheduler (1 Hz line).
     int getActiveClipCount() const;

@@ -33,6 +33,9 @@ void FluidSynthEngine::leaveAudioCallback() {
 
 FluidSynthEngine::WorkerAccessGuard::WorkerAccessGuard(FluidSynthEngine& engine)
     : mEngine(engine), mWorkerLock(engine.mWorkerMutex) {
+    mGateStart = std::chrono::steady_clock::now();
+    engine.mWorkerGateStartNanos.store(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        mGateStart.time_since_epoch()).count(), std::memory_order_release);
     mEngine.mAudioAccess.fetch_or(kAudioGateBit, std::memory_order_acq_rel);
     while ((mEngine.mAudioAccess.load(std::memory_order_acquire) & kAudioReaderMask) != 0) {
         std::this_thread::yield();
@@ -43,6 +46,10 @@ FluidSynthEngine::WorkerAccessGuard::WorkerAccessGuard(FluidSynthEngine& engine)
 }
 
 FluidSynthEngine::WorkerAccessGuard::~WorkerAccessGuard() {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - mGateStart).count();
+    mEngine.mWorkerGateHeldMicros.store(elapsed, std::memory_order_relaxed);
+    mEngine.mWorkerGateStartNanos.store(0, std::memory_order_release);
     mEngine.mAudioAccess.fetch_and(kAudioReaderMask, std::memory_order_release);
 }
 
@@ -75,7 +82,17 @@ bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
                 mSettings[j] = nullptr;
             }
         }
+        {
+            std::lock_guard<std::mutex> lock(mSfPathMutex);
+            mLoadedSf2s.clear();
+        }
+        mSoundFontCount.store(0, std::memory_order_release);
     };
+    {
+        std::lock_guard<std::mutex> lock(mSfPathMutex);
+        mLoadedSf2s.clear();
+    }
+    mSoundFontCount.store(0, std::memory_order_release);
 
     // Create BOTH synth slots with the given sample rate. The audio thread
     // renders from mSynth[mActiveIndex]; the worker prepares the other slot for
@@ -313,6 +330,7 @@ bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
 
     // Update the sample rate.
     mSampleRate = newRate;
+    rebuildLoadedSf2List(sfPaths);
     // New FluidSynth instance has no voices. Defer clearing audio-owned
     // tracking until next callback rather than mutating it from this worker.
     mResetActiveNotes.store(true, std::memory_order_release);
@@ -346,9 +364,7 @@ int FluidSynthEngine::loadSoundFont(const char* filePath) {
 
     std::vector<std::string> loadedPaths;
     int lastSfId = prepareInactiveSlot(sfPaths, &loadedPaths);
-    if (lastSfId >= 0) {
-        rebuildLoadedSf2List(loadedPaths);
-    }
+    rebuildLoadedSf2List(loadedPaths);
     return lastSfId;
 }
 
@@ -384,9 +400,9 @@ void FluidSynthEngine::unloadSoundFonts() {
     if (!mInitialized.load()) return;
     // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
     WorkerAccessGuard workerAccess(*this);
-    { std::lock_guard<std::mutex> lock(mSfPathMutex); mLoadedSf2s.clear(); }
     // Unload all SF2s from the inactive slot and flip to it (active = no SF2).
     prepareInactiveSlot(std::vector<std::string>{});
+    rebuildLoadedSf2List({});
 }
 
 void FluidSynthEngine::rebuildLoadedSf2List(const std::vector<std::string>& loadedPaths) {
@@ -417,6 +433,7 @@ void FluidSynthEngine::rebuildLoadedSf2List(const std::vector<std::string>& load
     }
     std::lock_guard<std::mutex> lock(mSfPathMutex);
     mLoadedSf2s = std::move(rebuilt);
+    mSoundFontCount.store(static_cast<int>(mLoadedSf2s.size()), std::memory_order_release);
 }
 
 // ── Audio-thread entry points (NO locks) ─────────────────────────────────────
@@ -883,9 +900,15 @@ int FluidSynthEngine::getInterps() const { return mInterps.load(); }
 int FluidSynthEngine::getActiveVoices() const { return mActiveVoices.load(); }
 
 int FluidSynthEngine::getSoundFontCount() const {
-    WorkerAccessGuard workerAccess(*const_cast<FluidSynthEngine*>(this));
-    int idx = mActiveIndex.load(std::memory_order_acquire);
-    return mSynth[idx] ? fluid_synth_sfcount(mSynth[idx]) : 0;
+    return mSoundFontCount.load(std::memory_order_acquire);
+}
+
+int64_t FluidSynthEngine::getWorkerGateHeldMicros() const {
+    const int64_t start = mWorkerGateStartNanos.load(std::memory_order_acquire);
+    if (start == 0) return mWorkerGateHeldMicros.load(std::memory_order_relaxed);
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    const auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+    return (nanos - start) / 1000;
 }
 
 std::string FluidSynthEngine::getSoundFontPath() const {

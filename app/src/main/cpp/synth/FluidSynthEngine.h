@@ -4,6 +4,7 @@
 #include "realtime/MidiQueue.h"
 #include "realtime/SynthCmdQueue.h"
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -68,6 +69,7 @@ public:
     private:
         FluidSynthEngine& mEngine;
         std::unique_lock<std::mutex> mWorkerLock;
+        std::chrono::steady_clock::time_point mGateStart;
     };
     FluidSynthEngine();
     ~FluidSynthEngine();
@@ -188,6 +190,9 @@ public:
     // Number of control commands dropped (queue overflow). Worker-thread read.
     int getCmdQueueDrops() const { return static_cast<int>(mCmdQueue.droppedCount()); }
     int getSoundFontCount() const;
+    int64_t getWorkerGateHeldMicros() const;
+    uint32_t getGatedCallbackCount() const { return mGatedCallbackCount.load(std::memory_order_relaxed); }
+    void recordGatedCallback() { mGatedCallbackCount.fetch_add(1u, std::memory_order_relaxed); }
     std::string getSoundFontPath() const;
     // All loaded SF2s: {synthID, filePath}. Worker thread.
     struct LoadedSf2 { int id; std::string path; };
@@ -221,6 +226,10 @@ private:
     static constexpr uint32_t kAudioGateBit = uint32_t{1} << 31;
     static constexpr uint32_t kAudioReaderMask = ~kAudioGateBit;
     std::atomic<uint32_t> mAudioAccess{0};
+    std::atomic<int64_t> mWorkerGateHeldMicros{0};
+    std::atomic<int64_t> mWorkerGateStartNanos{0};
+    std::atomic<uint32_t> mGatedCallbackCount{0};
+    static_assert(std::atomic<uint32_t>::is_always_lock_free, "RT diagnostics counter must be lock-free");
     // Apply a single control command to one synth slot.
     void applyCommandToSynth(fluid_synth_t* synth, const SynthCmd& cmd);
     void refreshActiveChannelBit(int channel);
@@ -307,6 +316,8 @@ private:
     struct Sf2Entry { int id; std::string path; };
     std::vector<Sf2Entry> mLoadedSf2s;
     mutable std::mutex mSfPathMutex;
+    // Mirrored from mLoadedSf2s after completed slot swaps; safe for UI reads.
+    std::atomic<int> mSoundFontCount{0};
 
     // M1: worker-side mutex serializing the SF2 slot-prep operations
     // (loadSoundFont / unloadSoundFonts / reprepareAtNewRate). mPreparing +

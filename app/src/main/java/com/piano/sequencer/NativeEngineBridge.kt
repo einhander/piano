@@ -170,6 +170,8 @@ object NativeEngineBridge {
     external fun nativeGetMidiQueueDrops(): Int
     external fun nativeGetSynthCmdQueueDrops(): Int
     external fun nativeGetMidiQueueDepth(): Int
+    external fun nativeGetWorkerGateHeldMicros(): Long
+    external fun nativeGetGatedCallbackCount(): Long
     external fun nativeGetLiveMidiQueueDepth(): Int
     // [perf]: number of clips currently in the clip scheduler (1 Hz line).
     external fun nativeGetActiveClipCount(): Int

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 
 class OboeOutput : public oboe::AudioStreamCallback {
 public:
@@ -20,9 +21,9 @@ public:
 
     static OboeOutput* getInstance() { return sInstance.load(std::memory_order_acquire); }
 
-    bool isOpen() const { return mStream != nullptr; }
-    int32_t getSampleRate() const { return mSampleRate; }
-    int32_t getFramesPerBurst() const { return mFramesPerBurst; }
+    bool isOpen() const;
+    int32_t getSampleRate() const;
+    int32_t getFramesPerBurst() const;
     int32_t getUnderrunCount() const { return mUnderrunCount.load(); }
     oboe::StreamState getState() const { return mState.load(); }
     int32_t getLastError() const { return mLastError.load(std::memory_order_relaxed); }
@@ -80,6 +81,9 @@ private:
     static std::atomic<OnOpenCallback> sOnOpenCallback;
 
     oboe::AudioStream* mStream = nullptr;
+    // Serializes every non-callback stream dereference with close/open. Callback
+    // accesses only callback-owned tuner state and never takes this lock.
+    mutable std::mutex mStreamMutex;
     std::atomic<oboe::StreamState> mState{oboe::StreamState::Uninitialized};
     std::atomic<int32_t> mLastError{0};
     int32_t mSampleRate = 0;
@@ -94,6 +98,7 @@ private:
     // in the audio callback — no allocation there).
     std::unique_ptr<oboe::LatencyTuner> mLatencyTuner;
     std::atomic<bool> mAutoTune{true};
+    std::atomic<bool> mLatencyTunerResetRequested{false};
 
     double mPhase = 0.0;
     double mPhaseIncrement = 0.0;

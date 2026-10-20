@@ -566,6 +566,18 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetSoundFontCount(JNIEnv* env,
     return 0;
 }
 
+JNIEXPORT jlong JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetWorkerGateHeldMicros(JNIEnv*, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    return inst ? static_cast<jlong>(inst->getWorkerGateHeldMicros()) : 0;
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetGatedCallbackCount(JNIEnv*, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    return inst ? static_cast<jlong>(inst->getGatedCallbackCount()) : 0;
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeGetSoundFontPath(JNIEnv* env, jclass) {
     NativeEngine* inst = NativeEngine::getInstance();

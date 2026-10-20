@@ -28,7 +28,23 @@ OboeOutput::~OboeOutput() {
     }
 }
 
+bool OboeOutput::isOpen() const {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
+    return mStream != nullptr;
+}
+
+int32_t OboeOutput::getSampleRate() const {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
+    return mSampleRate;
+}
+
+int32_t OboeOutput::getFramesPerBurst() const {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
+    return mFramesPerBurst;
+}
+
 oboe::Result OboeOutput::open() {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
     // Idempotent: the engine is a process-level singleton that survives activity
     // recreation (AGENTS.md) — on re-bind, reuse the live stream instead of
     // leaking it. A stopped stream can be restarted. A dead stream (error/closed)
@@ -131,6 +147,7 @@ void OboeOutput::createLatencyTuner() {
 }
 
 void OboeOutput::close() {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
     if (mStream != nullptr) {
         mStream->close();
         mStream = nullptr;
@@ -140,6 +157,7 @@ void OboeOutput::close() {
 }
 
 oboe::Result OboeOutput::start() {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
     if (mStream == nullptr) {
         return oboe::Result::ErrorNull;
     }
@@ -163,6 +181,7 @@ oboe::Result OboeOutput::start() {
 }
 
 oboe::Result OboeOutput::stop() {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
     if (mStream == nullptr) {
         return oboe::Result::ErrorNull;
     }
@@ -201,6 +220,9 @@ oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, voi
     // LatencyTuner (Fix #4): auto-tune the buffer size based on underruns.
     // Only when auto-tune is on (a user-set fixed buffer size is respected).
     // Designed to be called right before returning from the data callback.
+    if (mLatencyTunerResetRequested.exchange(false, std::memory_order_acq_rel) && mLatencyTuner) {
+        mLatencyTuner->requestReset();
+    }
     if (mAutoTune.load(std::memory_order_relaxed) && mLatencyTuner) {
         mLatencyTuner->tune();
     }
@@ -228,16 +250,19 @@ void OboeOutput::generateSineWave(float* buffer, int32_t numFrames) {
 // ── Diagnostics (worker-thread reads) ────────────────────────────────────────
 
 int32_t OboeOutput::getBufferSizeInFrames() {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
     if (mStream == nullptr) return 0;
     return mStream->getBufferSizeInFrames();
 }
 
 int32_t OboeOutput::getBufferCapacityInFrames() const {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
     if (mStream == nullptr) return 0;
     return mStream->getBufferCapacityInFrames();
 }
 
 int32_t OboeOutput::getLatencyMillis() const {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
     if (mStream == nullptr) return -1;
     auto result = mStream->calculateLatencyMillis();
     if (result != oboe::Result::OK) {
@@ -247,11 +272,13 @@ int32_t OboeOutput::getLatencyMillis() const {
 }
 
 oboe::SharingMode OboeOutput::getSharingMode() const {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
     if (mStream == nullptr) return oboe::SharingMode::Shared;
     return mStream->getSharingMode();
 }
 
 oboe::PerformanceMode OboeOutput::getPerformanceMode() const {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
     if (mStream == nullptr) return oboe::PerformanceMode::LowLatency;
     return mStream->getPerformanceMode();
 }
@@ -259,14 +286,13 @@ oboe::PerformanceMode OboeOutput::getPerformanceMode() const {
 // ── Buffer size control (worker thread) ──────────────────────────────────────
 
 void OboeOutput::setAutoTune(bool autoTune) {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
     mAutoTune.store(autoTune, std::memory_order_relaxed);
-    if (autoTune && mLatencyTuner) {
-        // Re-assert the minimum when returning to auto-tune.
-        mLatencyTuner->requestReset();
-    }
+    if (autoTune) mLatencyTunerResetRequested.store(true, std::memory_order_release);
 }
 
 int32_t OboeOutput::setBufferSizeInFrames(int32_t frames) {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
     if (mStream == nullptr) return 0;
     if (frames < 1) frames = 1;
     auto result = mStream->setBufferSizeInFrames(frames);
