@@ -157,7 +157,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         audioWorker.execute { requestAudioFocus() }
         startForeground(NOTIFICATION_ID, buildNotification())
         // Part A: start the 1Hz [perf] logger (daemon; logs while audio plays).
-        perfLoggerThread
+        perfLoggerThread.start()
     }
 
     override fun onDestroy() {
