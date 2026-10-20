@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
+import android.provider.DocumentsContract
 import android.text.util.Linkify
 import android.view.Gravity
 import android.view.MotionEvent
@@ -29,6 +30,7 @@ import android.os.Handler
 import android.os.Looper
 import java.io.File
 import java.util.Locale
+import java.util.UUID
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.piano.sequencer.midi.ChordRecorder
@@ -83,6 +85,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var midiDeviceButton: Button
     private lateinit var multiChannelButton: Button
     private lateinit var recordButton: Button
+    private lateinit var recordingFolderLabel: TextView
+    private lateinit var recordingFolderButton: Button
+    private var pendingRecordingAfterFolderPick = false
+    private var recordingFolderPickerOpen = false
     private var audioRecordingActive = false
     private var audioRecordingStarting = false
     private var audioRecordingStopping = false
@@ -228,15 +234,25 @@ class MainActivity : AppCompatActivity() {
         if (uri != null) saveProjectToUri(uri)
     }
 
-    private val audioRecordingLauncher = registerForActivityResult(
-        ActivityResultContracts.CreateDocument("audio/mpeg")
-    ) { uri ->
+    private val recordingFolderLauncher = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        recordingFolderPickerOpen = false
+        val continueRecording = pendingRecordingAfterFolderPick
+        pendingRecordingAfterFolderPick = false
         if (uri == null) {
-            audioRecordingStarting = false
-            if (::recordButton.isInitialized) recordButton.isEnabled = true
+            if (continueRecording) audioRecordingStarting = false
+            updateRecordingFolderLabel()
             return@registerForActivityResult
         }
-        startAudioRecordingForUri(uri)
+        try {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            getSharedPreferences("piano_prefs", MODE_PRIVATE).edit().putString("recording_folder_uri", uri.toString()).apply()
+            updateRecordingFolderLabel()
+            if (continueRecording) createRecordingInSavedFolder()
+        } catch (t: Throwable) {
+            if (continueRecording) audioRecordingStarting = false
+            updateRecordingFolderLabel()
+            uiToast("Could not save recording folder: ${t.message}")
+        }
     }
 
     // SAF document opener for .pseq project load. MIME is unreliable for
@@ -467,14 +483,64 @@ class MainActivity : AppCompatActivity() {
         if (audioRecordingStarting || audioRecordingStopping || audioRecordingActive) return
         audioRecordingStarting = true
         recordButton.isEnabled = false
-        val stamp = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.US)
-            .format(LocalDateTime.now())
-        try {
-            audioRecordingLauncher.launch("Piano-$stamp.mp3")
-        } catch (t: Throwable) {
+        updateRecordingFolderLabel()
+        if (recordingFolderUri() == null) {
+            pendingRecordingAfterFolderPick = true
+            launchRecordingFolderPicker()
+        } else createRecordingInSavedFolder()
+    }
+
+    private fun recordingFolderUri(): Uri? = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+        .getString("recording_folder_uri", null)?.let(Uri::parse)
+
+    private fun chooseRecordingFolder() {
+        if (audioRecordingStarting || audioRecordingStopping || audioRecordingActive || recordingFolderPickerOpen) return
+        launchRecordingFolderPicker()
+    }
+
+    private fun launchRecordingFolderPicker() {
+        if (recordingFolderPickerOpen) return
+        recordingFolderPickerOpen = true
+        updateRecordingFolderLabel()
+        try { recordingFolderLauncher.launch(recordingFolderUri()) }
+        catch (t: Throwable) {
+            recordingFolderPickerOpen = false
+            pendingRecordingAfterFolderPick = false
             audioRecordingStarting = false
-            recordButton.isEnabled = true
-            uiToast("Could not open MP3 save picker: ${t.message}")
+            updateRecordingFolderLabel()
+            uiToast("Could not open recording folder picker: ${t.message}")
+        }
+    }
+
+    private fun createRecordingInSavedFolder() {
+        val tree = recordingFolderUri()
+        if (tree == null) { audioRecordingStarting = false; updateRecordingFolderLabel(); return }
+        projectIoWorker.execute {
+            var uri: Uri? = null
+            var error: Throwable? = null
+            try {
+                val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+                val stamp = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.US).format(LocalDateTime.now())
+                uri = DocumentsContract.createDocument(contentResolver, parent, "audio/mpeg", "Piano-$stamp-${UUID.randomUUID()}.mp3")
+                if (uri == null) throw IOException("Could not create MP3 in selected folder")
+            } catch (t: Throwable) { error = t }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (uri != null) startAudioRecordingForUri(uri!!)
+                else { audioRecordingStarting = false; updateRecordingFolderLabel(); uiToast("Could not create recording: ${error?.message ?: "folder unavailable"}") }
+            }
+        }
+    }
+
+    private fun updateRecordingFolderLabel() {
+        if (::recordingFolderLabel.isInitialized) {
+            val uri = recordingFolderUri()
+            val label = uri?.let { runCatching { DocumentsContract.getTreeDocumentId(it).substringAfterLast(':').ifBlank { "Recording folder" } }.getOrDefault("Recording folder") }
+            recordingFolderLabel.text = "Recording folder: ${label ?: "not set"}"
+        }
+        if (::recordingFolderButton.isInitialized) {
+            recordingFolderButton.text = if (recordingFolderUri() == null) "Choose" else "Change"
+            recordingFolderButton.isEnabled = !recordingFolderPickerOpen && !audioRecordingStarting && !audioRecordingStopping && !audioRecordingActive
         }
     }
 
@@ -483,6 +549,7 @@ class MainActivity : AppCompatActivity() {
         if (audioRecordingStopping || audioRecordingStarting) return
         audioRecordingStopping = true
         recordButton.isEnabled = false
+        updateRecordingFolderLabel()
         projectIoWorker.execute {
             var stopped = false
             var error: Throwable? = null
@@ -506,6 +573,7 @@ class MainActivity : AppCompatActivity() {
                     uiToast(if (state == 3) "Recording incomplete; output may be unusable. ${error?.message ?: "Stop failed"}"
                         else "Recording stop pending: ${error?.message ?: "unknown error"}")
                 }
+                updateRecordingFolderLabel()
             }
         }
     }
@@ -546,6 +614,7 @@ class MainActivity : AppCompatActivity() {
                     setAudioRecordingActive(false)
                     uiToast("Could not start recording: ${error?.message ?: "unknown error"}")
                 }
+                updateRecordingFolderLabel()
             }
         }
     }
@@ -560,6 +629,7 @@ class MainActivity : AppCompatActivity() {
             "Record audio to a file"
         }
         recordButton.isSelected = active
+        updateRecordingFolderLabel()
     }
 
     private fun setAudioRecordingState(state: Int) {
@@ -573,11 +643,13 @@ class MainActivity : AppCompatActivity() {
                 recordButton.contentDescription = "Recording finalization pending. Retry stop"
                 recordButton.isSelected = false
                 recordButton.isEnabled = true
+                updateRecordingFolderLabel()
             }
             else -> {
                 setAudioRecordingActive(false)
                 recordButton.isEnabled = true
                 if (state == 3) uiToast("Recording incomplete; output may be unusable")
+                updateRecordingFolderLabel()
             }
         }
     }
@@ -787,6 +859,13 @@ class MainActivity : AppCompatActivity() {
         ).apply {
             topMargin = (4 * resources.displayMetrics.density).toInt()
         })
+        val recordingFolderRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        recordingFolderLabel = TextView(this).apply { textSize = 13f }
+        recordingFolderButton = Button(this).apply { isAllCaps = false; setOnClickListener { chooseRecordingFolder() } }
+        recordingFolderRow.addView(recordingFolderLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        recordingFolderRow.addView(recordingFolderButton)
+        layout.addView(recordingFolderRow)
+        updateRecordingFolderLabel()
         setAudioRecordingActive(false)
 
         // Setup MIDI receiver callback
