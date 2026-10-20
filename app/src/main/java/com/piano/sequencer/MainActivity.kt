@@ -85,8 +85,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var midiDeviceButton: Button
     private lateinit var multiChannelButton: Button
     private lateinit var recordButton: Button
-    private lateinit var recordingFolderLabel: TextView
-    private lateinit var recordingFolderButton: Button
     private var pendingRecordingAfterFolderPick = false
     private var recordingFolderPickerOpen = false
     private var audioRecordingActive = false
@@ -244,8 +242,7 @@ class MainActivity : AppCompatActivity() {
             return@registerForActivityResult
         }
         try {
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-            getSharedPreferences("piano_prefs", MODE_PRIVATE).edit().putString("recording_folder_uri", uri.toString()).apply()
+            RecordingFolder.save(this, uri)
             updateRecordingFolderLabel()
             if (continueRecording) createRecordingInSavedFolder()
         } catch (t: Throwable) {
@@ -490,13 +487,7 @@ class MainActivity : AppCompatActivity() {
         } else createRecordingInSavedFolder()
     }
 
-    private fun recordingFolderUri(): Uri? = getSharedPreferences("piano_prefs", MODE_PRIVATE)
-        .getString("recording_folder_uri", null)?.let(Uri::parse)
-
-    private fun chooseRecordingFolder() {
-        if (audioRecordingStarting || audioRecordingStopping || audioRecordingActive || recordingFolderPickerOpen) return
-        launchRecordingFolderPicker()
-    }
+    private fun recordingFolderUri(): Uri? = RecordingFolder.get(this)
 
     private fun launchRecordingFolderPicker() {
         if (recordingFolderPickerOpen) return
@@ -533,14 +524,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateRecordingFolderLabel() {
-        if (::recordingFolderLabel.isInitialized) {
-            val uri = recordingFolderUri()
-            val label = uri?.let { runCatching { DocumentsContract.getTreeDocumentId(it).substringAfterLast(':').ifBlank { "Recording folder" } }.getOrDefault("Recording folder") }
-            recordingFolderLabel.text = "Recording folder: ${label ?: "not set"}"
-        }
-        if (::recordingFolderButton.isInitialized) {
-            recordingFolderButton.text = if (recordingFolderUri() == null) "Choose" else "Change"
-            recordingFolderButton.isEnabled = !recordingFolderPickerOpen && !audioRecordingStarting && !audioRecordingStopping && !audioRecordingActive
+        RecordingFolder.busy = recordingFolderPickerOpen || audioRecordingStarting ||
+            audioRecordingStopping || audioRecordingActive
+        if (::recordButton.isInitialized && !audioRecordingStarting && !audioRecordingStopping) {
+            recordButton.isEnabled = true
         }
     }
 
@@ -859,12 +846,6 @@ class MainActivity : AppCompatActivity() {
         ).apply {
             topMargin = (4 * resources.displayMetrics.density).toInt()
         })
-        val recordingFolderRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        recordingFolderLabel = TextView(this).apply { textSize = 13f }
-        recordingFolderButton = Button(this).apply { isAllCaps = false; setOnClickListener { chooseRecordingFolder() } }
-        recordingFolderRow.addView(recordingFolderLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        recordingFolderRow.addView(recordingFolderButton)
-        layout.addView(recordingFolderRow)
         updateRecordingFolderLabel()
         setAudioRecordingActive(false)
 

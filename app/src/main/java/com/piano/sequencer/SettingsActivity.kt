@@ -29,6 +29,10 @@ import java.util.concurrent.Executors
 class SettingsActivity : AppCompatActivity() {
 
     private lateinit var btnBrowse: Button
+    private lateinit var tvRecordingFolder: TextView
+    private lateinit var btnRecordingFolder: Button
+    private var recordingFolderPickerOpen = false
+    private var recordingFolderCheckPending = false
     private lateinit var btnUnload: Button
     private lateinit var llSf2List: LinearLayout
     private lateinit var tvSf2Empty: TextView
@@ -65,12 +69,14 @@ class SettingsActivity : AppCompatActivity() {
             // screen during service startup) — the executor is already shut down.
             if (isFinishing || isDestroyed) return
             service = (binder as PlaybackService.PlaybackBinder).getService()
+            refreshRecordingFolder()
             CompletableFuture.runAsync({
             loadCurrentValues()
         }, mainExecutor)
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             service = null
+            refreshRecordingFolder()
         }
     }
 
@@ -80,6 +86,57 @@ class SettingsActivity : AppCompatActivity() {
 
     private val sf2Picker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let { pickSf2File(it) }
+    }
+
+    private val recordingFolderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        recordingFolderPickerOpen = false
+        if (uri == null) refreshRecordingFolder()
+        else withRecordingIdle {
+            try {
+                RecordingFolder.save(this, uri)
+            } catch (e: Exception) {
+                Toast.makeText(this, "Could not save recording folder: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+            refreshRecordingFolder()
+        }
+    }
+
+    private fun refreshRecordingFolder() {
+        if (!::btnRecordingFolder.isInitialized) return
+        val uri = RecordingFolder.get(this)
+        tvRecordingFolder.text = uri?.let(RecordingFolder::displayName)
+            ?: getString(R.string.settings_recording_folder_unset)
+        btnRecordingFolder.setText(if (uri == null) R.string.settings_recording_folder_choose
+            else R.string.settings_recording_folder_change)
+        btnRecordingFolder.isEnabled = service != null && !RecordingFolder.busy &&
+            !recordingFolderPickerOpen && !recordingFolderCheckPending
+    }
+
+    // Native state reads stay off main. Recheck on picker return as recording may
+    // have started while the system picker was in front of this activity.
+    private fun withRecordingIdle(action: () -> Unit) {
+        val svc = service ?: return
+        if (recordingFolderCheckPending) return
+        recordingFolderCheckPending = true
+        refreshRecordingFolder()
+        CompletableFuture.supplyAsync({ svc.audioRecordingState() }, mainExecutor)
+            .whenComplete { state, error ->
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    recordingFolderCheckPending = false
+                    if (error == null && service === svc && !RecordingFolder.busy && state != 1 && state != 2) {
+                        action()
+                    } else {
+                        Toast.makeText(this, R.string.settings_recording_folder_busy, Toast.LENGTH_SHORT).show()
+                    }
+                    refreshRecordingFolder()
+                }
+            }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshRecordingFolder()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -93,6 +150,20 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         btnBrowse = findViewById(R.id.btnBrowse)
+        tvRecordingFolder = findViewById(R.id.tvRecordingFolder)
+        btnRecordingFolder = findViewById(R.id.btnRecordingFolder)
+        btnRecordingFolder.setOnClickListener {
+            withRecordingIdle {
+                try {
+                    recordingFolderPickerOpen = true
+                    recordingFolderPicker.launch(RecordingFolder.get(this))
+                } catch (e: Exception) {
+                    recordingFolderPickerOpen = false
+                    Toast.makeText(this, "Could not open recording folder picker: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        refreshRecordingFolder()
         btnUnload = findViewById(R.id.btnUnload)
         llSf2List = findViewById(R.id.llSf2List)
         tvSf2Empty = findViewById(R.id.tvSf2Empty)

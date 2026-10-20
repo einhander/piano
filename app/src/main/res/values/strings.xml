@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="settings_recording_folder">Recording folder</string>
+    <string name="settings_recording_folder_unset">Not set</string>
+    <string name="settings_recording_folder_choose">Choose folder</string>
+    <string name="settings_recording_folder_change">Change folder</string>
+    <string name="settings_recording_folder_hint">MP3 recordings are saved here. Stop recording and finish saving before changing the folder.</string>
+    <string name="settings_recording_folder_busy">Finish recording before changing the folder.</string>
     <string name="instrument_note_held">MIDI channel %1$d: note held</string>
     <string name="app_name">Piano Sequencer</string>
 
