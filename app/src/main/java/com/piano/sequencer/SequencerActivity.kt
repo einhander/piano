@@ -374,6 +374,7 @@ class SequencerActivity : AppCompatActivity() {
                 // cache miss). Unreadable file / service not bound → -1 → the cell
                 // keeps its current tempo (today's behavior).
                 val fileTempo = service?.getMidiFileTempo(destFile.absolutePath) ?: -1f
+                val initialPrograms = com.piano.sequencer.midi.MidiInitialPrograms.fromFile(destFile)
                 runOnUiThread {
                     if (cellId != null) {
                         val store = MidiFileMappingStore.get(this@SequencerActivity)
@@ -396,12 +397,14 @@ class SequencerActivity : AppCompatActivity() {
                                  channel = -1,
                                  tempo = if (fileTempo > 0f) fileTempo.toDouble() else cur.tempo
                              )
-                             val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
-                             val withSet = FileInstrumentSetStore.get(this@SequencerActivity).createForCell(imported, prefs)
-                             if (withSet == null) {
-                                 store.set(imported.copy(instrumentSetId = null))
-                                 Toast.makeText(this@SequencerActivity, "Imported without a file instrument set: capacity full. Tracks use main instruments.", Toast.LENGTH_LONG).show()
-                             } else store.set(withSet)
+                              val instrumentSets = FileInstrumentSetStore.get(this@SequencerActivity)
+                              val otherReferences = store.all().filter { it.id != cur.id }.mapNotNull { it.instrumentSetId }.toSet()
+                              instrumentSets.removeUnreferenced(otherReferences + listOfNotNull(cur.instrumentSetId))
+                              val withSet = instrumentSets.replaceForCell(imported, cur.instrumentSetId, otherReferences, initialPrograms, "${destFile.name} instruments")
+                               if (withSet == null) {
+                                   Toast.makeText(this@SequencerActivity, "Import failed: file instrument-set capacity full.", Toast.LENGTH_LONG).show()
+                                   return@runOnUiThread
+                                } else store.set(withSet)
                         }
                     }
                     Toast.makeText(this@SequencerActivity, "Imported: ${destFile.name}", Toast.LENGTH_SHORT).show()

@@ -17,6 +17,7 @@ class FileInstrumentSetStore(private val prefs: SharedPreferences) {
     companion object {
         private const val KEY = "midi_file_instrument_sets"
         private var singleton: FileInstrumentSetStore? = null
+        fun initialPrograms(): List<Int> = MidiInitialPrograms.defaults()
         fun get(context: Context): FileInstrumentSetStore = synchronized(this) {
             singleton ?: FileInstrumentSetStore(context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE)).also { singleton = it }
         }
@@ -24,18 +25,41 @@ class FileInstrumentSetStore(private val prefs: SharedPreferences) {
 
     fun all(): List<InstrumentSet> = synchronized(lock) { read() }
 
+    /** Remove sets absent from the complete persisted cell-reference snapshot. */
+    fun removeUnreferenced(referencedIds: Set<String>): Int = synchronized(lock) {
+        val sets = read()
+        val retained = sets.filter { it.id in referencedIds }
+        val removed = sets.size - retained.size
+        if (removed > 0) write(retained)
+        removed
+    }
+
     /** Create and associate set for imported cell; null means capacity exhausted. */
     fun createForCell(cell: SequencerCell, prefs: SharedPreferences, name: String = "${cell.filePath.substringAfterLast('/')} instruments"): SequencerCell? {
-        val programs = (0..15).map { prefs.getInt("chan_prog_$it", 0) }
+        return createForCell(cell, initialPrograms(), name)
+    }
+
+    fun createForCell(cell: SequencerCell, programs: List<Int>, name: String = "${cell.filePath.substringAfterLast('/')} instruments"): SequencerCell? {
         val set = create(name, programs) ?: return null
         return cell.copy(instrumentSetId = set.id, trackInstrumentSets = emptyMap())
+    }
+
+    /** Reuse old range only when this cell is its sole persistent owner. */
+    fun replaceForCell(cell: SequencerCell, oldSetId: String?, referencedIds: Set<String>, programs: List<Int>, name: String): SequencerCell? = synchronized(lock) {
+        val existing = read().firstOrNull { it.id == oldSetId }
+        if (existing != null && oldSetId !in referencedIds) {
+            write(read().map { if (it.id == oldSetId) it.copy(name = name, programs = normalize(programs)) else it })
+            return@synchronized cell.copy(instrumentSetId = oldSetId, trackInstrumentSets = emptyMap())
+        }
+        val created = create(name, programs) ?: return@synchronized null
+        cell.copy(instrumentSetId = created.id, trackInstrumentSets = emptyMap())
     }
 
     fun createForCell(cell: SequencerCell, name: String = "${cell.filePath.substringAfterLast('/')} instruments"): SequencerCell? =
         createForCell(cell, prefs, name)
 
     fun updatePreset(id: String, channel: Int, packedBankProgram: Int): Boolean {
-        if (channel !in 0..15 || packedBankProgram !in 0..0xffff) return false
+        if (channel !in 0..15 || packedBankProgram !in 0..0x3fff_ff) return false
         val set = all().firstOrNull { it.id == id } ?: return false
         return updatePrograms(id, set.programs.toMutableList().also { it[channel] = packedBankProgram })
     }
@@ -46,7 +70,7 @@ class FileInstrumentSetStore(private val prefs: SharedPreferences) {
         if (sets.size >= 15) return@synchronized null
         val used = sets.map { it.channelBase }.toSet()
         val base = (16..240 step 16).firstOrNull { it !in used } ?: return@synchronized null
-        val item = InstrumentSet(java.util.UUID.randomUUID().toString(), name, List(16) { mainPrograms.getOrElse(it) { 0 }.coerceIn(0, 0xffff) }, base)
+        val item = InstrumentSet(java.util.UUID.randomUUID().toString(), name, normalize(mainPrograms), base)
         write(sets + item)
         item
     }
@@ -54,7 +78,7 @@ class FileInstrumentSetStore(private val prefs: SharedPreferences) {
     fun updatePrograms(id: String, programs: List<Int>): Boolean = synchronized(lock) {
         val sets = read(); val index = sets.indexOfFirst { it.id == id }
         if (index < 0) return@synchronized false
-        write(sets.toMutableList().also { it[index] = it[index].copy(programs = List(16) { i -> programs.getOrElse(i) { 0 }.coerceIn(0, 0xffff) }) })
+        write(sets.toMutableList().also { it[index] = it[index].copy(programs = normalize(programs)) })
         true
     }
 
@@ -70,6 +94,7 @@ class FileInstrumentSetStore(private val prefs: SharedPreferences) {
     } catch (_: Exception) { emptyList() }
 
     private fun write(sets: List<InstrumentSet>) { prefs.edit().putString(KEY, json.encodeToString(sets)).apply() }
+    private fun normalize(programs: List<Int>) = List(16) { programs.getOrElse(it) { 0 }.coerceIn(0, 0x3fff_ff) }
 }
 
 enum class InstrumentSetSource { MAIN, FILE }

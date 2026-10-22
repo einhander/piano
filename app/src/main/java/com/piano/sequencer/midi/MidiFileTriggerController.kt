@@ -365,6 +365,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
 
         trackedSlotExecutor.execute {
             val svc = service ?: return@execute
+            val cell = ensureFileSet(exactCurrent) ?: return@execute
             val key = cell.triggerKey()
             val slot = allocateSlot(key)
             synchronized(slotLocks[slot]) {
@@ -583,7 +584,8 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     cancelTestPlayAutoStop()
                     return@synchronized
                 }
-                val cell = store?.get(cellId)
+                val storedCell = store?.get(cellId)
+                val cell = storedCell?.let { ensureFileSet(it) } ?: if (storedCell == null) null else return@synchronized
                 if (cell != null && !applyFileSetPrograms(svc, cell)) return@synchronized
                 val selection = resolveSelection(svc, filePath, selectedTracks, trackChannels, channel, cell)
                 var loadResult = svc.loadMidiFileSlot(testPlaySlot, filePath, tempo, loop, selection.first, selection.second, false)
@@ -877,7 +879,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
 
     /** Queue all 16 presets before file load/start; no FluidSynth API is called here directly. */
     private fun applyFileSetPrograms(svc: PlaybackService, cell: SequencerCell): Boolean {
-        val id = cell.instrumentSetId ?: return true
+        val id = cell.instrumentSetId ?: return false
         val set = FileInstrumentSetStore.get(appContext).all().firstOrNull { it.id == id }
         if (set == null) {
             AppLogger.info("TRIG", "missing file instrument set id=$id; playback rejected")
@@ -891,6 +893,28 @@ class MidiFileTriggerController private constructor(appContext: Context) {
             }
         }
         return true
+    }
+
+    /** Repair legacy FILE ownership on worker before route selection or synth commands. */
+    private fun ensureFileSet(cell: SequencerCell): SequencerCell? {
+        if (cell.mode != MODE_FILE || cell.filePath.isEmpty()) return cell
+        val sets = FileInstrumentSetStore.get(appContext)
+        if (cell.instrumentSetId?.let { id -> sets.all().any { it.id == id } } == true) return cell
+        val file = java.io.File(cell.filePath)
+        if (!file.isFile) {
+            AppLogger.info("TRIG", "FILE set repair failed: missing MIDI file ${cell.filePath}")
+            showToast("Cannot play MIDI file: file or FILE instruments unavailable")
+            return null
+        }
+        val repaired = sets.createForCell(cell, MidiInitialPrograms.fromFile(file))
+            ?.copy(trackInstrumentSets = cell.trackInstrumentSets)
+        if (repaired == null) {
+            AppLogger.info("TRIG", "FILE set repair failed: capacity full cell=${cell.id}")
+            showToast("Cannot play MIDI file: FILE instrument-set capacity full")
+            return null
+        }
+        store?.set(repaired)
+        return repaired
     }
 }
 
@@ -906,7 +930,7 @@ internal fun resolveCellTrackChannel(
     val source = when (choice) {
         TRACK_INSTRUMENT_MAIN -> InstrumentSetSource.MAIN
         TRACK_INSTRUMENT_FILE -> InstrumentSetSource.FILE
-        else -> if (cell.instrumentSetId != null) InstrumentSetSource.FILE else InstrumentSetSource.MAIN
+        else -> InstrumentSetSource.FILE
     }
     if (source == InstrumentSetSource.MAIN) return resolveSynthChannel(localChannel, source, 0)
     val base = sets.firstOrNull { it.id == cell.instrumentSetId }?.channelBase ?: return -1

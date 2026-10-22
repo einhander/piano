@@ -933,8 +933,8 @@ class MidiFileMappingTest {
         val store = FileInstrumentSetStore(prefs)
         val imported = store.createForCell(SequencerCell(id = 7, filePath = "/music/song.mid"), prefs)!!
         val first = store.all().single()
-        assertEquals(0x0102, first.programs[0])
-        assertEquals(0x0304, first.programs[1])
+        assertEquals(0, first.programs[0])
+        assertEquals(0, first.programs[1])
 
         val bases = mutableSetOf(first.channelBase)
         repeat(14) { bases.add(store.create("set-$it", emptyList())!!.channelBase) }

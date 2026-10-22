@@ -15,6 +15,7 @@ import android.widget.ImageView
 import androidx.appcompat.app.AlertDialog
 import com.piano.sequencer.midi.TRACK_INSTRUMENT_FILE
 import com.piano.sequencer.midi.TRACK_INSTRUMENT_MAIN
+import com.piano.sequencer.R
 
 /**
  * Track selection dialog for multi-track MIDI files.
@@ -126,6 +127,11 @@ object TrackSelectionDialog {
                 orientation = LinearLayout.VERTICAL
                 setPadding(0, dp(context, 4), 0, dp(context, 4))
             }
+            val chevron = ImageView(context).apply {
+                setImageResource(R.drawable.ic_track_chevron_down)
+                contentDescription = "Expand track settings"
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }
             val header = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = android.view.Gravity.CENTER_VERTICAL
@@ -136,7 +142,7 @@ object TrackSelectionDialog {
                 addView(check)
                 addView(setSummary)
                 addView(channelSummary)
-                addView(ImageView(context).apply { setImageResource(android.R.drawable.arrow_down_float); contentDescription = "Expand track settings" })
+                addView(chevron, LinearLayout.LayoutParams(dp(context, 24), dp(context, 24)))
             }
             val detail = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
@@ -144,7 +150,13 @@ object TrackSelectionDialog {
                 addView(setting(context, "Output channel", spinner))
                 visibility = View.GONE
             }
-            header.setOnClickListener { detail.visibility = if (detail.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
+            header.contentDescription = "Track ${i + 1}: $name. Collapsed. Double tap to expand settings"
+            header.setOnClickListener {
+                val nowExpanded = detail.visibility != View.VISIBLE
+                detail.visibility = if (nowExpanded) View.VISIBLE else View.GONE
+                chevron.setImageResource(if (nowExpanded) R.drawable.ic_track_chevron_up else R.drawable.ic_track_chevron_down)
+                header.contentDescription = "Track ${i + 1}: $name. ${if (nowExpanded) "Expanded" else "Collapsed"}. Double tap to ${if (nowExpanded) "collapse" else "expand"} settings"
+            }
             row.addView(header)
             row.addView(detail)
             headers[i] = header
