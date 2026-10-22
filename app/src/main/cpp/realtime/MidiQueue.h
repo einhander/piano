@@ -15,6 +15,7 @@ struct MidiMessage {
     // held-note bitmap in FluidSynthEngine::processLiveMidi and the recorder
     // in NativeEngine::midiThreadFunc (records only timestamp == 0).
     int64_t timestamp;
+    uint16_t channel = 0xFFFF; // Explicit logical channel for file playback
 };
 
 class MidiQueue {

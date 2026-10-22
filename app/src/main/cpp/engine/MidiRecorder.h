@@ -12,6 +12,7 @@ struct RecordedMidiEvent {
     uint8_t data1;
     uint8_t data2;
     uint8_t trackId;   // Source track/channel (0-15)
+    uint16_t channel = 0xFFFF; // Optional logical channel; 0xFFFF means status nibble
 };
 
 class MidiRecorder {

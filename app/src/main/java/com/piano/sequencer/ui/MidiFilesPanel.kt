@@ -85,8 +85,8 @@ class MidiFilesPanel @JvmOverloads constructor(
      * list of checked track indices (empty = cell silent) and the per-track
      * channel map (track index → 0-15; "From file" tracks omitted).
      */
-    var onTrackSelection: (cellId: Int, selectedTracks: List<Int>, trackChannels: Map<Int, Int>) -> Unit =
-        { _, _, _ -> }
+    var onTrackSelection: (cellId: Int, selectedTracks: List<Int>, trackChannels: Map<Int, Int>, trackInstrumentSets: Map<Int, String>) -> Unit =
+        { _, _, _, _ -> }
 
     // ── State ──
 
@@ -460,9 +460,10 @@ class MidiFilesPanel @JvmOverloads constructor(
                 val cur = store.get(cell.id) ?: return@setOnClickListener
                 if (cur.filePath != path || cur.mode != MODE_FILE) return@setOnClickListener
                 TrackSelectionDialog.show(
-                    context, names, cur.selectedTracks, cur.trackChannels
-                ) { selected, channels ->
-                    onTrackSelection(cur.id, selected, channels)
+                    context, names, cur.selectedTracks, cur.trackChannels, cur.trackInstrumentSets,
+                    com.piano.sequencer.midi.FileInstrumentSetStore.get(context).all().firstOrNull { it.id == cur.instrumentSetId }?.name
+                ) { selected, channels, sets ->
+                    onTrackSelection(cur.id, selected, channels, sets)
                 }
             }
         }

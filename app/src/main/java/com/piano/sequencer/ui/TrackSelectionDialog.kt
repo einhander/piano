@@ -14,6 +14,8 @@ import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
+import com.piano.sequencer.midi.TRACK_INSTRUMENT_FILE
+import com.piano.sequencer.midi.TRACK_INSTRUMENT_MAIN
 
 /**
  * Track selection dialog for multi-track MIDI files.
@@ -45,7 +47,9 @@ object TrackSelectionDialog {
         trackNames: List<String>,
         initialSelected: List<Int>?,
         initialChannels: Map<Int, Int>,
-        onApply: (selectedTracks: List<Int>, trackChannels: Map<Int, Int>) -> Unit
+        initialInstrumentSets: Map<Int, String> = emptyMap(),
+        fileSetName: String? = null,
+        onApply: (selectedTracks: List<Int>, trackChannels: Map<Int, Int>, trackInstrumentSets: Map<Int, String>) -> Unit
     ) {
         val list = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -54,6 +58,7 @@ object TrackSelectionDialog {
 
         val checks = arrayOfNulls<CheckBox>(trackNames.size)
         val spinners = arrayOfNulls<Spinner>(trackNames.size)
+        val setSpinners = arrayOfNulls<Spinner>(trackNames.size)
 
         for (i in trackNames.indices) {
             if (i > 0) list.addView(divider(context))
@@ -95,9 +100,19 @@ object TrackSelectionDialog {
             row.addView(check)
             row.addView(nameText)
             row.addView(spinner)
+            val sets = listOf("Main instruments", "This file: ${fileSetName ?: "File set"}")
+            val setSpinner = Spinner(context).apply {
+                adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, sets)
+                val initialSet = initialInstrumentSets[i]
+                setSelection(if (initialSet == TRACK_INSTRUMENT_FILE ||
+                    (initialSet == null && fileSetName != null)) 1 else 0)
+            }
+            setSpinner.layoutParams = LinearLayout.LayoutParams(dp(context, 116), ViewGroup.LayoutParams.WRAP_CONTENT)
+            row.addView(setSpinner)
 
             checks[i] = check
             spinners[i] = spinner
+            setSpinners[i] = setSpinner
             list.addView(row)
         }
 
@@ -121,12 +136,14 @@ object TrackSelectionDialog {
             .setPositiveButton("OK") { _, _ ->
                 val selected = ArrayList<Int>(trackNames.size)
                 val channels = HashMap<Int, Int>()
+                val instruments = HashMap<Int, String>()
                 for (i in trackNames.indices) {
                     if (checks[i]!!.isChecked) selected.add(i)
                     val pos = spinners[i]!!.selectedItemPosition
                     if (pos > 0) channels[i] = pos - 1
+                    instruments[i] = if (setSpinners[i]!!.selectedItemPosition == 1) TRACK_INSTRUMENT_FILE else TRACK_INSTRUMENT_MAIN
                 }
-                onApply(selected, channels)
+                onApply(selected, channels, instruments)
             }
             .setNegativeButton("Cancel", null)
             .show()

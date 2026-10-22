@@ -305,8 +305,8 @@ private:
     std::atomic<int> mChorusOn{1};
     std::atomic<int> mInterps{4};
     // Packed bank<<8|program per channel; -1 = no explicit program.
-    std::atomic<int> mChannelPrograms[16];
-    std::atomic<int> mChannelVolumes[16];
+    std::atomic<int> mChannelPrograms[256];
+    std::atomic<int> mChannelVolumes[256];
 
     // Active voice count (audio thread refreshes after each render).
     std::atomic<int> mActiveVoices{0};
@@ -342,9 +342,9 @@ private:
     // mHeldVel[ch][note] → last keyboard velocity for that (ch, note).
     // A file/flush note-off for a held (ch, note) re-arms it with a direct
     // fluid_synth_noteon (not queued → invisible to the MIDI recorder).
-    uint8_t mHeldNotes[16][128]{};
-    uint8_t mHeldVel[16][128]{};
-    uint8_t mActiveNotes[16][128]{};
+    uint8_t mHeldNotes[256][128]{};
+    uint8_t mHeldVel[256][128]{};
+    uint8_t mActiveNotes[256][128]{};
     std::atomic<uint16_t> mActiveChannelMask{0};
     std::atomic<uint16_t> mRecentNoteOnMask{0};
     std::atomic<bool> mResetActiveNotes{false};

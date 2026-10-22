@@ -20,6 +20,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.Button
 import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
@@ -27,6 +28,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.piano.sequencer.service.PlaybackService
+import com.piano.sequencer.midi.FileInstrumentSetStore
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -95,6 +97,10 @@ class InstrumentActivity : AppCompatActivity() {
 
     // Deduplicated preset list of the loaded SoundFont (empty when no SF2)
     private var instruments: List<Instrument> = emptyList()
+    private val selectedSetId: String? by lazy { intent.getStringExtra(EXTRA_SET_ID) }
+    private val fileSets by lazy { FileInstrumentSetStore.get(this) }
+
+    companion object { const val EXTRA_SET_ID = "instrument_set_id" }
 
     @Volatile private var service: PlaybackService? = null
     private val serviceConnection = object : ServiceConnection {
@@ -132,6 +138,31 @@ class InstrumentActivity : AppCompatActivity() {
 
         channelList = findViewById(R.id.channelList)
         tvHint = findViewById(R.id.tvHint)
+        val setSelector = Button(this).apply {
+            isAllCaps = false
+            textSize = 14f
+            setOnClickListener { chooseInstrumentSet() }
+        }
+        (tvHint.parent as? android.view.ViewGroup)?.let { parent ->
+            val index = parent.indexOfChild(tvHint)
+            parent.addView(setSelector, index.coerceAtLeast(0) + 1,
+                android.view.ViewGroup.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                ))
+        }
+
+        val setId = selectedSetId
+        if (setId != null) {
+            val set = fileSets.all().firstOrNull { it.id == setId }
+            if (set == null) { Toast.makeText(this, "File instrument set no longer exists", Toast.LENGTH_LONG).show(); finish(); return }
+            supportActionBar?.title = set.name
+            tvHint.text = "Editing file set · changes stay with this MIDI file"
+            setSelector.text = "Instrument set: ${set.name} ▾"
+        } else {
+            setSelector.text = "Instrument set: Main instruments ▾"
+        }
+        tvHint.setOnClickListener { chooseInstrumentSet() }
 
         buildChannelRows()
 
@@ -249,7 +280,8 @@ class InstrumentActivity : AppCompatActivity() {
 
             val jsonStr = svc.getInstruments()
             val parsed = parseInstruments(jsonStr)
-            val current = IntArray(16) { ch -> svc.getChannelProgram(ch) }
+            val current = selectedSetId?.let { id -> fileSets.all().firstOrNull { it.id == id }?.programs?.toIntArray() }
+                ?: IntArray(16) { ch -> svc.getChannelProgram(ch) }
             // Diagnostics: pinpoint where the chain breaks when the SF2 is
             // loaded but the list comes back empty.
             AppLogger.info(
@@ -405,6 +437,19 @@ class InstrumentActivity : AppCompatActivity() {
         search.post { imm?.showSoftInput(search, InputMethodManager.SHOW_IMPLICIT) }
     }
 
+    private fun chooseInstrumentSet() {
+        val sets = fileSets.all()
+        val labels = listOf("Main instruments") + sets.map { it.name }
+        AlertDialog.Builder(this).setTitle("Choose instrument set")
+            .setItems(labels.toTypedArray()) { _, which ->
+                val target = if (which == 0) null else sets[which - 1].id
+                startActivity(Intent(this, InstrumentActivity::class.java).apply {
+                    if (target != null) putExtra(EXTRA_SET_ID, target)
+                })
+                finish()
+            }.show()
+    }
+
     // "name (bank N)" when the preset lives outside bank 0, so identical
     // preset names in different banks stay distinguishable
     private fun displayName(instrument: Instrument): String =
@@ -413,6 +458,21 @@ class InstrumentActivity : AppCompatActivity() {
 
     // Apply bank+program to the channel live; update the row label on success
     private fun applyInstrument(channel: Int, instrument: Instrument) {
+        val setId = selectedSetId
+        if (setId != null) {
+            val set = fileSets.all().firstOrNull { it.id == setId } ?: return
+            val packed = (instrument.bank shl 8) or instrument.program
+            executor.execute {
+                val svc = service
+                val applied = svc?.setChannelProgram(set.channelBase + channel, instrument.bank, instrument.program) == true
+                val saved = fileSets.updatePreset(setId, channel, packed)
+                runOnUiThread {
+                    if (applied && saved) rowNameLabels[channel]?.text = instrument.name
+                    else Toast.makeText(this, "Could not apply or save file preset", Toast.LENGTH_SHORT).show()
+                }
+            }
+            return
+        }
         val svc = service ?: return
         executor.execute {
             val ok = svc.setChannelProgram(channel, instrument.bank, instrument.program)

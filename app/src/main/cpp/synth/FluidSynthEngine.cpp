@@ -12,7 +12,7 @@
 // (file I/O) stays on a worker thread and uses the double-buffered synth swap.
 
 FluidSynthEngine::FluidSynthEngine() {
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < 256; i++) {
         mChannelPrograms[i].store(-1, std::memory_order_relaxed);
         mChannelVolumes[i].store(100, std::memory_order_relaxed);
     }
@@ -106,6 +106,7 @@ bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
         }
         fluid_settings_setnum(mSettings[i], "synth.sample-rate", sampleRate);
         fluid_settings_setint(mSettings[i], "synth.audio-groups", kAudioGroups);
+        fluid_settings_setint(mSettings[i], "synth.midi-channels", 256);
         fluid_settings_setint(mSettings[i], "synth.audio-channels", kAudioGroups);
         // Preserve FluidSynth's default single shared effects unit. Its return
         // is mixed after dry channel buses; it is deliberately not attributed
@@ -279,6 +280,7 @@ bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
     if (success) {
         fluid_settings_setnum(newSettings, "synth.sample-rate", newRate);
         fluid_settings_setint(newSettings, "synth.audio-groups", kAudioGroups);
+        fluid_settings_setint(newSettings, "synth.midi-channels", 256);
         fluid_settings_setint(newSettings, "synth.audio-channels", kAudioGroups);
         fluid_settings_setint(newSettings, "synth.effects-groups", 1);
         fluid_settings_setint(newSettings, "synth.cpu-cores", 1);
@@ -481,7 +483,7 @@ void FluidSynthEngine::processCommands() {
 }
 
 void FluidSynthEngine::refreshActiveChannelBit(int channel) {
-    if (channel < 0 || channel >= 16) return;
+    if (channel < 0 || channel >= 256) return;
     bool any = false;
     for (int note = 0; note < 128; ++note) {
         if (mActiveNotes[channel][note] != 0) {
@@ -489,9 +491,11 @@ void FluidSynthEngine::refreshActiveChannelBit(int channel) {
             break;
         }
     }
-    const auto bit = static_cast<uint16_t>(1u << channel);
-    if (any) mActiveChannelMask.fetch_or(bit, std::memory_order_relaxed);
-    else mActiveChannelMask.fetch_and(static_cast<uint16_t>(~bit), std::memory_order_relaxed);
+    if (channel < 16) {
+        const auto bit = static_cast<uint16_t>(1u << channel);
+        if (any) mActiveChannelMask.fetch_or(bit, std::memory_order_relaxed);
+        else mActiveChannelMask.fetch_and(static_cast<uint16_t>(~bit), std::memory_order_relaxed);
+    }
 }
 
 void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd& cmd) {
@@ -531,7 +535,7 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             break;
         case SynthCmdType::PANIC:
             // Send panic commands to FluidSynth
-            for (int ch = 0; ch < 16; ch++) {
+            for (int ch = 0; ch < 256; ch++) {
                 fluid_synth_all_notes_off(synth, ch);
                 fluid_synth_all_sounds_off(synth, ch);
                 fluid_synth_cc(synth, ch, 123, 0);  // MIDI reset
@@ -599,7 +603,8 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
 
     uint8_t status = m.status;
     uint8_t type = status & 0xF0;
-    uint8_t channel = status & 0x0F;
+    int channel = m.channel == 0xFFFF ? (status & 0x0F) : m.channel;
+    if (channel < 0 || channel >= 256) return;
     const bool isLive = (m.timestamp == 0);
     bool noteOff = false;
 
@@ -608,8 +613,10 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
             if (m.data2 > 0) {
                 fluid_synth_noteon(synth, channel, m.data1, m.data2);
                 mActiveNotes[channel][m.data1] = 1;
-                mActiveChannelMask.fetch_or(static_cast<uint16_t>(1u << channel), std::memory_order_relaxed);
-                mRecentNoteOnMask.fetch_or(static_cast<uint16_t>(1u << channel), std::memory_order_relaxed);
+                if (channel < 16) {
+                    mActiveChannelMask.fetch_or(static_cast<uint16_t>(1u << channel), std::memory_order_relaxed);
+                    mRecentNoteOnMask.fetch_or(static_cast<uint16_t>(1u << channel), std::memory_order_relaxed);
+                }
                 if (isLive) {
                     mHeldNotes[channel][m.data1] = 1;
                     mHeldVel[channel][m.data1] = m.data2;
@@ -640,12 +647,12 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
             fluid_synth_cc(synth, channel, m.data1, m.data2);
             // Preserve live CC7 as synth desired state across SF2/rate swaps.
             if (m.data1 == 7) {
-                mChannelVolumes[channel].store(m.data2, std::memory_order_relaxed);
+                if (channel < 16) mChannelVolumes[channel].store(m.data2, std::memory_order_relaxed);
             }
             if (m.data1 == 120 || m.data1 == 123) {
                 std::memset(mActiveNotes[channel], 0, sizeof(mActiveNotes[channel]));
                 refreshActiveChannelBit(channel);
-                mRecentNoteOnMask.fetch_and(static_cast<uint16_t>(~(1u << channel)), std::memory_order_relaxed);
+                if (channel < 16) mRecentNoteOnMask.fetch_and(static_cast<uint16_t>(~(1u << channel)), std::memory_order_relaxed);
             }
             break;
         case 0xC0: // Program Change
@@ -681,7 +688,7 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
     if (noteOff && mHeldNotes[channel][m.data1]) {
         fluid_synth_noteon(synth, channel, m.data1, mHeldVel[channel][m.data1]);
         mActiveNotes[channel][m.data1] = 1;
-        mActiveChannelMask.fetch_or(static_cast<uint16_t>(1u << channel), std::memory_order_relaxed);
+        if (channel < 16) mActiveChannelMask.fetch_or(static_cast<uint16_t>(1u << channel), std::memory_order_relaxed);
         mRearmCount++;
         mLastRearmVel = mHeldVel[channel][m.data1];
     }
@@ -880,7 +887,7 @@ void FluidSynthEngine::setInterps(int method) {
 
 bool FluidSynthEngine::setChannelProgram(int channel, int bank, int program) {
     if (!mInitialized.load()) return false;
-    if (channel < 0 || channel > 15) return false;
+    if (channel < 0 || channel > 255) return false;
     if (bank < 0) bank = 0;
     if (bank > 16383) bank = 16383;
     if (program < 0 || program > 127) program = 0;
@@ -892,7 +899,7 @@ bool FluidSynthEngine::setChannelProgram(int channel, int bank, int program) {
 
 bool FluidSynthEngine::getChannelProgram(int channel, int& bank, int& program) const {
     if (!mInitialized.load()) return false;
-    if (channel < 0 || channel > 15) return false;
+    if (channel < 0 || channel > 255) return false;
     int packed = mChannelPrograms[channel].load(std::memory_order_relaxed);
     if (packed < 0) {
         bank = 0;

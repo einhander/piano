@@ -107,6 +107,7 @@ static MidiFilePlayer::CacheEntry buildCacheEntry(const char* path, const struct
         MidiFileEvent outEvt;
         outEvt.tick = evt.tick;
         outEvt.status = evt.status;
+        outEvt.channel = evt.channel;
         outEvt.data1 = evt.data1;
         outEvt.data2 = evt.data2;
         outEvt.trackId = evt.trackId;
@@ -240,9 +241,22 @@ std::vector<MidiFileEvent> MidiFilePlayer::applyTrackSelection(
         if (idx < 0) continue;
         MidiFileEvent outEvt = evt;
         int32_t ch = trackChannels ? trackChannels[idx] : -1;
-        if (ch < -1 || ch > 15) ch = -1;
-        if (ch >= 0 && outEvt.status < 0xF0) {
-            outEvt.status = (outEvt.status & 0xF0) | static_cast<uint8_t>(ch);
+        if (ch == -1) {
+            outEvt.channel = 0xFFFF;
+        } else if (ch >= 0 && ch <= 255) {
+            // Edited FILE sets own their bank/program on extended channels.
+            // Drop MIDI program and bank-select events there, retain all others.
+            const uint8_t type = evt.status & 0xF0;
+            if (ch >= 16 && (type == 0xC0 || (type == 0xB0 && (evt.data1 == 0 || evt.data1 == 32)))) continue;
+            outEvt.channel = static_cast<uint16_t>(ch);
+        } else if (ch >= 272 && ch <= 496 && ((ch - 256) % 16) == 0) {
+            const int32_t base = ch - 256;
+            if (base < 16 || base > 240 || evt.status >= 0xF0) continue;
+            const uint8_t type = evt.status & 0xF0;
+            if (type == 0xC0 || (type == 0xB0 && (evt.data1 == 0 || evt.data1 == 32))) continue;
+            outEvt.channel = static_cast<uint16_t>(base + (evt.status & 0x0F));
+        } else {
+            continue;
         }
         out.push_back(outEvt);
     }
@@ -571,7 +585,7 @@ void MidiFilePlayer::firePendingEvents(int slot, MidiQueue* liveMidiQueue) {
 
         // Track active notes
         uint8_t type = evt.status & 0xF0;
-        uint8_t channel = evt.status & 0x0F;
+        uint16_t channel = evt.channel == 0xFFFF ? (evt.status & 0x0F) : evt.channel;
 
         if (type == 0x90 && evt.data2 > 0) {
             // Note on (velocity > 0) → mark as active
@@ -599,6 +613,7 @@ void MidiFilePlayer::firePendingEvents(int slot, MidiQueue* liveMidiQueue) {
         msg.data2 = evt.data2;
         int64_t ts = static_cast<int64_t>(s->currentTick);
         msg.timestamp = ts > 0 ? ts : 1;
+        msg.channel = channel;
         liveMidiQueue->push(msg);
 
         s->eventIndex++;
@@ -609,7 +624,7 @@ void MidiFilePlayer::flushActiveNotes(int slot, MidiQueue* liveMidiQueue) {
     MidiFileSlot* s = &mSlots[slot];
     if (!s->loaded.load(std::memory_order_acquire)) return;
 
-    for (int ch = 0; ch < 16; ch++) {
+    for (int ch = 0; ch < 256; ch++) {
         for (int note = 0; note < 128; note++) {
             int wordIdx = note / 64;
             int bitIdx = note % 64;
@@ -628,6 +643,7 @@ void MidiFilePlayer::flushActiveNotes(int slot, MidiQueue* liveMidiQueue) {
                 // clamp the truncated value to 1.
                 int64_t ts = static_cast<int64_t>(s->currentTick);
                 msg.timestamp = ts > 0 ? ts : 1;
+                msg.channel = static_cast<uint16_t>(ch);
                 liveMidiQueue->push(msg);
 
                 // Clear the bit

@@ -127,9 +127,9 @@ int main() {
     // 3) per-track remap
     {
         std::vector<MidiFileEvent> in = {{0, 0x90, 60, 1, 0}, {0, 0x91, 61, 1, 1}};
-        int32_t sel[] = {0, 1}; int32_t ch[] = {5, -1};
+        int32_t sel[] = {0, 1}; int32_t ch[] = {16, -1};
         auto out = MidiFilePlayer::applyTrackSelection(in, sel, 2, ch);
-        if (out.size() != 2 || out[0].status != 0x95 || out[1].status != 0x91) return fail("remap wrong");
+        if (out.size() != 2 || out[0].status != 0x90 || out[0].channel != 16 || out[1].status != 0x91) return fail("remap wrong");
         std::puts("PerTrackRemap: PASS");
     }
 
@@ -139,6 +139,26 @@ int main() {
         auto out = MidiFilePlayer::applyTrackSelection(in, nullptr, 0, nullptr);
         if (out.size() != 1 || out[0].status != 0xFF) return fail("selectedCount zero wrong");
         std::puts("SelectedCountZero: PASS");
+    }
+
+    // additive file-bank route: original MIDI channel 2 maps to logical 18; status untouched.
+    {
+        std::vector<MidiFileEvent> in = {{0, 0x92, 60, 1, 0}};
+        int32_t sel[] = {0}; int32_t ch[] = {272}; // 256 + base 16
+        auto out = MidiFilePlayer::applyTrackSelection(in, sel, 1, ch);
+        if (out.size() != 1 || out[0].channel != 18 || out[0].status != 0x92)
+            return fail("additive source-channel route wrong");
+        std::puts("AdditiveSourceChannel: PASS");
+    }
+
+    // File-set routing keeps user-selected presets by suppressing embedded bank/program changes.
+    {
+        std::vector<MidiFileEvent> in = {{0, 0xC0, 5, 0, 0}, {0, 0xB0, 0, 1, 0}, {0, 0x90, 60, 1, 0}};
+        int32_t sel[] = {0}; int32_t ch[] = {16};
+        auto out = MidiFilePlayer::applyTrackSelection(in, sel, 1, ch);
+        if (out.size() != 1 || out[0].status != 0x90 || out[0].channel != 16)
+            return fail("file-set program override filtering wrong");
+        std::puts("FileSetProgramFilter: PASS");
     }
 
     // 5) track names
