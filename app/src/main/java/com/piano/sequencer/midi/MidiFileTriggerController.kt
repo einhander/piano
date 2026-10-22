@@ -398,6 +398,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     val t2 = SystemClock.uptimeMillis()
                     if (!applyFileSetPrograms(svc, cell)) return@synchronized
                     val selection = resolveSelection(svc, cell.filePath, cell.selectedTracks, cell.trackChannels, cell.channel, cell)
+                    logFileSetSnapshot(svc, "performance-before", cell.id, cell.filePath, cell, selection)
                     var loadResult = svc.loadMidiFileSlot(slot, cell.filePath, cell.tempo, cell.loop, selection.first, selection.second, true)
                     var retries = 0
                     while (loadResult == -4 && retries < 5) {
@@ -418,6 +419,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                         return@synchronized
                     }
                     loadedFilePerSlot[slot] = Triple(cell.filePath, cell.channel, routeFingerprint)
+                    logFileSetSnapshot(svc, "performance-start", cell.id, cell.filePath, cell, selection)
                     AppLogger.info("TRIG", "loadAndStart slot=$slot load=${t3 - t2}ms total=${t3 - t0}ms")
                 }
                 // Tail: read the frame markers ~100ms later (start path only — on the stop
@@ -588,6 +590,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 val cell = storedCell?.let { ensureFileSet(it) } ?: if (storedCell == null) null else return@synchronized
                 if (cell != null && !applyFileSetPrograms(svc, cell)) return@synchronized
                 val selection = resolveSelection(svc, filePath, selectedTracks, trackChannels, channel, cell)
+                logFileSetSnapshot(svc, "test-before", cellId, filePath, cell, selection)
                 var loadResult = svc.loadMidiFileSlot(testPlaySlot, filePath, tempo, loop, selection.first, selection.second, false)
                 var retries = 0
                 while (loadResult == -4 && retries < 3) {
@@ -607,6 +610,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     return@synchronized
                 }
                 svc.startMidiFileSlot(testPlaySlot)
+                logFileSetSnapshot(svc, "test-start", cellId, filePath, cell, selection)
                 testPlayPlaying = true
                 testPlayCellId = cellId
                 mainHandler.post { onTestPlayStateChanged?.invoke(cellId, true) }
@@ -893,6 +897,28 @@ class MidiFileTriggerController private constructor(appContext: Context) {
             }
         }
         return true
+    }
+
+    /** Desired MAIN program cache snapshot read on slot worker; not proof of synth output/state. */
+    private fun logFileSetSnapshot(
+        svc: PlaybackService,
+        phase: String,
+        cellId: Int,
+        filePath: String,
+        cell: SequencerCell?,
+        selection: Pair<IntArray, IntArray>
+    ) {
+        val sets = FileInstrumentSetStore.get(appContext)
+        val set = cell?.instrumentSetId?.let { id -> sets.all().firstOrNull { it.id == id } }
+        val main = (0..15).joinToString(",") { ch ->
+            val packed = svc.getChannelProgram(ch)
+            "$ch:${packed shr 8}/${packed and 0xff}"
+        }
+        val choices = selection.first.indices.joinToString(",") { i ->
+            val track = selection.first[i]
+            "$track:${cell?.trackInstrumentSets?.get(track) ?: "default"}->${selection.second[i]}"
+        }
+        AppLogger.info("FILESET", "$phase cell=$cellId file=${File(filePath).name} set=${cell?.instrumentSetId} base=${set?.channelBase} selected=${selection.first.contentToString()} routes=${selection.second.contentToString()} choices={$choices} MAIN-desired-cache={$main}; snapshot is desired cache, not actual synth state/output")
     }
 
     /** Repair legacy FILE ownership on worker before route selection or synth commands. */

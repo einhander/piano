@@ -375,6 +375,7 @@ class SequencerActivity : AppCompatActivity() {
                 // keeps its current tempo (today's behavior).
                 val fileTempo = service?.getMidiFileTempo(destFile.absolutePath) ?: -1f
                 val initialPrograms = com.piano.sequencer.midi.MidiInitialPrograms.fromFile(destFile)
+                val sourceName = destFile.name
                 runOnUiThread {
                     if (cellId != null) {
                         val store = MidiFileMappingStore.get(this@SequencerActivity)
@@ -398,13 +399,19 @@ class SequencerActivity : AppCompatActivity() {
                                  tempo = if (fileTempo > 0f) fileTempo.toDouble() else cur.tempo
                              )
                               val instrumentSets = FileInstrumentSetStore.get(this@SequencerActivity)
+                               val oldSetId = cur.instrumentSetId
                               val otherReferences = store.all().filter { it.id != cur.id }.mapNotNull { it.instrumentSetId }.toSet()
                               instrumentSets.removeUnreferenced(otherReferences + listOfNotNull(cur.instrumentSetId))
                               val withSet = instrumentSets.replaceForCell(imported, cur.instrumentSetId, otherReferences, initialPrograms, "${destFile.name} instruments")
                                if (withSet == null) {
                                    Toast.makeText(this@SequencerActivity, "Import failed: file instrument-set capacity full.", Toast.LENGTH_LONG).show()
                                    return@runOnUiThread
-                                } else store.set(withSet)
+                                } else {
+                                    store.set(withSet)
+                                    val revision = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "?" } catch (_: Exception) { "?" }
+                                    val compactPrograms = initialPrograms.mapIndexed { channel, packed -> "$channel:${packed shr 8}/${packed and 0xff}" }.joinToString(",")
+                                    AppLogger.info("FILESET", "import cell=$cellId file=$sourceName rev=$revision set=$oldSetId->${withSet.instrumentSetId} base=${oldSetId?.let { id -> instrumentSets.all().firstOrNull { it.id == id }?.channelBase } ?: "?"}->${instrumentSets.all().firstOrNull { it.id == withSet.instrumentSetId }?.channelBase} parsed={$compactPrograms} selected=${withSet.selectedTracks} channels=${withSet.trackChannels} choices=${withSet.trackInstrumentSets}")
+                                }
                         }
                     }
                     Toast.makeText(this@SequencerActivity, "Imported: ${destFile.name}", Toast.LENGTH_SHORT).show()
