@@ -5,7 +5,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.graphics.Color
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.os.IBinder
 import android.text.Editable
@@ -23,12 +27,15 @@ import android.widget.LinearLayout
 import android.widget.Button
 import android.widget.ListView
 import android.widget.TextView
+import android.widget.ImageButton
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.piano.sequencer.service.PlaybackService
 import com.piano.sequencer.midi.FileInstrumentSetStore
+import com.piano.sequencer.midi.MidiFileMappingStore
+import com.piano.sequencer.midi.MODE_FILE
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -52,6 +59,9 @@ class InstrumentActivity : AppCompatActivity() {
     // Instrument name label for each MIDI channel (0-15)
     private val rowNameLabels = arrayOfNulls<TextView>(16)
     private val noteIndicators = arrayOfNulls<View>(16)
+    private val channelRows = arrayOfNulls<View>(16)
+    private val rackButtons = arrayOfNulls<ImageButton>(16)
+    private var selectedChannel = -1
     @Volatile private var observingNotes = false
     @Volatile private var nativeChannelMask = 0
     private val noteListener: () -> Unit = {
@@ -110,6 +120,7 @@ class InstrumentActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed) return
             service = (binder as PlaybackService.PlaybackBinder).getService()
             refreshInstruments()
+            refreshRackStates()
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             service = null
@@ -214,7 +225,9 @@ class InstrumentActivity : AppCompatActivity() {
                     else
                         ColorDrawable(selector.data)
                 }
-                setPadding(dp(8), dp(12), dp(8), dp(12))
+                setPadding(dp(8), 0, dp(4), 0)
+                minimumHeight = dp(60)
+                layoutParams = LinearLayout.LayoutParams(-1, dp(60))
             }
 
             val channelLabel = TextView(this).apply {
@@ -225,11 +238,13 @@ class InstrumentActivity : AppCompatActivity() {
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
             }
-            channelLabel.layoutParams = LinearLayout.LayoutParams(dp(94), LinearLayout.LayoutParams.WRAP_CONTENT)
+            channelLabel.layoutParams = LinearLayout.LayoutParams(dp(58), LinearLayout.LayoutParams.WRAP_CONTENT)
+            channelLabel.textSize = 12f
 
             val nameLabel = TextView(this).apply {
                 text = getString(R.string.instrument_unknown)
-                textSize = 14f
+                textSize = 15f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
             }
@@ -247,19 +262,68 @@ class InstrumentActivity : AppCompatActivity() {
                 noteIndicators[ch] = this
             })
             row.addView(nameLabel)
-            row.addView(android.widget.Button(this).apply {
-                text = getString(R.string.instrument_effects_action)
-                contentDescription = getString(R.string.instrument_effects_channel_title, ch + 1)
-                minWidth = dp(64)
+            val rackButton = ImageButton(this).apply {
+                setImageDrawable(RackIconDrawable(false))
+                setBackgroundResource(android.R.drawable.list_selector_background)
+                scaleType = android.widget.ImageView.ScaleType.CENTER
+                contentDescription = "Effects rack disabled, channel ${ch + 1}. Tap to enable"
+                setOnClickListener { toggleRack(ch) }
+            }
+            row.addView(rackButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+            rackButtons[ch] = rackButton
+            row.addView(ImageButton(this).apply {
+                setImageResource(android.R.drawable.ic_menu_manage)
+                setBackgroundResource(android.R.drawable.list_selector_background)
+                scaleType = android.widget.ImageView.ScaleType.CENTER
+                contentDescription = "Edit effects for channel ${ch + 1}"
                 setOnClickListener {
                     startActivity(Intent(this@InstrumentActivity, InstrumentEffectsActivity::class.java)
                         .putExtra(InstrumentEffectsActivity.EXTRA_CHANNEL, ch))
                 }
             })
-            row.setOnClickListener { onChannelTapped(ch) }
+            row.setOnClickListener { selectChannel(ch); onChannelTapped(ch) }
 
             rowNameLabels[ch] = nameLabel
+            channelRows[ch] = row
             channelList.addView(row)
+        }
+        refreshRackStates()
+    }
+
+    private fun selectChannel(channel: Int) {
+        selectedChannel = channel
+        channelRows.forEachIndexed { index, row ->
+            row?.setBackgroundColor(if (index == channel) 0x223f51b5 else Color.TRANSPARENT)
+        }
+    }
+
+    private fun refreshRackStates() {
+        val svc = service ?: return
+        executor.execute {
+            val states = (0..15).map { runCatching { svc.isInstrumentRackEnabled(it) }.getOrDefault(false) }
+            runOnUiThread { states.forEachIndexed { ch, enabled -> showRackState(ch, enabled) } }
+        }
+    }
+
+    private fun showRackState(channel: Int, enabled: Boolean) {
+        rackButtons[channel]?.apply {
+            setImageDrawable(RackIconDrawable(enabled))
+            contentDescription = "Effects rack ${if (enabled) "enabled" else "disabled"}, channel ${channel + 1}. Tap to ${if (enabled) "disable" else "enable"}"
+        }
+    }
+
+    private fun toggleRack(channel: Int) {
+        val svc = service ?: return
+        val button = rackButtons[channel] ?: return
+        button.isEnabled = false
+        executor.execute {
+            val current = runCatching { svc.isInstrumentRackEnabled(channel) }.getOrDefault(false)
+            val success = runCatching { svc.setInstrumentRackEnabled(channel, !current) }.getOrDefault(false)
+            runOnUiThread {
+                button.isEnabled = true
+                if (success) showRackState(channel, !current)
+                else Toast.makeText(this, "Could not change effects rack", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -438,16 +502,31 @@ class InstrumentActivity : AppCompatActivity() {
     }
 
     private fun chooseInstrumentSet() {
-        val sets = fileSets.all()
-        val labels = listOf("Main instruments") + sets.map { it.name }
-        AlertDialog.Builder(this).setTitle("Choose instrument set")
-            .setItems(labels.toTypedArray()) { _, which ->
-                val target = if (which == 0) null else sets[which - 1].id
-                startActivity(Intent(this, InstrumentActivity::class.java).apply {
-                    if (target != null) putExtra(EXTRA_SET_ID, target)
-                })
-                finish()
-            }.show()
+        executor.execute {
+            val mappings = MidiFileMappingStore.get(applicationContext)
+            var capacityExhausted = false
+            mappings.all().forEach { cell ->
+                if (cell.mode == MODE_FILE && cell.filePath.isNotEmpty() && cell.instrumentSetId == null) {
+                    val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+                    val updated = fileSets.createForCell(cell, prefs)
+                    if (updated == null) capacityExhausted = true else mappings.set(updated)
+                }
+            }
+            val sets = fileSets.all()
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (capacityExhausted) Toast.makeText(this, "Could not create instrument sets for all MIDI files: 15-set limit reached", Toast.LENGTH_LONG).show()
+                val labels = listOf("Main instruments") + sets.map { it.name }
+                AlertDialog.Builder(this).setTitle("Choose instrument set")
+                    .setItems(labels.toTypedArray()) { _, which ->
+                        val target = if (which == 0) null else sets[which - 1].id
+                        startActivity(Intent(this, InstrumentActivity::class.java).apply {
+                            if (target != null) putExtra(EXTRA_SET_ID, target)
+                        })
+                        finish()
+                    }.show()
+            }
+        }
     }
 
     // "name (bank N)" when the preset lives outside bank 0, so identical
@@ -533,4 +612,36 @@ class InstrumentActivity : AppCompatActivity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+}
+
+/** Compact rack glyph; green status dot communicates active state at a glance. */
+private class RackIconDrawable(private val enabled: Boolean) : Drawable() {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.2f
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+        color = if (enabled) 0xff2e7d32.toInt() else 0xff757575.toInt()
+    }
+
+    override fun draw(canvas: Canvas) {
+        val b = bounds
+        val cx = b.exactCenterX()
+        val cy = b.exactCenterY()
+        val left = cx - 9f
+        val right = cx + 9f
+        for (offset in -5..5 step 5) {
+            canvas.drawLine(left, cy + offset, right, cy + offset, paint)
+            val knobX = if (offset == 0) cx + 4f else cx - 3f
+            canvas.drawCircle(knobX, cy + offset, 1.8f, paint)
+        }
+        paint.style = Paint.Style.FILL
+        canvas.drawCircle(cx + 9f, cy - 9f, 3f, paint)
+        paint.style = Paint.Style.STROKE
+    }
+
+    override fun setAlpha(alpha: Int) { paint.alpha = alpha }
+    override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) { paint.colorFilter = colorFilter }
+    @Deprecated("Deprecated in Android")
+    override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
 }
