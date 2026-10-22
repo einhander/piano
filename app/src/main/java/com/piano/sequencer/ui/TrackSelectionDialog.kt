@@ -3,8 +3,6 @@ package com.piano.sequencer.ui
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
-import android.text.TextUtils
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
@@ -20,9 +18,7 @@ import com.piano.sequencer.midi.TRACK_INSTRUMENT_MAIN
 /**
  * Track selection dialog for multi-track MIDI files.
  *
- * One row per track: a checkbox (play / skip), the track name (empty name →
- * "Track N", 1-based), and a per-track channel spinner with the same options
- * as the cell's channel spinner ("From file" / "Ch 1..16").
+ * Compact, scrollable track cards with legible names and labeled controls.
  *
  * House style: all views created programmatically, no layout XML. Colors are
  * hardcoded — the app theme is always light (Theme.MaterialComponents.Light),
@@ -53,7 +49,7 @@ object TrackSelectionDialog {
     ) {
         val list = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(context, 16), dp(context, 8), dp(context, 16), dp(context, 8))
+            setPadding(dp(context, 16), dp(context, 4), dp(context, 16), dp(context, 4))
         }
 
         val checks = arrayOfNulls<CheckBox>(trackNames.size)
@@ -67,48 +63,44 @@ object TrackSelectionDialog {
             val checked = if (initialSelected == null) true else initialSelected.contains(i)
             val channel = initialChannels[i]
 
-            val check = CheckBox(context).apply {
-                isChecked = checked
-                textSize = 14f
-            }
-
             val nameText = TextView(context).apply {
                 text = name
-                textSize = 13f
+                textSize = 15f
+                setTypeface(null, android.graphics.Typeface.BOLD)
                 setTextColor(Color.BLACK)
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-                layoutParams = LinearLayout.LayoutParams(
-                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-                ).apply {
-                    setMargins(dp(context, 4), 0, dp(context, 8), 0)
-                }
+                maxLines = 3
+                contentDescription = "Track ${i + 1}: $name"
             }
-
             val spinner = Spinner(context).apply {
                 adapter = ArrayAdapter(
                     context, android.R.layout.simple_spinner_dropdown_item, MidiFilesPanel.CHANNEL_ITEMS
                 )
                 setSelection(if (channel == null) 0 else (channel + 1).coerceIn(0, 16))
+                contentDescription = "Output channel for $name"
             }
-
-            val row = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(context, 6), 0, dp(context, 6))
+            val check = CheckBox(context).apply {
+                text = "Play track"
+                isChecked = checked
+                textSize = 13f
+                contentDescription = "Play track ${i + 1}"
             }
-            row.addView(check)
-            row.addView(nameText)
-            row.addView(spinner)
-            val sets = listOf("Main instruments", "This file: ${fileSetName ?: "File set"}")
+            val sets = listOf("MAIN instruments", "FILE: ${fileSetName ?: "File set"}")
             val setSpinner = Spinner(context).apply {
                 adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, sets)
                 val initialSet = initialInstrumentSets[i]
                 setSelection(if (initialSet == TRACK_INSTRUMENT_FILE ||
                     (initialSet == null && fileSetName != null)) 1 else 0)
             }
-            setSpinner.layoutParams = LinearLayout.LayoutParams(dp(context, 116), ViewGroup.LayoutParams.WRAP_CONTENT)
-            row.addView(setSpinner)
+            setSpinner.contentDescription = "Instrument set for $name"
+
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(context, 5), 0, dp(context, 5))
+                addView(nameText)
+                addView(check)
+                addView(setting(context, "Instrument set", setSpinner))
+                addView(setting(context, "Output channel", spinner))
+            }
 
             checks[i] = check
             spinners[i] = spinner
@@ -119,12 +111,12 @@ object TrackSelectionDialog {
         // Cap the list at 60% of the screen height (a file can have many
         // tracks); shorter lists size to their content.
         val dm = context.resources.displayMetrics
-        val contentEstimate = trackNames.size * dp(context, 52)
+        val contentEstimate = trackNames.size * dp(context, 190)
         val scroll = ScrollView(context).apply {
             isFillViewport = true
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                if (contentEstimate > dm.heightPixels * 0.6) (dm.heightPixels * 0.6).toInt()
+                if (contentEstimate > dm.heightPixels * 0.58) (dm.heightPixels * 0.58).toInt()
                 else ViewGroup.LayoutParams.WRAP_CONTENT
             )
             addView(list)
@@ -148,6 +140,21 @@ object TrackSelectionDialog {
             .setNegativeButton("Cancel", null)
             .show()
     }
+
+    private fun setting(context: Context, label: String, control: View): LinearLayout =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            val caption = TextView(context).apply {
+                text = label
+                textSize = 11f
+                setTextColor(0xFF626262.toInt())
+            }
+            addView(caption)
+            control.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            addView(control)
+        }
 
     /** 1dp divider between rows (hardcoded light gray — always-light theme). */
     private fun divider(context: Context): View {
