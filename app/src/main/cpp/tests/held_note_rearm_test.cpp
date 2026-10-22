@@ -86,6 +86,16 @@ int main(int argc, char** argv) {
             return fail("A: loadSoundFont failed: %s", sf2Path);
         }
 
+        // Extended file channels use same queued preset command path as main channels.
+        // Drain commands through MIDI processing, then inspect desired state.
+        if (!synth.setChannelProgram(200, 258, 12))
+            return fail("A: extended-channel preset command was not queued");
+        synth.processCommands();
+        int extendedBank = -1, extendedProgram = -1;
+        if (!synth.getChannelProgram(200, extendedBank, extendedProgram) ||
+            extendedBank != 258 || extendedProgram != 12)
+            return fail("A: extended-channel preset state mismatch");
+
         // A0: Each MIDI channel maps to its corresponding dry stereo bus.
         // Global FluidSynth effects return is exposed independently, not folded
         // into any dry channel bus. Channel 10 uses percussion bank behavior

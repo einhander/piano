@@ -153,8 +153,11 @@ void FluidSynthEngine::applyDesiredState(fluid_synth_t* synth) {
     fluid_synth_chorus_on(synth, -1, mChorusOn.load());
     fluid_synth_set_interp_method(synth, -1, mInterps.load());
     // Channel programs (packed bank<<8|program; -1 = no explicit program).
-    for (int ch = 0; ch < 16; ch++) {
-        fluid_synth_cc(synth, ch, 7, mChannelVolumes[ch].load(std::memory_order_relaxed));
+    // MIDI-file sets occupy extended channels 16..255 and must survive SF2 swaps too.
+    for (int ch = 0; ch < 256; ch++) {
+        if (ch < 16) {
+            fluid_synth_cc(synth, ch, 7, mChannelVolumes[ch].load(std::memory_order_relaxed));
+        }
         int packed = mChannelPrograms[ch].load(std::memory_order_relaxed);
         if (packed >= 0) {
             fluid_synth_bank_select(synth, ch, packed >> 8);
@@ -569,7 +572,7 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             fluid_synth_set_interp_method(synth, -1, cmd.a);
             break;
         case SynthCmdType::SET_CHANNEL_PROGRAM:
-            if (cmd.a >= 0 && cmd.a <= 15) {
+            if (cmd.a >= 0 && cmd.a <= 255) {
                 // fluid_synth_bank_select handles bank style (GM/GS/XG) and the
                 // full 0-16383 range; raw CC0 only covers 0-127.
                 fluid_synth_bank_select(synth, cmd.a, cmd.b);

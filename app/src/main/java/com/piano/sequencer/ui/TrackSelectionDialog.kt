@@ -11,6 +11,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.ImageView
 import androidx.appcompat.app.AlertDialog
 import com.piano.sequencer.midi.TRACK_INSTRUMENT_FILE
 import com.piano.sequencer.midi.TRACK_INSTRUMENT_MAIN
@@ -55,6 +56,8 @@ object TrackSelectionDialog {
         val checks = arrayOfNulls<CheckBox>(trackNames.size)
         val spinners = arrayOfNulls<Spinner>(trackNames.size)
         val setSpinners = arrayOfNulls<Spinner>(trackNames.size)
+        val headers = arrayOfNulls<LinearLayout>(trackNames.size)
+        val details = arrayOfNulls<LinearLayout>(trackNames.size)
 
         for (i in trackNames.indices) {
             if (i > 0) list.addView(divider(context))
@@ -68,7 +71,8 @@ object TrackSelectionDialog {
                 textSize = 15f
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 setTextColor(Color.BLACK)
-                maxLines = 3
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
                 contentDescription = "Track ${i + 1}: $name"
             }
             val spinner = Spinner(context).apply {
@@ -92,15 +96,59 @@ object TrackSelectionDialog {
                     (initialSet == null && fileSetName != null)) 1 else 0)
             }
             setSpinner.contentDescription = "Instrument set for $name"
+            val setSummary = TextView(context).apply {
+                text = if (setSpinner.selectedItemPosition == 1) "FILE" else "MAIN"
+                textSize = 11f
+                setTextColor(0xFF454545.toInt())
+            }
+            val channelSummary = TextView(context).apply {
+                textSize = 11f
+                setTextColor(0xFF454545.toInt())
+                setPadding(dp(context, 8), 0, 0, 0)
+            }
+            fun updateChannelSummary() {
+                val selected = spinner.selectedItemPosition - 1
+                channelSummary.text = if (selected in 0..15) "Ch ${selected + 1}" else "File ch."
+            }
+            updateChannelSummary()
+            setSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) { setSummary.text = "MAIN" }
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    setSummary.text = if (position == 1) "FILE" else "MAIN"
+                }
+            }
+            spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) { updateChannelSummary() }
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) { updateChannelSummary() }
+            }
 
             val row = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(0, dp(context, 5), 0, dp(context, 5))
-                addView(nameText)
-                addView(check)
-                addView(setting(context, "Instrument set", setSpinner))
-                addView(setting(context, "Output channel", spinner))
+                setPadding(0, dp(context, 4), 0, dp(context, 4))
             }
+            val header = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                isClickable = true
+                isFocusable = true
+                setPadding(dp(context, 4), dp(context, 8), dp(context, 4), dp(context, 8))
+                addView(nameText, LinearLayout.LayoutParams(0, -2, 1f))
+                addView(check)
+                addView(setSummary)
+                addView(channelSummary)
+                addView(ImageView(context).apply { setImageResource(android.R.drawable.arrow_down_float); contentDescription = "Expand track settings" })
+            }
+            val detail = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(setting(context, "Instrument source", setSpinner))
+                addView(setting(context, "Output channel", spinner))
+                visibility = View.GONE
+            }
+            header.setOnClickListener { detail.visibility = if (detail.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
+            row.addView(header)
+            row.addView(detail)
+            headers[i] = header
+            details[i] = detail
 
             checks[i] = check
             spinners[i] = spinner
@@ -111,7 +159,7 @@ object TrackSelectionDialog {
         // Cap the list at 60% of the screen height (a file can have many
         // tracks); shorter lists size to their content.
         val dm = context.resources.displayMetrics
-        val contentEstimate = trackNames.size * dp(context, 190)
+        val contentEstimate = trackNames.size * dp(context, 56)
         val scroll = ScrollView(context).apply {
             isFillViewport = true
             layoutParams = ViewGroup.LayoutParams(

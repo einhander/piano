@@ -152,6 +152,9 @@ class InstrumentActivity : AppCompatActivity() {
         val setSelector = Button(this).apply {
             isAllCaps = false
             textSize = 14f
+            minHeight = dp(48)
+            minimumHeight = dp(48)
+            setPadding(dp(12), 0, dp(12), 0)
             setOnClickListener { chooseInstrumentSet() }
         }
         (tvHint.parent as? android.view.ViewGroup)?.let { parent ->
@@ -234,12 +237,13 @@ class InstrumentActivity : AppCompatActivity() {
                 text = if (ch == 9) getString(R.string.instrument_channel_drums)
                        else getString(R.string.instrument_channel, ch + 1)
                 textSize = 14f
-                setTextColor(resolveColorControlNormal())
+                setTextColor(0xFF30343B.toInt())
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
             }
             channelLabel.layoutParams = LinearLayout.LayoutParams(dp(58), LinearLayout.LayoutParams.WRAP_CONTENT)
-            channelLabel.textSize = 12f
+            channelLabel.textSize = 13f
+            channelLabel.setTypeface(null, android.graphics.Typeface.BOLD)
 
             val nameLabel = TextView(this).apply {
                 text = getString(R.string.instrument_unknown)
@@ -264,7 +268,7 @@ class InstrumentActivity : AppCompatActivity() {
             row.addView(nameLabel)
             val rackButton = ImageButton(this).apply {
                 setImageDrawable(RackIconDrawable(false))
-                setBackgroundResource(android.R.drawable.list_selector_background)
+                background = ContextCompat.getDrawable(this@InstrumentActivity, android.R.drawable.btn_default)
                 scaleType = android.widget.ImageView.ScaleType.CENTER
                 contentDescription = "Effects rack disabled, channel ${ch + 1}. Tap to enable"
                 setOnClickListener { toggleRack(ch) }
@@ -273,14 +277,14 @@ class InstrumentActivity : AppCompatActivity() {
             rackButtons[ch] = rackButton
             row.addView(ImageButton(this).apply {
                 setImageResource(android.R.drawable.ic_menu_manage)
-                setBackgroundResource(android.R.drawable.list_selector_background)
+                background = ContextCompat.getDrawable(this@InstrumentActivity, android.R.drawable.btn_default)
                 scaleType = android.widget.ImageView.ScaleType.CENTER
-                contentDescription = "Edit effects for channel ${ch + 1}"
+                contentDescription = "Open effects and mixer settings for channel ${ch + 1}"
                 setOnClickListener {
                     startActivity(Intent(this@InstrumentActivity, InstrumentEffectsActivity::class.java)
                         .putExtra(InstrumentEffectsActivity.EXTRA_CHANNEL, ch))
                 }
-            })
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
             row.setOnClickListener { selectChannel(ch); onChannelTapped(ch) }
 
             rowNameLabels[ch] = nameLabel
