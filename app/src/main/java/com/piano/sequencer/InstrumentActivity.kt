@@ -24,6 +24,7 @@ import android.widget.Button
 import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
+import com.piano.sequencer.midi.MidiInitialPrograms
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -168,6 +169,19 @@ class InstrumentActivity : AppCompatActivity() {
             supportActionBar?.title = set.name
             tvHint.text = "Editing file set · changes stay with this MIDI file"
             setSelector.text = "Instrument set: ${set.name} ▾"
+            val resetButton = Button(this).apply {
+                text = "Reset from MIDI"
+                isAllCaps = false
+                textSize = 13f
+                minHeight = dp(40)
+                minimumHeight = dp(40)
+                setPadding(dp(12), 0, dp(12), 0)
+                setOnClickListener { confirmResetFromMidi(setId) }
+            }
+            (tvHint.parent as? android.view.ViewGroup)?.let { parent ->
+                parent.addView(resetButton, parent.indexOfChild(setSelector) + 1,
+                    android.view.ViewGroup.LayoutParams(-2, dp(44)))
+            }
         } else {
             setSelector.text = "Instrument set: Main instruments ▾"
         }
@@ -178,6 +192,67 @@ class InstrumentActivity : AppCompatActivity() {
         Intent(this, PlaybackService::class.java).also { intent ->
             bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         }
+    }
+
+    private fun confirmResetFromMidi(setId: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Reset instrument set?")
+            .setMessage("Replace all 16 channel presets with the initial programs from this MIDI file? Your edits to this file's instrument set will be overwritten.")
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton("Reset") { _, _ -> resetFromMidi(setId) }
+            .show()
+    }
+
+    private fun resetFromMidi(setId: String) {
+        executor.execute {
+            val source = MidiFileMappingStore.get(applicationContext).all()
+                .firstOrNull { it.mode == MODE_FILE && it.instrumentSetId == setId }
+            val file = source?.filePath?.takeIf { it.isNotBlank() }?.let { java.io.File(it) }
+            if (file == null || !file.isFile || !file.canRead()) {
+                showResetError("Source MIDI file is missing or unreadable")
+                return@execute
+            }
+            val svc = service
+            if (svc == null) {
+                showResetError("Playback service is not connected")
+                return@execute
+            }
+            val programs = runCatching { MidiInitialPrograms.fromFile(file) }.getOrNull()
+            if (programs == null || programs.size != 16) {
+                showResetError("Could not read initial programs from MIDI file")
+                return@execute
+            }
+            val set = fileSets.all().firstOrNull { it.id == setId }
+            if (set == null) {
+                showResetError("File instrument set no longer exists")
+                return@execute
+            }
+            if (!svc.isEngineInitialized()) {
+                showResetError("Audio engine is not initialized")
+                return@execute
+            }
+            val applied = programs.indices.all { ch ->
+                val packed = programs[ch]
+                svc.setChannelProgram(set.channelBase + ch, packed ushr 8, packed and 0xff)
+            }
+            if (!applied) {
+                showResetError("Could not apply all MIDI programs; instrument set was not saved")
+                return@execute
+            }
+            if (!fileSets.updatePrograms(setId, programs)) {
+                showResetError("Could not save reset instrument set")
+                return@execute
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                applyInstruments(programs.toIntArray())
+                Toast.makeText(this, "Reset all 16 presets from MIDI", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun showResetError(message: String) {
+        runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
     }
 
     override fun onResume() {
