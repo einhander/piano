@@ -130,8 +130,7 @@ class MidiFilesPanel @JvmOverloads constructor(
     }
 
     private fun setupStyle(context: Context) {
-        setPadding(0, 16, 0, 0)
-        background = context.getDrawable(R.drawable.card_frame)
+        setPadding(0, 0, 0, 0)
     }
 
     /** Load and display the cell list. */
@@ -190,13 +189,14 @@ class MidiFilesPanel @JvmOverloads constructor(
     private fun addCellRow(cell: SequencerCell) {
         val container = LinearLayout(context).apply {
             orientation = VERTICAL
-            setPadding(8, 4, 8, 4)
-            setBackgroundColor(0xFFF5F5F5.toInt())
+            val pad = dpToPx(12, context)
+            setPadding(pad, pad, pad, pad)
+            background = context.getDrawable(R.drawable.card_frame)
             setMinimumHeight(60)
             layoutParams = LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(0, 4, 0, 4)
+                setMargins(0, 0, 0, dpToPx(12, context))
             }
         }
 
@@ -215,10 +215,20 @@ class MidiFilesPanel @JvmOverloads constructor(
                 if (n > 0) "♪ Chord: $n note" + (if (n == 1) "" else "s") else "♪ Chord: empty"
             } else if (cell.filePath.isNotEmpty()) {
                 val name = File(cell.filePath).name
-                if (name.length > 25) "${name.substring(0, 22)}..." else name
+                name
             } else "—"
-            textSize = 12f
-            setTextColor(0xFF000000.toInt())
+            textSize = 16f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            contentDescription = text
+            minimumHeight = dpToPx(48, context)
+            gravity = Gravity.CENTER_VERTICAL
+            setOnClickListener {
+                androidx.appcompat.app.AlertDialog.Builder(context)
+                    .setMessage(text).setPositiveButton(android.R.string.ok, null).show()
+            }
+            setTextColor(context.getColor(R.color.ui_text))
             layoutParams = LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
             )
@@ -238,8 +248,9 @@ class MidiFilesPanel @JvmOverloads constructor(
         // Mode toggle: FILE ↔ CHORD. In CHORD mode loop/tempo and file-only actions
         // (test/import/export) are hidden; channel selection stays available.
         val modeBtn = Button(context).apply {
-            text = if (cell.mode == MODE_CHORD) "Mode: Chord" else "Mode: File"
-            textSize = 9f
+            text = context.getString(if (cell.mode == MODE_CHORD) R.string.ui_mode_chord else R.string.ui_mode_file)
+            textSize = 14f
+            minimumHeight = dpToPx(48, context)
             setPadding(4, 4, 4, 4)
             minWidth = 0
             setAllCaps(false)
@@ -260,8 +271,9 @@ class MidiFilesPanel @JvmOverloads constructor(
                 TRIGGER_SYSEX -> "SysEx"
                 else -> if (cell.note >= 0) noteToName(cell.note) else "—"
             }
-            textSize = 12f
-            setTextColor(0xFF444444.toInt())
+            textSize = 14f
+            contentDescription = context.getString(R.string.ui_trigger, text)
+            setTextColor(context.getColor(R.color.ui_muted))
             layoutParams = LayoutParams(
                 LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT
             ).apply {
@@ -271,6 +283,8 @@ class MidiFilesPanel @JvmOverloads constructor(
 
         // Channel spinner
         val channelSpinner = Spinner(context).apply {
+            minimumHeight = dpToPx(48, context)
+            contentDescription = context.getString(R.string.ui_channel)
             val items = if (cell.mode == MODE_CHORD) listOf("As recorded") + (1..16).map { "Ch $it" } else CHANNEL_ITEMS
             val adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, items)
             setAdapter(adapter)
@@ -281,25 +295,33 @@ class MidiFilesPanel @JvmOverloads constructor(
         // Loop checkbox
         val loopCheck = CheckBox(context).apply {
             isChecked = cell.loop
-            textSize = 11f
+            text = context.getString(R.string.ui_loop)
+            textSize = 14f
+            minimumHeight = dpToPx(48, context)
             minWidth = 0
         }
 
         // Tempo edit
         val tempoEdit = EditText(context).apply {
-            hint = "Tempo"
+            hint = context.getString(R.string.ui_tempo)
+            contentDescription = hint
+            minimumHeight = dpToPx(48, context)
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or
                 android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(cell.tempo.toInt().toString())
             layoutParams = LayoutParams(
-                dpToPx(56, context), LayoutParams.WRAP_CONTENT
+                dpToPx(96, context), LayoutParams.WRAP_CONTENT
             )
-            textSize = 11f
+            textSize = 14f
         }
 
-        row1.addView(modeBtn)
-        row1.addView(keyLabel)
-        row1.addView(channelSpinner)
+        val modeRow = LinearLayout(context).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(modeBtn, LayoutParams(0, -2, 1f))
+            addView(keyLabel)
+        }
+        container.addView(row0)
+        container.addView(modeRow)
         row1.addView(loopCheck)
         row1.addView(tempoEdit)
 
@@ -309,18 +331,6 @@ class MidiFilesPanel @JvmOverloads constructor(
             loopCheck.visibility = android.view.View.GONE
             tempoEdit.visibility = android.view.View.GONE
         }
-
-        container.addView(row0, LayoutParams(
-            LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
-        ).apply {
-            setMargins(0, 0, 0, dpToPx(4, context))
-        })
-
-        container.addView(row1, LayoutParams(
-            LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
-        ).apply {
-            setMargins(0, 0, 0, dpToPx(4, context))
-        })
 
         // ── Row 2: buttons ──
         val row2 = LinearLayout(context).apply {
@@ -335,41 +345,47 @@ class MidiFilesPanel @JvmOverloads constructor(
         val marginEnd = dpToPx(4, context)
 
         val learnBtn = Button(context).apply {
-            text = "Learn"
-            textSize = 10f
+            text = context.getString(if (cell.hasTrigger()) R.string.ui_unlearn else R.string.ui_learn)
+            textSize = 14f
+            minimumHeight = dpToPx(48, context)
+            isAllCaps = false
             setPadding(4, 4, 4, 4)
             minWidth = 0
             layoutParams = btnParams().apply { setMargins(0, 0, marginEnd, 0) }
         }
 
         val testBtn = Button(context).apply {
-            text = "▶ Test"
-            textSize = 10f
+            text = context.getString(R.string.ui_test)
+            textSize = 14f
+            minimumHeight = dpToPx(48, context)
+            isAllCaps = false
             setPadding(4, 4, 4, 4)
             minWidth = 0
             layoutParams = btnParams().apply { setMargins(0, 0, marginEnd, 0) }
         }
 
         val importBtn = Button(context).apply {
-            text = "Import .mid"
-            textSize = 10f
+            text = context.getString(R.string.ui_import)
+            textSize = 14f
+            minimumHeight = dpToPx(48, context)
+            isAllCaps = false
             setPadding(4, 4, 4, 4)
             minWidth = 0
             layoutParams = btnParams().apply { setMargins(0, 0, marginEnd, 0) }
         }
 
         val removeBtn = Button(context).apply {
-            text = "− DEL CELL"
-            textSize = 10f
+            text = context.getString(R.string.ui_delete_cell)
+            setTextColor(context.getColor(R.color.ui_danger))
+            textSize = 14f
+            minimumHeight = dpToPx(48, context)
+            isAllCaps = false
             setPadding(4, 4, 4, 4)
             minWidth = 0
             layoutParams = btnParams()
         }
 
-        row2.addView(learnBtn)
         row2.addView(testBtn)
-        row2.addView(importBtn)
-        row2.addView(removeBtn)
 
         // File-only buttons are meaningless in chord mode.
         if (isChord) {
@@ -390,15 +406,19 @@ class MidiFilesPanel @JvmOverloads constructor(
 
         val recordBtn = Button(context).apply {
             text = recordLabel()
-            textSize = 10f
+            textSize = 14f
+            minimumHeight = dpToPx(48, context)
+            isAllCaps = false
             setPadding(4, 4, 4, 4)
             minWidth = 0
             layoutParams = btnParams().apply { setMargins(0, 0, marginEnd, 0) }
         }
 
         val exportBtn = Button(context).apply {
-            text = "Export"
-            textSize = 10f
+            text = context.getString(R.string.ui_export)
+            textSize = 14f
+            minimumHeight = dpToPx(48, context)
+            isAllCaps = false
             setPadding(4, 4, 4, 4)
             minWidth = 0
             layoutParams = btnParams()
@@ -409,8 +429,10 @@ class MidiFilesPanel @JvmOverloads constructor(
         // ≥2 tracks (fetched off the UI thread — single-track files keep the
         // channel spinner as the only control).
         val tracksBtn = Button(context).apply {
-            text = "Tracks"
-            textSize = 10f
+            text = context.getString(R.string.ui_tracks)
+            textSize = 14f
+            minimumHeight = dpToPx(48, context)
+            isAllCaps = false
             setPadding(4, 4, 4, 4)
             minWidth = 0
             layoutParams = btnParams()
@@ -425,9 +447,16 @@ class MidiFilesPanel @JvmOverloads constructor(
             onCellExportClick(cell.id)
         }
 
-        row3.addView(recordBtn)
+        row2.addView(recordBtn)
+        row2.addView(learnBtn)
+        container.addView(channelSpinner, LayoutParams(-1, -2))
+        container.addView(row1)
+        row3.addView(importBtn)
         row3.addView(exportBtn)
-        row3.addView(tracksBtn)
+        val fileActions = LinearLayout(context).apply {
+            addView(tracksBtn)
+            addView(removeBtn)
+        }
 
         // Export is file-only (chord has no .mid to export). Tracks is
         // file-only too (chord has no .mid to select tracks in).
@@ -473,6 +502,7 @@ class MidiFilesPanel @JvmOverloads constructor(
         ).apply {
             setMargins(0, dpToPx(2, context), 0, 0)
         })
+        container.addView(fileActions)
 
         // ── Value readers ──
         fun getChannel(): Int {
@@ -600,8 +630,10 @@ class MidiFilesPanel @JvmOverloads constructor(
 
     private fun addAddCellButton() {
         val addBtn = Button(context).apply {
-            text = "＋ Add cell"
-            textSize = 12f
+            text = context.getString(R.string.ui_add_cell)
+            textSize = 14f
+            minimumHeight = dpToPx(48, context)
+            isAllCaps = false
             setPadding(dpToPx(12, context), dpToPx(8, context), dpToPx(12, context), dpToPx(8, context))
             layoutParams = LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
@@ -621,21 +653,21 @@ class MidiFilesPanel @JvmOverloads constructor(
         for ((id, btn) in cellRecordButtons) {
             when {
                 id == recordingCellId -> {
-                    btn.text = "■ Stop"
-                    btn.setBackgroundColor(0xFFDC1414.toInt())
-                    btn.setTextColor(0xFFFFFFFF.toInt())
+                    btn.text = context.getString(R.string.ui_stop)
+                    btn.setBackgroundColor(context.getColor(R.color.ui_danger))
+                    btn.setTextColor(context.getColor(R.color.ui_surface))
                     btn.isEnabled = true
                 }
                 recordingCellId != null -> {
                     btn.text = recordLabel()
                     btn.background = cellRecordButtonDefaults[id]
-                    btn.setTextColor(0xFF000000.toInt())
+                    btn.setTextColor(context.getColor(R.color.ui_primary))
                     btn.isEnabled = false
                 }
                 else -> {
                     btn.text = recordLabel()
                     btn.background = cellRecordButtonDefaults[id]
-                    btn.setTextColor(0xFF000000.toInt())
+                    btn.setTextColor(context.getColor(R.color.ui_primary))
                     btn.isEnabled = true
                 }
             }
@@ -657,11 +689,11 @@ class MidiFilesPanel @JvmOverloads constructor(
     fun updateTestPlayUI(cellId: Int?, isPlaying: Boolean) {
         if (isPlaying) {
             if (cellId != null) {
-                cellTestButtons[cellId]?.text = "■ Stop"
+                cellTestButtons[cellId]?.text = context.getString(R.string.ui_stop)
             }
         } else {
             for (btn in cellTestButtons.values) {
-                btn.text = "▶ Test"
+                btn.text = context.getString(R.string.ui_test)
             }
         }
     }
@@ -676,8 +708,8 @@ class MidiFilesPanel @JvmOverloads constructor(
      * the button edge).
      */
     private fun recordLabel(): CharSequence {
-        val s = SpannableString("● Record")
-        s.setSpan(ForegroundColorSpan(0xFFDC1414.toInt()), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val s = SpannableString(context.getString(R.string.ui_record))
+        s.setSpan(ForegroundColorSpan(context.getColor(R.color.ui_danger)), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
         return s
     }
 }

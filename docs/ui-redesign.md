@@ -60,6 +60,16 @@ committing; tool access denied. Git hooks remain enabled.
   fully wrapping names, adaptive row height, existing indicator and 48dp Effects.
   Set/reset controls retained. XML/ID check passed; selection, preset callbacks,
   channel indices, rack states and polling reviewed unchanged.
+- Sequencer: full original help in dialog; short accessible Help entry. Separate
+  outlined slot cards; full filename retained with real ellipsize and tap-to-read
+  dialog; mode/trigger header, immediate Test/Record/Learn row, channel and
+  Loop/Tempo parameters, two secondary file-action rows. No popup conversion:
+  original View references and callbacks remain. Text is 14sp or larger, controls
+  at least 48dp high. XML/baseline IDs, timeout, multitrack visibility pair and
+  recording-default-map static checks passed. Manual source review confirms
+  File/Chord conditions, track guards, focus-loss tempo conversion, learn flow,
+  test/record maps and refresh restoration retained. Chord file actions remain
+  GONE. No timing or recorder changes.
 
 Use 360dp portrait, landscape and font scale 1.3; check wrapping, scroll reach,
 Back/Close, white toolbar icons, TalkBack labels/status, touch targets. Exercise

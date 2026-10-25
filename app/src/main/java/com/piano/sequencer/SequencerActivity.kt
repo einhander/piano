@@ -130,6 +130,11 @@ class SequencerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_sequencer)
+        findViewById<android.widget.TextView>(R.id.tvHint).setOnClickListener {
+            AlertDialog.Builder(this).setTitle(R.string.ui_help)
+                .setMessage(R.string.sequencer_hint)
+                .setPositiveButton(android.R.string.ok, null).show()
+        }
 
         setSupportActionBar(findViewById(R.id.toolbar))
         supportActionBar?.apply {
