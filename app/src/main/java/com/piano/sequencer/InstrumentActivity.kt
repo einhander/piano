@@ -20,13 +20,18 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.Button
 import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
+import com.piano.sequencer.midi.MidiInitialPrograms
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.piano.sequencer.service.PlaybackService
+import com.piano.sequencer.midi.FileInstrumentSetStore
+import com.piano.sequencer.midi.MidiFileMappingStore
+import com.piano.sequencer.midi.MODE_FILE
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -50,6 +55,9 @@ class InstrumentActivity : AppCompatActivity() {
     // Instrument name label for each MIDI channel (0-15)
     private val rowNameLabels = arrayOfNulls<TextView>(16)
     private val noteIndicators = arrayOfNulls<View>(16)
+    private val channelRows = arrayOfNulls<View>(16)
+    private val effectsButtons = arrayOfNulls<Button>(16)
+    private var selectedChannel = -1
     @Volatile private var observingNotes = false
     @Volatile private var nativeChannelMask = 0
     private val noteListener: () -> Unit = {
@@ -95,6 +103,10 @@ class InstrumentActivity : AppCompatActivity() {
 
     // Deduplicated preset list of the loaded SoundFont (empty when no SF2)
     private var instruments: List<Instrument> = emptyList()
+    private val selectedSetId: String? by lazy { intent.getStringExtra(EXTRA_SET_ID) }
+    private val fileSets by lazy { FileInstrumentSetStore.get(this) }
+
+    companion object { const val EXTRA_SET_ID = "instrument_set_id" }
 
     @Volatile private var service: PlaybackService? = null
     private val serviceConnection = object : ServiceConnection {
@@ -104,6 +116,7 @@ class InstrumentActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed) return
             service = (binder as PlaybackService.PlaybackBinder).getService()
             refreshInstruments()
+            refreshRackStates()
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             service = null
@@ -132,12 +145,114 @@ class InstrumentActivity : AppCompatActivity() {
 
         channelList = findViewById(R.id.channelList)
         tvHint = findViewById(R.id.tvHint)
+        val setSelector = Button(this).apply {
+            isAllCaps = false
+            textSize = 14f
+            minHeight = dp(48)
+            minimumHeight = dp(48)
+            setPadding(dp(12), 0, dp(12), 0)
+            setOnClickListener { chooseInstrumentSet() }
+        }
+        (tvHint.parent as? android.view.ViewGroup)?.let { parent ->
+            val index = parent.indexOfChild(tvHint)
+            parent.addView(setSelector, index.coerceAtLeast(0) + 1,
+                android.view.ViewGroup.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                ))
+        }
+
+        val setId = selectedSetId
+        if (setId != null) {
+            val set = fileSets.all().firstOrNull { it.id == setId }
+            if (set == null) { Toast.makeText(this, "File instrument set no longer exists", Toast.LENGTH_LONG).show(); finish(); return }
+            supportActionBar?.title = set.name
+            tvHint.text = "Editing file set · changes stay with this MIDI file"
+            setSelector.text = "Instrument set: ${set.name} ▾"
+            val resetButton = Button(this).apply {
+                text = "Reset from MIDI"
+                isAllCaps = false
+                textSize = 13f
+                minHeight = dp(40)
+                minimumHeight = dp(40)
+                setPadding(dp(12), 0, dp(12), 0)
+                setOnClickListener { confirmResetFromMidi(setId) }
+            }
+            (tvHint.parent as? android.view.ViewGroup)?.let { parent ->
+                parent.addView(resetButton, parent.indexOfChild(setSelector) + 1,
+                    android.view.ViewGroup.LayoutParams(-2, dp(44)))
+            }
+        } else {
+            setSelector.text = "Instrument set: Main instruments ▾"
+        }
+        tvHint.setOnClickListener { chooseInstrumentSet() }
 
         buildChannelRows()
 
         Intent(this, PlaybackService::class.java).also { intent ->
             bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         }
+    }
+
+    private fun confirmResetFromMidi(setId: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Reset instrument set?")
+            .setMessage("Replace all 16 channel presets with the initial programs from this MIDI file? Your edits to this file's instrument set will be overwritten.")
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton("Reset") { _, _ -> resetFromMidi(setId) }
+            .show()
+    }
+
+    private fun resetFromMidi(setId: String) {
+        executor.execute {
+            val source = MidiFileMappingStore.get(applicationContext).all()
+                .firstOrNull { it.mode == MODE_FILE && it.instrumentSetId == setId }
+            val file = source?.filePath?.takeIf { it.isNotBlank() }?.let { java.io.File(it) }
+            if (file == null || !file.isFile || !file.canRead()) {
+                showResetError("Source MIDI file is missing or unreadable")
+                return@execute
+            }
+            val svc = service
+            if (svc == null) {
+                showResetError("Playback service is not connected")
+                return@execute
+            }
+            val programs = runCatching { MidiInitialPrograms.fromFile(file) }.getOrNull()
+            if (programs == null || programs.size != 16) {
+                showResetError("Could not read initial programs from MIDI file")
+                return@execute
+            }
+            val set = fileSets.all().firstOrNull { it.id == setId }
+            if (set == null) {
+                showResetError("File instrument set no longer exists")
+                return@execute
+            }
+            if (!svc.isEngineInitialized()) {
+                showResetError("Audio engine is not initialized")
+                return@execute
+            }
+            val applied = programs.indices.all { ch ->
+                val packed = programs[ch]
+                svc.setChannelProgram(set.channelBase + ch, packed ushr 8, packed and 0xff)
+            }
+            if (!applied) {
+                showResetError("Could not apply all MIDI programs; instrument set was not saved")
+                return@execute
+            }
+            if (!fileSets.updatePrograms(setId, programs)) {
+                showResetError("Could not save reset instrument set")
+                return@execute
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                applyInstruments(programs.toIntArray())
+                Toast.makeText(this, "Reset all 16 presets from MIDI", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun showResetError(message: String) {
+        runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
     }
 
     override fun onResume() {
@@ -183,22 +298,27 @@ class InstrumentActivity : AppCompatActivity() {
                     else
                         ColorDrawable(selector.data)
                 }
-                setPadding(dp(8), dp(12), dp(8), dp(12))
+                setPadding(dp(8), 0, dp(4), 0)
+                minimumHeight = dp(60)
+                layoutParams = LinearLayout.LayoutParams(-1, dp(60))
             }
 
             val channelLabel = TextView(this).apply {
                 text = if (ch == 9) getString(R.string.instrument_channel_drums)
                        else getString(R.string.instrument_channel, ch + 1)
                 textSize = 14f
-                setTextColor(resolveColorControlNormal())
+                setTextColor(0xFF30343B.toInt())
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
             }
-            channelLabel.layoutParams = LinearLayout.LayoutParams(dp(94), LinearLayout.LayoutParams.WRAP_CONTENT)
+            channelLabel.layoutParams = LinearLayout.LayoutParams(dp(58), LinearLayout.LayoutParams.WRAP_CONTENT)
+            channelLabel.textSize = 13f
+            channelLabel.setTypeface(null, android.graphics.Typeface.BOLD)
 
             val nameLabel = TextView(this).apply {
                 text = getString(R.string.instrument_unknown)
-                textSize = 14f
+                textSize = 15f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
             }
@@ -216,19 +336,50 @@ class InstrumentActivity : AppCompatActivity() {
                 noteIndicators[ch] = this
             })
             row.addView(nameLabel)
-            row.addView(android.widget.Button(this).apply {
-                text = getString(R.string.instrument_effects_action)
-                contentDescription = getString(R.string.instrument_effects_channel_title, ch + 1)
-                minWidth = dp(64)
+            val effectsButton = Button(this).apply {
+                text = "Effects"
+                isAllCaps = false
+                textSize = 12f
+                minHeight = dp(48)
+                minimumHeight = dp(48)
+                setPadding(dp(4), 0, dp(4), 0)
+                contentDescription = "Open effects editor for channel ${ch + 1}"
                 setOnClickListener {
                     startActivity(Intent(this@InstrumentActivity, InstrumentEffectsActivity::class.java)
                         .putExtra(InstrumentEffectsActivity.EXTRA_CHANNEL, ch))
                 }
-            })
-            row.setOnClickListener { onChannelTapped(ch) }
+            }
+            row.addView(effectsButton, LinearLayout.LayoutParams(dp(76), dp(48)))
+            effectsButtons[ch] = effectsButton
+            row.setOnClickListener { selectChannel(ch); onChannelTapped(ch) }
 
             rowNameLabels[ch] = nameLabel
+            channelRows[ch] = row
             channelList.addView(row)
+        }
+        refreshRackStates()
+    }
+
+    private fun selectChannel(channel: Int) {
+        selectedChannel = channel
+        channelRows.forEachIndexed { index, row ->
+            row?.setBackgroundColor(if (index == channel) 0x223f51b5 else Color.TRANSPARENT)
+        }
+    }
+
+    private fun refreshRackStates() {
+        val svc = service ?: return
+        executor.execute {
+            val states = (0..15).map { runCatching { svc.isInstrumentRackEnabled(it) }.getOrDefault(false) }
+            runOnUiThread { states.forEachIndexed { ch, enabled -> showRackState(ch, enabled) } }
+        }
+    }
+
+    private fun showRackState(channel: Int, enabled: Boolean) {
+        effectsButtons[channel]?.apply {
+            // Retain a quiet active-rack cue without adding another control.
+            alpha = if (enabled) 1f else 0.78f
+            contentDescription = "Effects${if (enabled) ", active rack" else ""}, channel ${channel + 1}. Open effects editor"
         }
     }
 
@@ -249,7 +400,8 @@ class InstrumentActivity : AppCompatActivity() {
 
             val jsonStr = svc.getInstruments()
             val parsed = parseInstruments(jsonStr)
-            val current = IntArray(16) { ch -> svc.getChannelProgram(ch) }
+            val current = selectedSetId?.let { id -> fileSets.all().firstOrNull { it.id == id }?.programs?.toIntArray() }
+                ?: IntArray(16) { ch -> svc.getChannelProgram(ch) }
             // Diagnostics: pinpoint where the chain breaks when the SF2 is
             // loaded but the list comes back empty.
             AppLogger.info(
@@ -405,6 +557,35 @@ class InstrumentActivity : AppCompatActivity() {
         search.post { imm?.showSoftInput(search, InputMethodManager.SHOW_IMPLICIT) }
     }
 
+    private fun chooseInstrumentSet() {
+        executor.execute {
+            val mappings = MidiFileMappingStore.get(applicationContext)
+            fileSets.removeUnreferenced(mappings.all().mapNotNull { it.instrumentSetId }.toSet())
+            var capacityExhausted = false
+            mappings.all().forEach { cell ->
+                if (cell.mode == MODE_FILE && cell.filePath.isNotEmpty() && cell.instrumentSetId == null) {
+                    val updated = fileSets.createForCell(cell, com.piano.sequencer.midi.MidiInitialPrograms.fromFile(java.io.File(cell.filePath)))
+                        ?.copy(trackInstrumentSets = cell.trackInstrumentSets)
+                    if (updated == null) capacityExhausted = true else mappings.set(updated)
+                }
+            }
+            val sets = fileSets.all()
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (capacityExhausted) Toast.makeText(this, "Could not create instrument sets for all MIDI files: 15-set limit reached", Toast.LENGTH_LONG).show()
+                val labels = listOf("Main instruments") + sets.map { it.name }
+                AlertDialog.Builder(this).setTitle("Choose instrument set")
+                    .setItems(labels.toTypedArray()) { _, which ->
+                        val target = if (which == 0) null else sets[which - 1].id
+                        startActivity(Intent(this, InstrumentActivity::class.java).apply {
+                            if (target != null) putExtra(EXTRA_SET_ID, target)
+                        })
+                        finish()
+                    }.show()
+            }
+        }
+    }
+
     // "name (bank N)" when the preset lives outside bank 0, so identical
     // preset names in different banks stay distinguishable
     private fun displayName(instrument: Instrument): String =
@@ -413,6 +594,21 @@ class InstrumentActivity : AppCompatActivity() {
 
     // Apply bank+program to the channel live; update the row label on success
     private fun applyInstrument(channel: Int, instrument: Instrument) {
+        val setId = selectedSetId
+        if (setId != null) {
+            val set = fileSets.all().firstOrNull { it.id == setId } ?: return
+            val packed = (instrument.bank shl 8) or instrument.program
+            executor.execute {
+                val svc = service
+                val applied = svc?.setChannelProgram(set.channelBase + channel, instrument.bank, instrument.program) == true
+                val saved = fileSets.updatePreset(setId, channel, packed)
+                runOnUiThread {
+                    if (applied && saved) rowNameLabels[channel]?.text = instrument.name
+                    else Toast.makeText(this, "Could not apply or save file preset", Toast.LENGTH_SHORT).show()
+                }
+            }
+            return
+        }
         val svc = service ?: return
         executor.execute {
             val ok = svc.setChannelProgram(channel, instrument.bank, instrument.program)

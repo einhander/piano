@@ -20,6 +20,7 @@ import com.piano.sequencer.midi.MidiFileLearnState
 import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.MidiFileTriggerController
 import com.piano.sequencer.midi.MidiRecordSession
+import com.piano.sequencer.midi.FileInstrumentSetStore
 import com.piano.sequencer.midi.MODE_CHORD
 import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.service.PlaybackService
@@ -299,10 +300,13 @@ class SequencerActivity : AppCompatActivity() {
             refreshPanel()
         }
 
-        panel.onTrackSelection = { cellId, selectedTracks, trackChannels ->
-            // UI thread; the controller persists first, then reloads the slot
-            // on a worker thread (no-op when the slot is not loaded).
-            MidiFileTriggerController.get(this).updateTrackSelection(cellId, selectedTracks, trackChannels)
+        panel.onTrackSelection = { cellId, selectedTracks, trackChannels, trackInstrumentSets ->
+            val mappings = MidiFileMappingStore.get(this)
+            mappings.get(cellId)?.let { cell ->
+                val updated = cell.copy(selectedTracks = selectedTracks, trackChannels = trackChannels, trackInstrumentSets = trackInstrumentSets)
+                mappings.set(updated)
+                if (updated.hasTrigger()) MidiFileTriggerController.get(this).updateTrackSelection(cellId, selectedTracks, trackChannels)
+            }
         }
 
         panel.onModeToggle = { cellId, newMode ->
@@ -330,6 +334,10 @@ class SequencerActivity : AppCompatActivity() {
                     MidiFileTriggerController.get(this).freeSlotForTrigger(cell.triggerKey())
                 }
                 MidiFileMappingStore.get(this).remove(cell.id)
+                cell.instrumentSetId?.let { setId ->
+                    val stillUsed = MidiFileMappingStore.get(this).all().any { it.instrumentSetId == setId }
+                    if (!stillUsed) FileInstrumentSetStore.get(this).remove(setId)
+                }
                 refreshPanel()
             }
         }
@@ -366,6 +374,8 @@ class SequencerActivity : AppCompatActivity() {
                 // cache miss). Unreadable file / service not bound → -1 → the cell
                 // keeps its current tempo (today's behavior).
                 val fileTempo = service?.getMidiFileTempo(destFile.absolutePath) ?: -1f
+                val initialPrograms = com.piano.sequencer.midi.MidiInitialPrograms.fromFile(destFile)
+                val sourceName = destFile.name
                 runOnUiThread {
                     if (cellId != null) {
                         val store = MidiFileMappingStore.get(this@SequencerActivity)
@@ -380,13 +390,28 @@ class SequencerActivity : AppCompatActivity() {
                             // multi-track cells). The tempo is set from the file
                             // (its initial tempo meta) so the cell plays at the
                             // file's speed.
-                            store.set(cur.copy(
-                                filePath = destFile.absolutePath,
-                                selectedTracks = null,
-                                trackChannels = emptyMap(),
-                                channel = -1,
-                                tempo = if (fileTempo > 0f) fileTempo.toDouble() else cur.tempo
-                            ))
+                             val imported = cur.copy(
+                                 filePath = destFile.absolutePath,
+                                 selectedTracks = null,
+                                 trackChannels = emptyMap(),
+                                 trackInstrumentSets = emptyMap(),
+                                 channel = -1,
+                                 tempo = if (fileTempo > 0f) fileTempo.toDouble() else cur.tempo
+                             )
+                              val instrumentSets = FileInstrumentSetStore.get(this@SequencerActivity)
+                               val oldSetId = cur.instrumentSetId
+                              val otherReferences = store.all().filter { it.id != cur.id }.mapNotNull { it.instrumentSetId }.toSet()
+                              instrumentSets.removeUnreferenced(otherReferences + listOfNotNull(cur.instrumentSetId))
+                              val withSet = instrumentSets.replaceForCell(imported, cur.instrumentSetId, otherReferences, initialPrograms, "${destFile.name} instruments")
+                               if (withSet == null) {
+                                   Toast.makeText(this@SequencerActivity, "Import failed: file instrument-set capacity full.", Toast.LENGTH_LONG).show()
+                                   return@runOnUiThread
+                                } else {
+                                    store.set(withSet)
+                                    val revision = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "?" } catch (_: Exception) { "?" }
+                                    val compactPrograms = initialPrograms.mapIndexed { channel, packed -> "$channel:${packed shr 8}/${packed and 0xff}" }.joinToString(",")
+                                    AppLogger.info("FILESET", "import cell=$cellId file=$sourceName rev=$revision set=$oldSetId->${withSet.instrumentSetId} base=${oldSetId?.let { id -> instrumentSets.all().firstOrNull { it.id == id }?.channelBase } ?: "?"}->${instrumentSets.all().firstOrNull { it.id == withSet.instrumentSetId }?.channelBase} parsed={$compactPrograms} selected=${withSet.selectedTracks} channels=${withSet.trackChannels} choices=${withSet.trackInstrumentSets}")
+                                }
                         }
                     }
                     Toast.makeText(this@SequencerActivity, "Imported: ${destFile.name}", Toast.LENGTH_SHORT).show()

@@ -14,6 +14,7 @@ struct MidiFileEvent {
     uint8_t data1;
     uint8_t data2;
     uint8_t trackId;
+    uint16_t channel = 0xFFFF;
 };
 
 // Command types for the worker→audio command queue
@@ -44,9 +45,8 @@ struct MidiFileSlot {
     std::vector<MidiFileEvent> events;
     int32_t eventCount = 0;
 
-    // Active-note tracking: bit 0-127 per channel (0-15)
-    // 16 channels × 128 notes = 2048 bits = 32 uint64_t
-    uint64_t activeNotes[16][4]; // 16 ch × 128 notes (4 × 32-bit words per ch)
+    // Active-note tracking: bit 0-127 per logical channel (0-255).
+    uint64_t activeNotes[256][4];
 
     // Playback position
     double currentTick = 0.0;     // double accumulator to avoid drift
@@ -95,7 +95,7 @@ public:
     // Returns 0 on success, -1 (path/selection invalid/no free slot),
     // -3 (command queue full), -4 (slot is active/playing — busy).
     int load(int slot, const char* filePath, float bpm, bool loop,
-             // trackChannels, if non-null, has at least selectedCount entries; -1 = keep file channel; values clamped to [0,15].
+             // trackChannels, if non-null, has at least selectedCount entries; -1 = keep file channel; values clamped to [0,255].
              const int32_t* selectedTracks, int32_t selectedCount,
              const int32_t* trackChannels, bool startAfterLoad = false);
 

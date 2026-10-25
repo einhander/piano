@@ -12,6 +12,7 @@
 #include "engine/MidiFilePlayer.h"
 #include "midi/MidiFileWriter.h"
 #include "midi/MidiFileParser.h"
+#include "midi/MidiFileTrackRoute.h"
 
 #include <cmath>
 #include <cstdio>
@@ -98,6 +99,35 @@ static bool hasOnlyTrack1AndMeta(const std::vector<MidiFileEvent>& v) {
 }
 
 int main() {
+    // JNI boundary normalization must preserve supported routes, fail closed,
+    // and feed same route semantics exercised by MidiFilePlayer below.
+    {
+        if (normalizeMidiFileTrackRoute(288) != 288 ||
+            normalizeMidiFileTrackRoute(272) != 272 ||
+            normalizeMidiFileTrackRoute(496) != 496 ||
+            normalizeMidiFileTrackRoute(200) != 200 ||
+            normalizeMidiFileTrackRoute(-1) != -1) return fail("valid route normalization wrong");
+        for (int invalid : {256, 271, 273, 497, -2})
+            if (normalizeMidiFileTrackRoute(invalid) != -2) return fail("invalid route did not fail closed");
+        std::vector<MidiFileEvent> in = {{0, 0x92, 60, 1, 0}};
+        int32_t sel[] = {0};
+        int32_t channel[] = {normalizeMidiFileTrackRoute(288)};
+        auto out = MidiFilePlayer::applyTrackSelection(in, sel, 1, channel);
+        if (out.size() != 1 || out[0].channel != 34) return fail("JNI normalized file route wrong");
+        in = {{0, 0xB0, 0, 1, 0}, {0, 0xB0, 32, 2, 0},
+              {0, 0xC0, 10, 0, 0}, {0, 0x90, 60, 100, 0}};
+        out = MidiFilePlayer::applyTrackSelection(in, sel, 1, channel);
+        if (out.size() != 1 || out[0].channel != 32 || out[0].status != 0x90)
+            return fail("JNI FILE route leaked preset events or MAIN channel");
+        channel[0] = normalizeMidiFileTrackRoute(273);
+        if (!MidiFilePlayer::applyTrackSelection(in, sel, 1, channel).empty())
+            return fail("invalid JNI route leaked events");
+        channel[0] = normalizeMidiFileTrackRoute(-1);
+        out = MidiFilePlayer::applyTrackSelection(in, sel, 1, channel);
+        if (out.size() != in.size() || out.back().channel != 0xFFFF)
+            return fail("explicit MAIN passthrough changed");
+        std::puts("JniTrackRouteNormalization: PASS");
+    }
     // 1) >8192 events
     {
         const std::string path = makePath("midi_file_player_big.mid");
@@ -127,9 +157,9 @@ int main() {
     // 3) per-track remap
     {
         std::vector<MidiFileEvent> in = {{0, 0x90, 60, 1, 0}, {0, 0x91, 61, 1, 1}};
-        int32_t sel[] = {0, 1}; int32_t ch[] = {5, -1};
+        int32_t sel[] = {0, 1}; int32_t ch[] = {16, -1};
         auto out = MidiFilePlayer::applyTrackSelection(in, sel, 2, ch);
-        if (out.size() != 2 || out[0].status != 0x95 || out[1].status != 0x91) return fail("remap wrong");
+        if (out.size() != 2 || out[0].status != 0x90 || out[0].channel != 16 || out[1].status != 0x91) return fail("remap wrong");
         std::puts("PerTrackRemap: PASS");
     }
 
@@ -139,6 +169,26 @@ int main() {
         auto out = MidiFilePlayer::applyTrackSelection(in, nullptr, 0, nullptr);
         if (out.size() != 1 || out[0].status != 0xFF) return fail("selectedCount zero wrong");
         std::puts("SelectedCountZero: PASS");
+    }
+
+    // additive file-bank route: original MIDI channel 2 maps to logical 18; status untouched.
+    {
+        std::vector<MidiFileEvent> in = {{0, 0x92, 60, 1, 0}};
+        int32_t sel[] = {0}; int32_t ch[] = {272}; // 256 + base 16
+        auto out = MidiFilePlayer::applyTrackSelection(in, sel, 1, ch);
+        if (out.size() != 1 || out[0].channel != 18 || out[0].status != 0x92)
+            return fail("additive source-channel route wrong");
+        std::puts("AdditiveSourceChannel: PASS");
+    }
+
+    // File-set routing keeps user-selected presets by suppressing embedded bank/program changes.
+    {
+        std::vector<MidiFileEvent> in = {{0, 0xC0, 5, 0, 0}, {0, 0xB0, 0, 1, 0}, {0, 0x90, 60, 1, 0}};
+        int32_t sel[] = {0}; int32_t ch[] = {16};
+        auto out = MidiFilePlayer::applyTrackSelection(in, sel, 1, ch);
+        if (out.size() != 1 || out[0].status != 0x90 || out[0].channel != 16)
+            return fail("file-set program override filtering wrong");
+        std::puts("FileSetProgramFilter: PASS");
     }
 
     // 5) track names

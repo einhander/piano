@@ -925,6 +925,29 @@ class MidiFileMappingTest {
         assertEquals(256, loaded.triggerKey())
     }
 
+    @Test
+    fun fileInstrumentSetsPersistPresetsAndAllocateDisjointRanges() {
+        val data = mutableMapOf<String?, Any?>()
+        val prefs = SharedPrefsStub(data)
+        prefs.edit().putInt("chan_prog_0", 0x0102).putInt("chan_prog_1", 0x0304).commit()
+        val store = FileInstrumentSetStore(prefs)
+        val imported = store.createForCell(SequencerCell(id = 7, filePath = "/music/song.mid"), prefs)!!
+        val first = store.all().single()
+        assertEquals(0, first.programs[0])
+        assertEquals(0, first.programs[1])
+
+        val bases = mutableSetOf(first.channelBase)
+        repeat(14) { bases.add(store.create("set-$it", emptyList())!!.channelBase) }
+        assertEquals(15, bases.size)
+        assertTrue(bases.all { it in 16..240 && it % 16 == 0 })
+        assertNull(store.create("overflow", emptyList()))
+
+        val reloaded = FileInstrumentSetStore(prefs)
+        assertEquals(15, reloaded.all().size)
+        assertTrue(reloaded.remove(imported.instrumentSetId!!))
+        assertEquals(first.channelBase, reloaded.create("reused", emptyList())!!.channelBase)
+    }
+
     // ── B4: trigger lookups ──
 
     @Test

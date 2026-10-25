@@ -11,6 +11,7 @@
 #include <signal.h>
 #include "audio/OboeOutput.h"
 #include "engine/NativeEngine.h"
+#include "midi/MidiFileTrackRoute.h"
 #include "model/TransportState.h"
 #include "engine/MidiRecorder.h"
 #include "synth/FluidSynthEngine.h"
@@ -1301,7 +1302,7 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeLoadMidiFileSlot(
     channelBuf.resize(static_cast<size_t>(selectedCount), -1);
     for (jsize i = 0; i < selectedCount; ++i) {
         int32_t v = (i < channelCount) ? channelBuf[static_cast<size_t>(i)] : -1;
-        channelBuf[static_cast<size_t>(i)] = (v < -1 || v > 15) ? -1 : v;
+        channelBuf[static_cast<size_t>(i)] = normalizeMidiFileTrackRoute(v);
     }
     jint result = inst->loadMidiFileSlot(static_cast<int>(slot), path, static_cast<float>(tempo), loop != 0,
                                          selectedCount ? selectedBuf.data() : nullptr, static_cast<int32_t>(selectedCount),

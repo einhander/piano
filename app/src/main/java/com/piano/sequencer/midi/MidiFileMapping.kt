@@ -20,6 +20,8 @@ const val SYSEX_KEY_BASE = Int.MIN_VALUE
 /** Cell modes: file playback (sequencer) vs chord (single held chord). */
 const val MODE_FILE = "FILE"
 const val MODE_CHORD = "CHORD"
+const val TRACK_INSTRUMENT_MAIN = "MAIN"
+const val TRACK_INSTRUMENT_FILE = "FILE"
 
 /**
  * One note of a chord: MIDI key + the last-recorded velocity (0–127) + the
@@ -61,6 +63,8 @@ data class SequencerCell(
     val filePath: String = "", // "" = no file
     val selectedTracks: List<Int>? = null,
     val trackChannels: Map<Int, Int> = emptyMap(),
+    val trackInstrumentSets: Map<Int, String> = emptyMap(),
+    val instrumentSetId: String? = null,
     val loop: Boolean = false,
     val tempo: Double = 120.0, // BPM, 20–300
     // FILE: -1 = from file, 0-15 = remap all events; CHORD: -1 = as recorded,
