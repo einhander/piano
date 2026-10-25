@@ -165,6 +165,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             setOnClickListener { showMappings() }
         })
         container.addView(SwitchCompat(this).apply {
+            minimumHeight = dp(48)
             text = getString(R.string.instrument_effects_rack)
             isChecked = rack
             isEnabled = instances.any { it.available }
@@ -179,12 +180,13 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 background = ContextCompat.getDrawable(this@InstrumentEffectsActivity, R.drawable.card_frame)
-                setPadding(dp(14), dp(10), dp(14), dp(10))
-                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) }
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }
             }
             card.addView(SwitchCompat(this).apply {
+                minimumHeight = dp(48)
                 text = instance.descriptor.displayName
-                textSize = 18f
+                textSize = 16f
                 isChecked = instance.enabled
                 isEnabled = instance.available
                 setOnCheckedChangeListener { button, checked ->
@@ -236,6 +238,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         addView(controlRow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         if (p.type == EffectParameterType.BOOLEAN) {
             controlRow.addView(SwitchCompat(this@InstrumentEffectsActivity).apply {
+                minimumHeight = dp(48)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 text = p.displayName
                 isChecked = p.value.rawValue >= 0.5f
@@ -246,6 +249,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             })
         } else {
             controlRow.addView(SeekBar(this@InstrumentEffectsActivity).apply {
+                minimumHeight = dp(48)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 max = 1000
                 progress = instrumentParameterProgress(p, p.value.rawValue)

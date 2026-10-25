@@ -1,18 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="?attr/colorBackgroundFloating">
+    android:background="@color/ui_background">
 
     <androidx.appcompat.widget.Toolbar
         android:id="@+id/toolbar"
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
         android:background="?attr/colorPrimary"
-        android:elevation="4dp"
+        android:theme="@style/ThemeOverlay.Piano.Toolbar"
+        android:elevation="0dp"
         android:title="@string/settings_title"
-        android:titleTextColor="@android:color/white" />
+        app:titleTextColor="@color/ui_surface" />
 
     <ScrollView
         android:layout_width="match_parent"
@@ -31,7 +33,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="20dp"
+                android:padding="12dp"
                 android:background="@drawable/card_frame"
                 android:layout_marginBottom="16dp">
 
@@ -56,7 +58,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
                     android:textAllCaps="false"
-                    android:textColor="@android:color/black" />
+                    android:textColor="@color/ui_primary" />
 
                 <TextView
                     android:layout_width="match_parent"
@@ -70,7 +72,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="20dp"
+                android:padding="12dp"
                 android:background="@drawable/card_frame"
                 android:layout_marginBottom="16dp">
 
@@ -80,7 +82,7 @@
                     android:text="@string/settings_sf2_title"
                     android:textSize="18sp"
                     android:textStyle="bold"
-                    android:layout_marginBottom="16dp" />
+                    android:layout_marginBottom="8dp" />
 
                 <Button
                     android:id="@+id/btnBrowse"
@@ -88,7 +90,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/settings_browse"
-                    android:textColor="@android:color/black" />
+                    android:textColor="@color/ui_primary" />
 
                 <TextView
                     android:id="@+id/tvSf2ListHeader"
@@ -126,9 +128,9 @@
                 <View
                     android:layout_width="match_parent"
                     android:layout_height="1dp"
-                    android:layout_marginTop="16dp"
-                    android:layout_marginBottom="16dp"
-                    android:background="?attr/colorControlNormal" />
+                    android:layout_marginTop="8dp"
+                    android:layout_marginBottom="8dp"
+                    android:background="@color/ui_outline" />
 
                 <Button
                     android:id="@+id/btnUnload"
@@ -145,7 +147,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="20dp"
+                android:padding="12dp"
                 android:background="@drawable/card_frame"
                 android:layout_marginBottom="16dp">
 
@@ -155,50 +157,42 @@
                     android:text="@string/settings_fluidsynth_title"
                     android:textSize="18sp"
                     android:textStyle="bold"
-                    android:layout_marginBottom="20dp" />
+                    android:layout_marginBottom="8dp" />
 
                 <!-- Polyphony -->
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/settings_polyphony_label"
-                    android:textSize="14sp" />
-
                 <TextView
                     android:id="@+id/tvPolyphony"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
-                    android:textSize="12sp"
-                    android:textColor="?attr/colorControlNormal" />
+                    android:textSize="14sp"
+                    android:textColor="@color/ui_text" />
 
                 <SeekBar
                     android:id="@+id/seekBarPolyphony"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:layout_marginBottom="24dp"
+                    android:minHeight="48dp"
+                    android:contentDescription="@string/settings_polyphony_label"
+                    android:layout_marginBottom="8dp"
                     android:min="1"
                     android:max="2048"
                     android:progress="64" />
 
                 <!-- Master Gain -->
                 <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/settings_master_gain_label"
-                    android:textSize="14sp" />
-
-                <TextView
                     android:id="@+id/tvMasterGain"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
-                    android:textSize="12sp"
-                    android:textColor="?attr/colorControlNormal" />
+                    android:textSize="14sp"
+                    android:textColor="@color/ui_text" />
 
                 <SeekBar
                     android:id="@+id/seekBarMasterGain"
+                    android:minHeight="48dp"
+                    android:contentDescription="@string/settings_master_gain_label"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
@@ -209,7 +203,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="24dp"
+                    android:layout_marginTop="8dp"
                     android:text="@string/settings_reverb_label"
                     android:textSize="14sp" />
 
@@ -223,6 +217,9 @@
 
                 <androidx.appcompat.widget.SwitchCompat
                     android:id="@+id/switchReverb"
+                    android:minHeight="48dp"
+                    android:minWidth="48dp"
+                    android:contentDescription="@string/settings_reverb_label"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
@@ -246,6 +243,9 @@
 
                 <androidx.appcompat.widget.SwitchCompat
                     android:id="@+id/switchChorus"
+                    android:minHeight="48dp"
+                    android:minWidth="48dp"
+                    android:contentDescription="@string/settings_chorus_label"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
@@ -269,6 +269,8 @@
 
                 <Spinner
                     android:id="@+id/spinnerInterps"
+                    android:minHeight="48dp"
+                    android:contentDescription="@string/settings_interps_label"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
@@ -278,9 +280,10 @@
                      size (2×burst..8×burst) and the seekbar below is disabled. -->
                 <androidx.appcompat.widget.SwitchCompat
                     android:id="@+id/switchAutoTune"
+                    android:minHeight="48dp"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="24dp"
+                    android:layout_marginTop="8dp"
                     android:layout_marginBottom="8dp"
                     android:text="@string/settings_auto_tune_label"
                     android:checked="true" />
@@ -302,6 +305,8 @@
 
                 <SeekBar
                     android:id="@+id/seekBarBufferSize"
+                    android:minHeight="48dp"
+                    android:contentDescription="@string/settings_buffer_size_label"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
@@ -316,7 +321,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="20dp"
+                android:padding="12dp"
                 android:background="@drawable/card_frame"
                 android:layout_marginBottom="16dp">
 
@@ -348,7 +353,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:textColor="@android:color/black" />
+                    android:textColor="@color/ui_primary" />
 
             </LinearLayout>
 

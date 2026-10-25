@@ -39,6 +39,21 @@ committing; tool access denied. Git hooks remain enabled.
 
 ## Device checklist (pending)
 
+## Implemented groups and static review
+
+- Settings: 12dp card insets, tighter spacing, single existing dynamic polyphony
+  and gain labels (no duplicated static label), 48dp sliders/switches/spinner,
+  selectable untruncated SF2 names and explicit destructive unload. SAF and all
+  settings callbacks/conversions untouched. XML parse and baseline-ID subset
+  checks passed for settings/SF2/effects layouts.
+- Effects/shared Instrument Effects: white toolbar title/navigation overlay,
+  compact cards with Configure beside switch, truthful state below; all writable
+  parameters retained, 48dp controls, smaller editor heading and resource-based
+  analyzer text. Shared container/status IDs retained for both activities.
+  Static review: editor extras, enabled conditions, parameter conversion,
+  persistence, expansion, MIDI mapping callbacks, meter/analyzer lifecycle and
+  polling unchanged.
+
 Use 360dp portrait, landscape and font scale 1.3; check wrapping, scroll reach,
 Back/Close, white toolbar icons, TalkBack labels/status, touch targets. Exercise
 every control listed above. Specifically verify note-off on touch cancellation,

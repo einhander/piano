@@ -229,6 +229,8 @@ class EffectsActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 instances.forEachIndexed { index, instance ->
                     val tab = android.widget.Button(this@EffectsActivity).apply {
+                        minimumHeight = (48 * resources.displayMetrics.density).toInt()
+                        isAllCaps = false
                         text = friendlyEffectTitle(instance.descriptor.stableId)
                         isEnabled = instance.available
                         isSelected = index == selected
@@ -247,17 +249,18 @@ class EffectsActivity : AppCompatActivity() {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = ContextCompat.getDrawable(this@EffectsActivity, R.drawable.card_frame)
-            val pad = (16 * resources.displayMetrics.density).toInt()
+            val pad = (12 * resources.displayMetrics.density).toInt()
             setPadding(pad, pad, pad, pad)
         }
         panel.addView(TextView(this).apply {
             text = friendlyEffectTitle(instance.descriptor.stableId)
-            textSize = 24f
+            textSize = 20f
             setTypeface(typeface, Typeface.BOLD)
             setPadding(0, 8, 0, 12)
         })
         val state = TextView(this).apply { textSize = 13f }
         val toggle = SwitchCompat(this).apply {
+            minimumHeight = (48 * resources.displayMetrics.density).toInt()
             text = getString(R.string.master_effects_enable)
             isChecked = instance.enabled
             isEnabled = instance.available
@@ -287,13 +290,14 @@ class EffectsActivity : AppCompatActivity() {
             startMeterPolling()
         } else if (stableId == "lsp.parametric_eq") {
             panel.addView(TextView(this).apply {
-                text = "LIVE POST-EQ SIGNAL SPECTRUM\nShows audio passing through EQ. This is not an EQ response curve."
+                text = getString(R.string.ui_live_spectrum)
                 textSize = 13f
                 setTypeface(typeface, Typeface.BOLD)
                 setPadding(0, 16, 0, 6)
             })
             val analyzerToggle = SwitchCompat(this).apply {
-                text = "Live analyzer"
+                text = getString(R.string.ui_analyzer)
+                minimumHeight = (48 * resources.displayMetrics.density).toInt()
                 isChecked = spectrumEnabled
                 spectrumToggle = this
                 setOnCheckedChangeListener { _, checked ->
@@ -492,7 +496,7 @@ class EffectsActivity : AppCompatActivity() {
         val card = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = ContextCompat.getDrawable(ctx, R.drawable.card_frame)
-            val pad = (14 * resources.displayMetrics.density).toInt()
+            val pad = (12 * resources.displayMetrics.density).toInt()
             setPadding(pad, pad, pad, pad)
             val lp = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -505,6 +509,7 @@ class EffectsActivity : AppCompatActivity() {
         // Compact title row and truthful enabled/bypassed state.
         val header = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
             val lp = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -524,6 +529,8 @@ class EffectsActivity : AppCompatActivity() {
             setTextColor(ContextCompat.getColor(ctx, if (instance.available && instance.enabled) R.color.effects_accent else android.R.color.darker_gray))
         }
         val enableSwitch = SwitchCompat(ctx).apply {
+            minimumWidth = (48 * resources.displayMetrics.density).toInt()
+            minimumHeight = (48 * resources.displayMetrics.density).toInt()
             contentDescription = getString(R.string.master_effects_enable)
             isChecked = instance.enabled
             isEnabled = instance.available
@@ -547,18 +554,19 @@ class EffectsActivity : AppCompatActivity() {
         }
         header.addView(titleView)
         header.addView(enableSwitch)
-        card.addView(header)
-
-        card.addView(stateLabel)
-
         val editButton = android.widget.Button(ctx).apply {
-            text = getString(R.string.master_effects_parameters, instance.parameters.size)
+            text = getString(R.string.ui_configure)
+            isAllCaps = false
+            minimumHeight = (48 * resources.displayMetrics.density).toInt()
+            contentDescription = "$title · ${getString(R.string.ui_configure)}"
             isEnabled = instance.available
             setOnClickListener {
                 startActivity(Intent(this@EffectsActivity, EffectsActivity::class.java).putExtra(EXTRA_EFFECT_SLOT, slot))
             }
         }
-        card.addView(editButton)
+        header.addView(editButton)
+        card.addView(header)
+        card.addView(stateLabel)
         return card
     }
 
@@ -576,12 +584,14 @@ class EffectsActivity : AppCompatActivity() {
 
         val label = TextView(ctx).apply {
             text = formatParamLabel(p, value)
-            textSize = 13f
+            textSize = 14f
             isEnabled = enabled
         }
         row.addView(label)
 
         val seek = SeekBar(ctx).apply {
+            minimumHeight = (48 * resources.displayMetrics.density).toInt()
+            contentDescription = p.displayName
             isEnabled = enabled
             max = SEEKBAR_STEPS
             progress = valueToProgress(p, value)

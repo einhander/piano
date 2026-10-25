@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ui_configure">Configure</string>
+    <string name="ui_live_spectrum">Live post-EQ signal spectrum\nAudio passing through EQ, not an EQ response curve.</string>
+    <string name="ui_analyzer">Live analyzer</string>
+    <string name="ui_live">Live</string>
+    <string name="ui_performance">Performance</string>
+    <string name="ui_test_notes">Test notes · hold to play</string>
+    <string name="ui_workspace">Workspace</string>
+    <string name="ui_help">Help</string>
+    <string name="ui_sequencer_summary">MIDI files and chords · Help</string>
+    <string name="ui_multi_summary">Routing and volume are independent · Help</string>
+    <string name="ui_effects">Effects</string>
+    <string name="ui_effects_channel">Open effects editor for channel %1$d</string>
+</resources>
