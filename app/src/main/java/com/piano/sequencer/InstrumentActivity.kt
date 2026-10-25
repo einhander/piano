@@ -173,14 +173,14 @@ class InstrumentActivity : AppCompatActivity() {
                 text = "Reset from MIDI"
                 isAllCaps = false
                 textSize = 13f
-                minHeight = dp(40)
-                minimumHeight = dp(40)
+                minHeight = dp(48)
+                minimumHeight = dp(48)
                 setPadding(dp(12), 0, dp(12), 0)
                 setOnClickListener { confirmResetFromMidi(setId) }
             }
             (tvHint.parent as? android.view.ViewGroup)?.let { parent ->
                 parent.addView(resetButton, parent.indexOfChild(setSelector) + 1,
-                    android.view.ViewGroup.LayoutParams(-2, dp(44)))
+                    android.view.ViewGroup.LayoutParams(-2, -2))
             }
         } else {
             setSelector.text = "Instrument set: Main instruments ▾"
@@ -298,20 +298,18 @@ class InstrumentActivity : AppCompatActivity() {
                     else
                         ColorDrawable(selector.data)
                 }
-                setPadding(dp(8), 0, dp(4), 0)
-                minimumHeight = dp(60)
-                layoutParams = LinearLayout.LayoutParams(-1, dp(60))
+                setPadding(dp(8), dp(8), dp(4), dp(8))
+                minimumHeight = dp(64)
+                layoutParams = LinearLayout.LayoutParams(-1, -2)
             }
 
             val channelLabel = TextView(this).apply {
                 text = if (ch == 9) getString(R.string.instrument_channel_drums)
                        else getString(R.string.instrument_channel, ch + 1)
                 textSize = 14f
-                setTextColor(0xFF30343B.toInt())
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
+                setTextColor(getColor(R.color.ui_muted))
             }
-            channelLabel.layoutParams = LinearLayout.LayoutParams(dp(58), LinearLayout.LayoutParams.WRAP_CONTENT)
+            channelLabel.layoutParams = LinearLayout.LayoutParams(-1, -2)
             channelLabel.textSize = 13f
             channelLabel.setTypeface(null, android.graphics.Typeface.BOLD)
 
@@ -319,37 +317,39 @@ class InstrumentActivity : AppCompatActivity() {
                 text = getString(R.string.instrument_unknown)
                 textSize = 15f
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
+                // Wrap the full program name, including at large font sizes.
             }
-            nameLabel.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            nameLabel.layoutParams = LinearLayout.LayoutParams(-1, -2)
 
-            row.addView(channelLabel)
             row.addView(View(this).apply {
                 background = android.graphics.drawable.GradientDrawable().apply {
                     shape = android.graphics.drawable.GradientDrawable.OVAL
-                    setColor(Color.rgb(46, 125, 50))
+                    setColor(getColor(R.color.ui_active))
                 }
                 layoutParams = LinearLayout.LayoutParams(dp(10), dp(10)).apply { marginEnd = dp(8) }
                 visibility = View.INVISIBLE
                 contentDescription = getString(R.string.instrument_note_held, ch + 1)
                 noteIndicators[ch] = this
             })
-            row.addView(nameLabel)
+            row.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(channelLabel)
+                addView(nameLabel)
+            }, LinearLayout.LayoutParams(0, -2, 1f))
             val effectsButton = Button(this).apply {
-                text = "Effects"
+                text = getString(R.string.ui_effects)
                 isAllCaps = false
-                textSize = 12f
+                textSize = 14f
                 minHeight = dp(48)
                 minimumHeight = dp(48)
                 setPadding(dp(4), 0, dp(4), 0)
-                contentDescription = "Open effects editor for channel ${ch + 1}"
+                contentDescription = getString(R.string.ui_effects_channel, ch + 1)
                 setOnClickListener {
                     startActivity(Intent(this@InstrumentActivity, InstrumentEffectsActivity::class.java)
                         .putExtra(InstrumentEffectsActivity.EXTRA_CHANNEL, ch))
                 }
             }
-            row.addView(effectsButton, LinearLayout.LayoutParams(dp(76), dp(48)))
+            row.addView(effectsButton, LinearLayout.LayoutParams(dp(84), -2))
             effectsButtons[ch] = effectsButton
             row.setOnClickListener { selectChannel(ch); onChannelTapped(ch) }
 
@@ -363,7 +363,7 @@ class InstrumentActivity : AppCompatActivity() {
     private fun selectChannel(channel: Int) {
         selectedChannel = channel
         channelRows.forEachIndexed { index, row ->
-            row?.setBackgroundColor(if (index == channel) 0x223f51b5 else Color.TRANSPARENT)
+            row?.setBackgroundColor(if (index == channel) getColor(R.color.ui_selected) else Color.TRANSPARENT)
         }
     }
 

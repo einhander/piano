@@ -1,18 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="?attr/colorBackgroundFloating">
+    android:background="@color/ui_background">
 
     <androidx.appcompat.widget.Toolbar
         android:id="@+id/toolbar"
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
         android:background="?attr/colorPrimary"
-        android:elevation="4dp"
+        android:theme="@style/ThemeOverlay.Piano.Toolbar"
+        android:elevation="0dp"
         android:title="@string/instruments_title"
-        android:titleTextColor="@android:color/white" />
+        app:titleTextColor="@color/ui_surface" />
 
     <ScrollView
         android:layout_width="match_parent"
@@ -25,14 +27,14 @@
             android:layout_height="wrap_content"
             android:orientation="vertical"
              android:paddingHorizontal="8dp"
-             android:paddingTop="0dp">
+              android:paddingTop="12dp">
 
             <!-- Instruments Section -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                 android:padding="4dp"
+                  android:padding="8dp"
                 android:background="@drawable/card_frame"
                 android:layout_marginBottom="16dp">
 
@@ -41,15 +43,17 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="@string/instrument_hint"
-                    android:textSize="12sp"
-                    android:textColor="#454545" />
+                    android:minHeight="48dp"
+                    android:gravity="center_vertical"
+                    android:textSize="13sp"
+                    android:textColor="@color/ui_muted" />
 
                 <View
                     android:layout_width="match_parent"
                     android:layout_height="1dp"
                     android:layout_marginTop="2dp"
                     android:layout_marginBottom="2dp"
-                    android:background="?attr/colorControlNormal" />
+                    android:background="@color/ui_outline" />
 
                 <!-- Channel rows are added here programmatically -->
                 <LinearLayout

@@ -53,6 +53,13 @@ committing; tool access denied. Git hooks remain enabled.
   Static review: editor extras, enabled conditions, parameter conversion,
   persistence, expansion, MIDI mapping callbacks, meter/analyzer lifecycle and
   polling unchanged.
+- Multi: one compact row per channel (mask, slider, value); Enable and Close
+  fixed, full existing explanation under Help. Mask checked state, disabled
+  conditions and `fromUser` immediate volume callbacks retained verbatim.
+  No instrument query added. Instruments: two-line channel/program groups with
+  fully wrapping names, adaptive row height, existing indicator and 48dp Effects.
+  Set/reset controls retained. XML/ID check passed; selection, preset callbacks,
+  channel indices, rack states and polling reviewed unchanged.
 
 Use 360dp portrait, landscape and font scale 1.3; check wrapping, scroll reach,
 Back/Close, white toolbar icons, TalkBack labels/status, touch targets. Exercise

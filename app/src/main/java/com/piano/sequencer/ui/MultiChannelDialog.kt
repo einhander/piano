@@ -37,19 +37,22 @@ object MultiChannelDialog {
         content.addView(toggle)
         val rows = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         val hint = TextView(context).apply {
-            text = context.getString(R.string.multi_routing_hint)
-            textSize = 14f
+            text = context.getString(R.string.ui_multi_summary)
+            textSize = 13f
+            minimumHeight = dp(48)
+            gravity = Gravity.CENTER_VERTICAL
+            setTextColor(context.getColor(R.color.ui_primary))
+            setOnClickListener {
+                AlertDialog.Builder(context).setTitle(R.string.multi_title)
+                    .setMessage(context.getString(R.string.multi_routing_hint) + "\n\n" + context.getString(R.string.multi_volume_hint))
+                    .setPositiveButton(R.string.multi_close, null).show()
+            }
         }
-        rows.addView(hint)
-        rows.addView(TextView(context).apply {
-            text = context.getString(R.string.multi_volume_hint)
-            textSize = 12f
-            setPadding(0, dp(4), 0, dp(8))
-        })
+        content.addView(hint)
         val checks = ArrayList<CheckBox>(16)
         for (channel in 0..15) {
             if (channel > 0) rows.addView(android.view.View(context).apply {
-                setBackgroundColor(android.graphics.Color.rgb(224, 224, 224))
+                setBackgroundColor(context.getColor(R.color.ui_outline))
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
             val group = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
@@ -68,16 +71,14 @@ object MultiChannelDialog {
                 }
             }
             checks.add(check)
-            heading.addView(check, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            heading.addView(check, LinearLayout.LayoutParams(dp(94), ViewGroup.LayoutParams.WRAP_CONTENT))
             val value = initialVolumes.getOrElse(channel) { 100 }.coerceIn(0, 127)
             val valueLabel = TextView(context).apply {
                 text = context.getString(R.string.multi_volume_value, value)
                 textSize = 14f
                 importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
-            heading.addView(valueLabel)
-            group.addView(heading)
-            group.addView(SeekBar(context).apply {
+            heading.addView(SeekBar(context).apply {
                 max = 127
                 progress = value
                 minimumHeight = dp(48)
@@ -90,7 +91,9 @@ object MultiChannelDialog {
                     override fun onStartTrackingTouch(bar: SeekBar?) = Unit
                     override fun onStopTrackingTouch(bar: SeekBar?) = Unit
                 })
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            heading.addView(valueLabel)
+            group.addView(heading)
             rows.addView(group)
         }
         val scroll = ScrollView(context).apply {
