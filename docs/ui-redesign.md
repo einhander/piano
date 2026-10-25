@@ -1,5 +1,17 @@
 # UI redesign
 
+## Final verification
+
+- `./build.sh debug`: BUILD SUCCESSFUL (both configured ABIs).
+- `./gradlew :app:testDebugUnitTest`: BUILD SUCCESSFUL.
+- Baseline-to-HEAD `git diff --check`: passed; changed paths remain UI/resources
+  and this document only. Independent static review found no concrete handler or
+  visibility regressions. Native/audio/MIDI/service/model files are unchanged.
+- No device rendering or live audio/MIDI verification performed. In particular,
+  equal-weight sequencer action rows still need checking at 360dp / font scale
+  1.3 and in landscape for wrapping/clipping. Automated tests do not establish
+  visual acceptance or live performance behavior.
+
 Baseline: `e1325cd644119381a462cc209bb88ea9f5bfe9ff`; branch `feature/ui-redesign`.
 
 ## Baseline control inventory
