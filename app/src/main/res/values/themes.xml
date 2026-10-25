@@ -1,4 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.PianoSequencer" parent="Theme.MaterialComponents.Light.NoActionBar" />
+    <style name="Theme.PianoSequencer" parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="colorPrimary">@color/ui_primary</item>
+        <item name="colorPrimaryVariant">@color/ui_primary</item>
+        <item name="colorOnPrimary">@color/ui_surface</item>
+        <item name="colorSecondary">@color/ui_active</item>
+        <item name="colorError">@color/ui_danger</item>
+        <item name="android:colorAccent">@color/ui_active</item>
+        <item name="android:colorBackground">@color/ui_background</item>
+        <item name="android:textColorPrimary">@color/ui_text</item>
+        <item name="android:textColorSecondary">@color/ui_muted</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:statusBarColor">@color/ui_primary</item>
+        <item name="android:navigationBarColor">@color/ui_background</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="toolbarStyle">@style/Widget.Piano.Toolbar</item>
+        <item name="buttonStyle">@style/Widget.Piano.Button</item>
+        <item name="android:buttonStyle">@style/Widget.Piano.Button</item>
+    </style>
 </resources>
