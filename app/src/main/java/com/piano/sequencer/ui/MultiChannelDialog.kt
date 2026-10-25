@@ -74,8 +74,10 @@ object MultiChannelDialog {
             heading.addView(check, LinearLayout.LayoutParams(dp(94), ViewGroup.LayoutParams.WRAP_CONTENT))
             val value = initialVolumes.getOrElse(channel) { 100 }.coerceIn(0, 127)
             val valueLabel = TextView(context).apply {
-                text = context.getString(R.string.multi_volume_value, value)
+                text = context.getString(R.string.ui_volume_value, value)
                 textSize = 14f
+                minWidth = dp(32)
+                gravity = Gravity.END
                 importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
             heading.addView(SeekBar(context).apply {
@@ -85,7 +87,7 @@ object MultiChannelDialog {
                 contentDescription = context.getString(R.string.multi_channel_volume, channel + 1)
                 setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                     override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
-                        valueLabel.text = context.getString(R.string.multi_volume_value, progress)
+                        valueLabel.text = context.getString(R.string.ui_volume_value, progress)
                         if (fromUser) onVolumeChange(channel, progress)
                     }
                     override fun onStartTrackingTouch(bar: SeekBar?) = Unit

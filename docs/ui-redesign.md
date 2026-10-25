@@ -37,8 +37,6 @@ debug build and JVM unit tests. No device/emulator available: no visual or
 on-device behavior verification claimed. `caveman-commit` skill requested before
 committing; tool access denied. Git hooks remain enabled.
 
-## Device checklist (pending)
-
 ## Implemented groups and static review
 
 - Settings: 12dp card insets, tighter spacing, single existing dynamic polyphony
@@ -70,6 +68,38 @@ committing; tool access denied. Git hooks remain enabled.
   File/Chord conditions, track guards, focus-loss tempo conversion, learn flow,
   test/record maps and refresh restoration retained. Chord file actions remain
   GONE. No timing or recorder changes.
+- Main (last): original fields grouped into Live status/device card, two-column
+  performance navigation, three hold-to-play diagnostic pads and secondary
+  workspace actions. Fixed Record/PANIC footer stays available during scrolling.
+  Original record selected state drives resource tint; busy/exit behavior intact.
+  Status views announce changes politely. Static checks confirmed each original
+  field construction, all diagnostic down/up/cancel/click paths and byte-identical
+  non-display code after MIDI callback setup. All resource XML parses; diff check
+  and UI-only changed-path allowlist passed. No build/tests run in this lane.
+  Final baseline comparison also passed for all five changed layouts' IDs,
+  View types and min/max/progress/checked defaults. Explicit native/service/
+  repository call sequences remain identical in all seven changed Kotlin files.
+  New Kotlin string references resolve. Multi's numeric value uses less width;
+  slider accessibility still names its channel and independent volume function.
+
+### Changed files
+
+- Resources: `values/themes.xml`, `values/ui_tokens.xml`, `values/strings.xml`,
+  `values/effects_colors.xml`, `drawable/card_frame.xml`,
+  `drawable/ui_action_frame.xml`, `color/ui_record_background.xml`.
+- Layouts: `activity_settings.xml`, `sf2_list_item.xml`, `activity_effects.xml`,
+  `activity_instruments.xml`, `activity_sequencer.xml`.
+- Kotlin: `MainActivity`, `EffectsActivity`, `InstrumentEffectsActivity`,
+  `InstrumentActivity`, `SequencerActivity`, `ui/MultiChannelDialog`,
+  `ui/MidiFilesPanel`. Documentation: this file only.
+
+## Device checklist (pending)
+
+Residual risks: static checks cannot prove rendered wrapping/touch geometry,
+TalkBack traversal or visual disabled states. Font-scale/landscape verification
+and end-to-end audio/MIDI behavior require device; final build/tests require
+parent validation. Existing implementation retained wherever relocation would
+require handler/condition changes (notably secondary sequencer actions).
 
 Use 360dp portrait, landscape and font scale 1.3; check wrapping, scroll reach,
 Back/Close, white toolbar icons, TalkBack labels/status, touch targets. Exercise
@@ -79,5 +109,5 @@ MIDI disconnect/reconnect, MP3 recording busy/exit states, recording-folder lock
 effect meters/analyzer lifecycle, all 16 instrument channels and file sets,
 MIDI Learn/CC mapping, Multi-off volume and preserved masks, multitrack channel
 visibility, Chord/file actions, ten-second learn timeout, tempo focus loss and
-active Test/Record state after refresh. Listen for stuck notes, audio interruption,
+  active Test/Record state after refresh. Listen for stuck notes, audio interruption,
 new underruns or MIDI delay during navigation.

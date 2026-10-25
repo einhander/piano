@@ -19,6 +19,7 @@ import android.text.util.Linkify
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.ViewGroup
+import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -706,14 +707,17 @@ class MainActivity : AppCompatActivity() {
         )
         layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(32, 32, 32, 32)
+            val pad = (16 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad, pad, pad)
+            setBackgroundColor(getColor(R.color.ui_background))
         }
         statusText = TextView(this).apply {
-            text = "Piano Sequencer"
-            textSize = 20f
+            text = getString(R.string.ui_app_title)
+            textSize = 14f
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         c4Button = Button(this).apply {
-            text = "C4 (60)"
+            text = getString(R.string.ui_note_c4)
             setOnTouchListener { view, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> { diagnosticNotes.touchDown(60); true }
@@ -725,7 +729,7 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { diagnosticNotes.click(60) }
         }
         d4Button = Button(this).apply {
-            text = "D4 (62)"
+            text = getString(R.string.ui_note_d4)
             setOnTouchListener { view, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> { diagnosticNotes.touchDown(62); true }
@@ -737,7 +741,7 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { diagnosticNotes.click(62) }
         }
         e4Button = Button(this).apply {
-            text = "E4 (64)"
+            text = getString(R.string.ui_note_e4)
             setOnTouchListener { view, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> { diagnosticNotes.touchDown(64); true }
@@ -749,22 +753,22 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { diagnosticNotes.click(64) }
         }
         panicButton = Button(this).apply {
-            text = "PANIC"
+            text = getString(R.string.ui_panic)
             setOnClickListener {
                 dispatchMidi { it.panic() }
                 Toast.makeText(this@MainActivity, "Panic!", Toast.LENGTH_SHORT).show()
             }
         }
         projectsButton = Button(this).apply {
-            text = "Projects"
+            text = getString(R.string.ui_projects)
             setOnClickListener { showProjectsDialog() }
         }
         aboutButton = Button(this).apply {
-            text = "About"
+            text = getString(R.string.ui_about)
             setOnClickListener { showAboutDialog() }
         }
         settingsButton = Button(this).apply {
-            text = "Settings"
+            text = getString(R.string.ui_settings)
             setOnClickListener {
                 startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
             }
@@ -781,9 +785,7 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(this@MainActivity, EffectsActivity::class.java))
             }
         }
-        layout.addView(statusText)
-
-        // D1/D2: horizontal pad row — c4/d4/e4/panic in one row, PANIC = 1/3 width
+        // Keep the original touch listeners and fields; only their parents change.
         val padRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
@@ -792,34 +794,25 @@ class MainActivity : AppCompatActivity() {
             addView(c4Button, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(d4Button, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(e4Button, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(panicButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2f))
         }
-        layout.addView(padRow)
-
-        layout.addView(projectsButton)
-        layout.addView(aboutButton)
-        layout.addView(instrumentsButton)
-        layout.addView(effectsButton)
-        layout.addView(settingsButton)
-        layout.addView(Button(this).apply {
+        val sequencerButton = Button(this).apply {
             text = getString(R.string.sequencer_title)
             setOnClickListener {
                 startActivity(Intent(this@MainActivity, SequencerActivity::class.java))
             }
-        })
-        layout.addView(Button(this).apply {
-            text = "Exit"
+        }
+        val exitButton = Button(this).apply {
+            text = getString(R.string.ui_exit)
             setOnClickListener {
                 beginExplicitExit()
             }
-        })
-        setContentView(layout)
+        }
 
         midiStatusText = TextView(this).apply {
             text = "MIDI: checking..."
             textSize = 14f
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
-        layout.addView(midiStatusText)
 
         midiDeviceButton = Button(this).apply {
             text = "MIDI: no devices"
@@ -847,7 +840,6 @@ class MainActivity : AppCompatActivity() {
                     .show()
             }
         }
-        layout.addView(midiDeviceButton)
 
         // Multi-channel play mode: the keyboard plays on the selected
         // channels simultaneously (additive — the keyboard's own channel is
@@ -873,7 +865,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        layout.addView(multiChannelButton)
 
         recordButton = Button(this).apply {
             isAllCaps = false
@@ -884,11 +875,80 @@ class MainActivity : AppCompatActivity() {
                 else onStartRecordingRequested()
             }
         }
-        layout.addView(recordButton, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply {
-            topMargin = (4 * resources.displayMetrics.density).toInt()
-        })
+        fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+        fun heading(label: Int) = TextView(this).apply {
+            text = getString(label)
+            textSize = 18f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, dp(12), 0, dp(8))
+        }
+        fun row(vararg views: View) = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            views.forEach { view ->
+                addView(view, LinearLayout.LayoutParams(0, -2, 1f).apply {
+                    marginEnd = dp(4)
+                })
+            }
+        }
+        listOf(c4Button, d4Button, e4Button, panicButton, projectsButton,
+            aboutButton, settingsButton, instrumentsButton, effectsButton,
+            sequencerButton, exitButton, midiDeviceButton, multiChannelButton,
+            recordButton).forEach {
+            it.isAllCaps = false
+            it.textSize = 14f
+            it.minHeight = dp(48)
+            it.minimumHeight = dp(48)
+            it.minimumWidth = dp(48)
+            it.minWidth = dp(48)
+            it.setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+        val statusCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = getDrawable(R.drawable.card_frame)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            addView(statusText)
+            addView(midiStatusText)
+            addView(midiDeviceButton)
+        }
+        layout.addView(statusCard)
+        layout.addView(heading(R.string.ui_performance))
+        layout.addView(row(instrumentsButton, effectsButton))
+        layout.addView(row(sequencerButton, multiChannelButton))
+        layout.addView(heading(R.string.ui_test_notes))
+        layout.addView(padRow)
+        layout.addView(heading(R.string.ui_workspace))
+        layout.addView(row(projectsButton, settingsButton))
+        layout.addView(row(aboutButton, exitButton))
+        exitButton.setTextColor(getColor(R.color.ui_danger))
+        panicButton.background = getDrawable(R.drawable.ui_action_frame)
+        panicButton.backgroundTintList = android.content.res.ColorStateList.valueOf(getColor(R.color.ui_danger))
+        panicButton.setTextColor(getColor(R.color.ui_surface))
+        recordButton.background = getDrawable(R.drawable.ui_action_frame)
+        recordButton.backgroundTintList = getColorStateList(R.color.ui_record_background)
+        recordButton.setTextColor(getColor(R.color.ui_surface))
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(getColor(R.color.ui_background))
+            addView(TextView(this@MainActivity).apply {
+                text = getString(R.string.ui_app_title) + " · " + getString(R.string.ui_live)
+                textSize = 20f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setTextColor(getColor(R.color.ui_surface))
+                setBackgroundColor(getColor(R.color.ui_primary))
+                setPadding(dp(16), dp(12), dp(16), dp(12))
+                minimumHeight = dp(56)
+            })
+            addView(ScrollView(this@MainActivity).apply {
+                isFillViewport = true
+                addView(layout)
+            }, LinearLayout.LayoutParams(-1, 0, 1f))
+            // Safety and recording stay reachable even when the dashboard scrolls.
+            addView(row(recordButton, panicButton).apply {
+                setPadding(dp(12), dp(4), dp(12), dp(8))
+            })
+        }
+        setContentView(root)
         updateRecordingFolderLabel()
         setAudioRecordingActive(false)
 

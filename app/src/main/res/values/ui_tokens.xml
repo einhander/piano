@@ -21,11 +21,12 @@
         <item name="android:elevation">0dp</item>
         <item name="android:theme">@style/ThemeOverlay.Piano.Toolbar</item>
     </style>
-    <style name="Widget.Piano.Button" parent="Widget.MaterialComponents.Button.TextButton">
+    <style name="Widget.Piano.Button" parent="Widget.AppCompat.Button.Borderless">
         <item name="android:minHeight">48dp</item>
         <item name="android:minWidth">48dp</item>
         <item name="android:textAllCaps">false</item>
         <item name="android:textSize">14sp</item>
         <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textColor">@color/ui_primary</item>
     </style>
 </resources>

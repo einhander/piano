@@ -219,7 +219,7 @@ class MidiFilesPanel @JvmOverloads constructor(
             } else "—"
             textSize = 16f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            maxLines = 2
+            maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
             contentDescription = text
             minimumHeight = dpToPx(48, context)
