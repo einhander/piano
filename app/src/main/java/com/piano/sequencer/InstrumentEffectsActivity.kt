@@ -147,6 +147,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         status.text = getString(if (failed) R.string.instrument_effects_error else R.string.instrument_effects_hint)
         container.addView(status)
         container.addView(Button(this).apply {
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
             text = "Instrument channel ${channel + 1} ▾"
             setOnClickListener {
                 AlertDialog.Builder(this@InstrumentEffectsActivity).setTitle("Instrument channel")
@@ -161,6 +162,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             }
         })
         container.addView(Button(this).apply {
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
             text = "MIDI CC mappings"
             setOnClickListener { showMappings() }
         })
@@ -205,6 +207,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             }
             instance.parameters.filter { it.writable }.forEach { p -> controls.addView(parameterControl(id, p)) }
             card.addView(Button(this).apply {
+                com.piano.sequencer.ui.UiControlStyle.apply(this)
                 text = getString(if (id in expanded) R.string.instrument_effects_hide else R.string.instrument_effects_configure)
                 isEnabled = instance.available
                 setOnClickListener {
@@ -227,6 +230,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         mapped.forEach { mapping ->
             addView(label(mappingDescription(mapping)))
             addView(Button(this@InstrumentEffectsActivity).apply {
+                com.piano.sequencer.ui.UiControlStyle.apply(this)
                 text = "Edit / Unlearn mapping"
                 setOnClickListener { editMapping(mapping, p) }
             })
@@ -279,6 +283,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             })
         }
         controlRow.addView(Button(this@InstrumentEffectsActivity).apply {
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
             text = "MIDI Learn"
             contentDescription = "MIDI Learn: ${p.displayName}"
             minWidth = 0

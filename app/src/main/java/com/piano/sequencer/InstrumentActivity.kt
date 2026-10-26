@@ -337,6 +337,7 @@ class InstrumentActivity : AppCompatActivity() {
                 addView(nameLabel)
             }, LinearLayout.LayoutParams(0, -2, 1f))
             val effectsButton = Button(this).apply {
+                com.piano.sequencer.ui.UiControlStyle.apply(this)
                 text = getString(R.string.ui_effects)
                 isAllCaps = false
                 textSize = 14f

@@ -229,6 +229,7 @@ class EffectsActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 instances.forEachIndexed { index, instance ->
                     val tab = android.widget.Button(this@EffectsActivity).apply {
+                        com.piano.sequencer.ui.UiControlStyle.apply(this, tonal = index == selected)
                         minimumHeight = (48 * resources.displayMetrics.density).toInt()
                         isAllCaps = false
                         text = friendlyEffectTitle(instance.descriptor.stableId)
@@ -555,6 +556,7 @@ class EffectsActivity : AppCompatActivity() {
         header.addView(titleView)
         header.addView(enableSwitch)
         val editButton = android.widget.Button(ctx).apply {
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
             text = getString(R.string.ui_configure)
             isAllCaps = false
             minimumHeight = (48 * resources.displayMetrics.density).toInt()

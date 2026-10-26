@@ -72,6 +72,13 @@ SAF locking and specific-SF2 unload binding, unchanged. Static XML checks passed
 for exact ID sets, View types and min/max/progress/checked defaults across all
 three edited layouts; all XML parses and diff whitespace checks passed.
 
+Consistency polish: original effect tabs/Configure and instrument-channel Effects
+buttons receive local outlines; selected master tab is tonal. Instrument Effects
+channel/mapping/configure/Learn buttons receive the same affordance without
+callback or parameter changes. Multi Help gains bounded ripple/outline; compact
+Ch N labels fit original 94dp checkbox column (full accessibility descriptions
+retained). Volume, mask, enable/disable, polling and rack-state logic unchanged.
+
 Parent owns final full debug build/unit tests. No device/emulator known: no
 screenshots or visual verification claimed. Pending device matrix: 360–430dp,
 font scale 1.3–1.5, landscape, keyboard open, long filenames, system dark theme,

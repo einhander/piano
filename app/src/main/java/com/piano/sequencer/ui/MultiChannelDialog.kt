@@ -42,6 +42,8 @@ object MultiChannelDialog {
             minimumHeight = dp(48)
             gravity = Gravity.CENTER_VERTICAL
             setTextColor(context.getColor(R.color.ui_primary))
+            background = context.getDrawable(R.drawable.ui_control_outline)
+            setPadding(dp(8), dp(4), dp(8), dp(4))
             setOnClickListener {
                 AlertDialog.Builder(context).setTitle(R.string.multi_title)
                     .setMessage(context.getString(R.string.multi_routing_hint) + "\n\n" + context.getString(R.string.multi_volume_hint))
@@ -60,7 +62,7 @@ object MultiChannelDialog {
             }
             val heading = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
             val check = CheckBox(context).apply {
-                text = context.getString(R.string.multi_channel, channel + 1)
+                text = context.getString(R.string.ui_multi_channel_short, channel + 1)
                 contentDescription = context.getString(R.string.multi_add_channel, channel + 1)
                 minHeight = dp(48)
                 isChecked = mask and (1 shl channel) != 0
