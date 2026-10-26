@@ -5,6 +5,11 @@ Baseline: `dd7644eee8684826de2126f2ae7e5013e01bd11a`, branch
 real-time rules reread before changes. Baseline build/tests owned by parent;
 no concurrent Gradle runs. No push from this lane.
 
+Parent-reported baseline evidence for `dd7644e`: `./build.sh debug` printed
+`BUILD SUCCESSFUL` (9s); `./gradlew :app:testDebugUnitTest` printed
+`BUILD SUCCESSFUL` (6s). Baseline completion was confirmed before this lane
+started any Gradle task.
+
 ## Function → existing View → handler → intended placement (before edits)
 
 | Function | Existing View | Existing handler/state | New placement |
@@ -49,7 +54,7 @@ Record/PANIC footer and states retained. Static checks passed: byte-identical
 Main tail after `setContentView(root)`, all 12 diagnostic touch/click phases,
 hidden duplicate View, all resource XML parses, `git diff --check`. Local styles
 provide bounded ripple plus explicit disabled background/text; no global token
-or original shared drawable edits. Compile pending parent's baseline completion.
+or original shared drawable edits. Final integrated UI compile passed (below).
 
 Sequencer implemented: removed duplicate page heading; 8dp card insets and gaps;
 original secondary action Views moved into a More/Less disclosure (not a menu).
@@ -59,8 +64,8 @@ Original tempo parser/focus-loss listener retained; action handlers first clear
 edit focus, invoking that same listener before their original action. Done key
 also finishes focus. Channel label hides with spinner under original multitrack
 condition; original async Tracks button and current-store guards remain intact.
-All original state maps and restoration methods retained. Compile deferred until
-baseline completion; focused preservation checks recorded below.
+All original state maps and restoration methods retained. Final integrated UI
+compile passed; focused preservation checks recorded below.
 
 Settings implemented XML-only: recording-folder heading/action share a row;
 SoundFont heading/Browse and count/Unload all each share rows; compact loaded
@@ -86,6 +91,18 @@ font scale. Exit retains local disabled text selector rather than overwriting it
 with a flat color.
 
 ## Concrete static evidence
+
+### Focused compile after baseline completion
+
+`./gradlew :app:compileDebugKotlin --no-daemon --warning-mode none` printed
+`BUILD SUCCESSFUL in 22s` (14 actionable tasks: 11 executed, 3 up-to-date).
+This single integrated compile covers Live, Sequencer, Settings resources and
+the consistency-polish screens. It executed resource merge/AAPT processing and
+Kotlin compilation. No historical per-commit builds were run. Existing NDK
+`ndk.dir` deprecation and Kotlin warnings were left untouched. No full assemble
+or unit-test suite was run in this lane; parent owns final build/tests.
+
+### Preservation checks
 
 - All resource XML parsed; duplicate default-resource names checked; new Kotlin
   string/color/drawable references resolve; `git diff --check` passes.
@@ -128,9 +145,8 @@ with a flat color.
 | Audio | No interruption, lost SoundFonts, stuck notes, new underruns or MIDI delay while navigating |
 
 No screenshots captured: no device/emulator available. Static checks do not prove
-rendered geometry, input focus traversal or live performance. Compile checks have
-not been run in this lane while awaiting parent's baseline-complete signal;
-parent must perform final Gradle validation before push.
+rendered geometry, input focus traversal or live performance. Focused integrated
+compile passed; parent must perform final full Gradle validation before push.
 
 Parent owns final full debug build/unit tests. No device/emulator known: no
 screenshots or visual verification claimed. Pending device matrix: 360–430dp,
