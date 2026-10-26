@@ -51,6 +51,17 @@ hidden duplicate View, all resource XML parses, `git diff --check`. Local styles
 provide bounded ripple plus explicit disabled background/text; no global token
 or original shared drawable edits. Compile pending parent's baseline completion.
 
+Sequencer implemented: removed duplicate page heading; 8dp card insets and gaps;
+original secondary action Views moved into a More/Less disclosure (not a menu).
+Test/Record/Learn stay immediately visible. Trigger text is explicitly read-only
+and labeled. Loop remains independent of a labeled Tempo/value/BPM group.
+Original tempo parser/focus-loss listener retained; action handlers first clear
+edit focus, invoking that same listener before their original action. Done key
+also finishes focus. Channel label hides with spinner under original multitrack
+condition; original async Tracks button and current-store guards remain intact.
+All original state maps and restoration methods retained. Compile deferred until
+baseline completion; focused preservation checks recorded below.
+
 Parent owns final full debug build/unit tests. No device/emulator known: no
 screenshots or visual verification claimed. Pending device matrix: 360–430dp,
 font scale 1.3–1.5, landscape, keyboard open, long filenames, system dark theme,

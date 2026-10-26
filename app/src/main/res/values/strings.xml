@@ -136,4 +136,11 @@
     <string name="ui_note_d4">D4 (62)</string>
     <string name="ui_note_e4">E4 (64)</string>
     <string name="ui_midi">MIDI</string>
+    <string name="ui_tempo_label">Tempo:</string>
+    <string name="ui_bpm">BPM</string>
+    <string name="ui_channel_label">Channel:</string>
+    <string name="ui_more_actions">More</string>
+    <string name="ui_less_actions">Less</string>
+    <string name="ui_show_cell_actions">Show cell actions</string>
+    <string name="ui_hide_cell_actions">Hide cell actions</string>
 </resources>

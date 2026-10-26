@@ -189,14 +189,16 @@ class MidiFilesPanel @JvmOverloads constructor(
     private fun addCellRow(cell: SequencerCell) {
         val container = LinearLayout(context).apply {
             orientation = VERTICAL
-            val pad = dpToPx(12, context)
+            val pad = dpToPx(8, context)
             setPadding(pad, pad, pad, pad)
+            isFocusableInTouchMode = true
+            importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
             background = context.getDrawable(R.drawable.card_frame)
             setMinimumHeight(60)
             layoutParams = LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(0, 0, 0, dpToPx(12, context))
+                setMargins(0, 0, 0, dpToPx(8, context))
             }
         }
 
@@ -234,7 +236,15 @@ class MidiFilesPanel @JvmOverloads constructor(
             )
         }
 
-        row0.addView(nameText)
+        row0.addView(nameText, LayoutParams(0, -2, 1f))
+        val actionsButton = Button(context).apply {
+            text = context.getString(R.string.ui_more_actions)
+            contentDescription = context.getString(R.string.ui_show_cell_actions)
+            UiControlStyle.apply(this)
+        }
+        row0.addView(actionsButton, LayoutParams(dpToPx(64, context), -2).apply {
+            marginStart = dpToPx(4, context)
+        })
 
         // ── Row 1: controls ──
         val row1 = LinearLayout(context).apply {
@@ -261,8 +271,7 @@ class MidiFilesPanel @JvmOverloads constructor(
             }
         }
 
-        // Key label: NOTE → note name; CC → "CC <n>"; PITCH_BEND → "PB" (short — the row
-        // already holds mode + spinner + checkbox + tempo edit, no room for "Pitch bend").
+        // Read-only learned trigger, not a SysEx/CC/PB/PC mode control.
         val keyLabel = TextView(context).apply {
             text = when (cell.triggerType) {
                 TRIGGER_CC -> "CC ${cell.ccNumber}"
@@ -272,10 +281,11 @@ class MidiFilesPanel @JvmOverloads constructor(
                 else -> if (cell.note >= 0) noteToName(cell.note) else "—"
             }
             textSize = 14f
-            contentDescription = context.getString(R.string.ui_trigger, text)
+            text = context.getString(R.string.ui_trigger, text)
+            contentDescription = text
             setTextColor(context.getColor(R.color.ui_muted))
             layoutParams = LayoutParams(
-                LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT
+                0, LayoutParams.WRAP_CONTENT, 1f
             ).apply {
                 setMargins(8, 0, 8, 0)
             }
@@ -310,26 +320,39 @@ class MidiFilesPanel @JvmOverloads constructor(
                 android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
             setText(cell.tempo.toInt().toString())
             layoutParams = LayoutParams(
-                dpToPx(96, context), LayoutParams.WRAP_CONTENT
+                dpToPx(64, context), LayoutParams.WRAP_CONTENT
             )
             textSize = 14f
+            setSingleLine(true)
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) clearFocus()
+                false
+            }
+        }
+        val tempoGroup = LinearLayout(context).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(context).apply { text = context.getString(R.string.ui_tempo_label); textSize = 14f })
+            addView(tempoEdit)
+            addView(TextView(context).apply { text = context.getString(R.string.ui_bpm); textSize = 14f })
         }
 
         val modeRow = LinearLayout(context).apply {
             gravity = Gravity.CENTER_VERTICAL
-            addView(modeBtn, LayoutParams(0, -2, 1f))
+            addView(modeBtn)
             addView(keyLabel)
         }
         container.addView(row0)
         container.addView(modeRow)
-        row1.addView(loopCheck)
-        row1.addView(tempoEdit)
+        row1.addView(loopCheck, LayoutParams(0, -2, 1f))
+        row1.addView(tempoGroup)
 
         // In chord mode hide file-only controls; channel selection stays available.
         val isChord = cell.mode == MODE_CHORD
         if (isChord) {
             loopCheck.visibility = android.view.View.GONE
             tempoEdit.visibility = android.view.View.GONE
+            tempoGroup.visibility = android.view.View.GONE
         }
 
         // ── Row 2: buttons ──
@@ -440,22 +463,46 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         recordBtn.setOnClickListener {
+            tempoEdit.clearFocus()
             onCellRecordClick(cell.id)
         }
 
         exportBtn.setOnClickListener {
+            tempoEdit.clearFocus()
             onCellExportClick(cell.id)
         }
 
         row2.addView(recordBtn)
         row2.addView(learnBtn)
-        container.addView(channelSpinner, LayoutParams(-1, -2))
+        val channelRow = LinearLayout(context).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(context).apply {
+                text = context.getString(R.string.ui_channel_label)
+                textSize = 14f
+                setPadding(0, 0, dpToPx(4, context), 0)
+            })
+            addView(channelSpinner, LayoutParams(0, -2, 1f))
+        }
+        container.addView(channelRow, LayoutParams(-1, -2))
         container.addView(row1)
         row3.addView(importBtn)
         row3.addView(exportBtn)
         val fileActions = LinearLayout(context).apply {
             addView(tracksBtn)
             addView(removeBtn)
+        }
+        val secondaryActions = LinearLayout(context).apply {
+            orientation = VERTICAL
+            visibility = android.view.View.GONE
+            addView(row3)
+            addView(fileActions)
+        }
+        actionsButton.setOnClickListener {
+            tempoEdit.clearFocus()
+            val expanded = secondaryActions.visibility != android.view.View.VISIBLE
+            secondaryActions.visibility = if (expanded) android.view.View.VISIBLE else android.view.View.GONE
+            actionsButton.text = context.getString(if (expanded) R.string.ui_less_actions else R.string.ui_more_actions)
+            actionsButton.contentDescription = context.getString(if (expanded) R.string.ui_hide_cell_actions else R.string.ui_show_cell_actions)
         }
 
         // Export is file-only (chord has no .mid to export). Tracks is
@@ -481,9 +528,11 @@ class MidiFilesPanel @JvmOverloads constructor(
                     // by construction (a rebuilt row starts with the spinner
                     // visible again, matching the button's GONE default).
                     channelSpinner.visibility = android.view.View.GONE
+                    channelRow.visibility = android.view.View.GONE
                 }
             }
             tracksBtn.setOnClickListener {
+                tempoEdit.clearFocus()
                 val names = trackNames ?: return@setOnClickListener
                 // CRITICAL: re-read from store
                 val cur = store.get(cell.id) ?: return@setOnClickListener
@@ -497,12 +546,18 @@ class MidiFilesPanel @JvmOverloads constructor(
             }
         }
 
-        container.addView(row3, LayoutParams(
-            LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT
-        ).apply {
-            setMargins(0, dpToPx(2, context), 0, 0)
-        })
-        container.addView(fileActions)
+        container.addView(secondaryActions)
+        listOf(modeBtn, learnBtn, importBtn, exportBtn, tracksBtn).forEach { UiControlStyle.apply(it) }
+        UiControlStyle.apply(testBtn, tonal = true)
+        UiControlStyle.apply(recordBtn, tonal = true)
+        UiControlStyle.apply(removeBtn, destructive = true)
+        // Compact gaps without replacing any button instance or conditional state.
+        listOf(row2, row3, fileActions).forEach { row ->
+            row.dividerDrawable = android.graphics.drawable.ShapeDrawable().apply {
+                intrinsicWidth = dpToPx(4, context); alpha = 0
+            }
+            row.showDividers = SHOW_DIVIDER_MIDDLE
+        }
 
         // ── Value readers ──
         fun getChannel(): Int {
@@ -520,6 +575,7 @@ class MidiFilesPanel @JvmOverloads constructor(
         // ── Button handlers ──
 
         modeBtn.setOnClickListener {
+            tempoEdit.clearFocus()
             val cur = store.get(cell.id) ?: return@setOnClickListener
             // Stop any sounding chord before leaving chord mode; free the slot
             // when leaving either mode so the trigger re-binds cleanly.
@@ -529,6 +585,7 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         learnBtn.setOnClickListener {
+            tempoEdit.clearFocus()
             if (cell.hasTrigger()) {
                 // UNLEARN (note, CC, or pitch bend): clear the trigger, free the slot
                 // via the encoded trigger key (works for all three trigger types).
@@ -561,6 +618,7 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         testBtn.setOnClickListener {
+            tempoEdit.clearFocus()
             // CRITICAL: re-read from store
             val cur = store.get(cell.id) ?: return@setOnClickListener
             if (cur.filePath.isEmpty()) {
@@ -576,10 +634,12 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         importBtn.setOnClickListener {
+            tempoEdit.clearFocus()
             onImportClick(cell.id)
         }
 
         removeBtn.setOnClickListener {
+            tempoEdit.clearFocus()
             // CRITICAL: re-read from store
             val cur = store.get(cell.id) ?: return@setOnClickListener
             // The activity frees the trigger slot (encoded key) AFTER its
@@ -630,6 +690,7 @@ class MidiFilesPanel @JvmOverloads constructor(
 
     private fun addAddCellButton() {
         val addBtn = Button(context).apply {
+            UiControlStyle.apply(this, tonal = true)
             text = context.getString(R.string.ui_add_cell)
             textSize = 14f
             minimumHeight = dpToPx(48, context)
