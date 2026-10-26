@@ -707,7 +707,7 @@ class MainActivity : AppCompatActivity() {
         )
         layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            val pad = (16 * resources.displayMetrics.density).toInt()
+            val pad = (12 * resources.displayMetrics.density).toInt()
             setPadding(pad, pad, pad, pad)
             setBackgroundColor(getColor(R.color.ui_background))
         }
@@ -812,6 +812,8 @@ class MainActivity : AppCompatActivity() {
             text = "MIDI: checking..."
             textSize = 14f
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            // Keep the original updated field without repeating the selector's name.
+            visibility = View.GONE
         }
 
         midiDeviceButton = Button(this).apply {
@@ -878,9 +880,9 @@ class MainActivity : AppCompatActivity() {
         fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
         fun heading(label: Int) = TextView(this).apply {
             text = getString(label)
-            textSize = 18f
+            textSize = 14f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(0, dp(12), 0, dp(8))
+            setPadding(0, dp(8), 0, dp(4))
         }
         fun row(vararg views: View) = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -888,6 +890,8 @@ class MainActivity : AppCompatActivity() {
             views.forEach { view ->
                 addView(view, LinearLayout.LayoutParams(0, -2, 1f).apply {
                     marginEnd = dp(4)
+                    topMargin = dp(4)
+                    bottomMargin = dp(4)
                 })
             }
         }
@@ -903,21 +907,39 @@ class MainActivity : AppCompatActivity() {
             it.minWidth = dp(48)
             it.setPadding(dp(8), dp(8), dp(8), dp(8))
         }
+        listOf(instrumentsButton, effectsButton, sequencerButton, multiChannelButton).forEach {
+            com.piano.sequencer.ui.UiControlStyle.apply(it, tonal = true)
+        }
+        listOf(projectsButton, settingsButton, aboutButton, midiDeviceButton,
+            c4Button, d4Button, e4Button).forEach {
+            com.piano.sequencer.ui.UiControlStyle.apply(it)
+        }
+        com.piano.sequencer.ui.UiControlStyle.apply(exitButton, destructive = true)
+        padRow.dividerDrawable = android.graphics.drawable.ShapeDrawable().apply { intrinsicWidth = dp(4); alpha = 0 }
+        padRow.showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
         val statusCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = getDrawable(R.drawable.card_frame)
             setPadding(dp(12), dp(8), dp(12), dp(8))
             addView(statusText)
             addView(midiStatusText)
-            addView(midiDeviceButton)
+            addView(LinearLayout(this@MainActivity).apply {
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                addView(TextView(this@MainActivity).apply {
+                    text = getString(R.string.ui_midi)
+                    textSize = 13f
+                    setPadding(0, 0, dp(8), 0)
+                })
+                addView(midiDeviceButton, LinearLayout.LayoutParams(0, -2, 1f))
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
         }
         layout.addView(statusCard)
-        layout.addView(heading(R.string.ui_performance))
         layout.addView(row(instrumentsButton, effectsButton))
         layout.addView(row(sequencerButton, multiChannelButton))
         layout.addView(heading(R.string.ui_test_notes))
         layout.addView(padRow)
-        layout.addView(heading(R.string.ui_workspace))
+        layout.addView(View(this).apply { setBackgroundColor(getColor(R.color.ui_outline)) },
+            LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(8); bottomMargin = dp(4) })
         layout.addView(row(projectsButton, settingsButton))
         layout.addView(row(aboutButton, exitButton))
         exitButton.setTextColor(getColor(R.color.ui_danger))
@@ -932,15 +954,15 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(getColor(R.color.ui_background))
             addView(TextView(this@MainActivity).apply {
                 text = getString(R.string.ui_app_title) + " · " + getString(R.string.ui_live)
-                textSize = 20f
+                textSize = 18f
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
                 setTextColor(getColor(R.color.ui_surface))
                 setBackgroundColor(getColor(R.color.ui_primary))
-                setPadding(dp(16), dp(12), dp(16), dp(12))
-                minimumHeight = dp(56)
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                minimumHeight = dp(48)
             })
             addView(ScrollView(this@MainActivity).apply {
-                isFillViewport = true
+                isFillViewport = false
                 addView(layout)
             }, LinearLayout.LayoutParams(-1, 0, 1f))
             // Safety and recording stay reachable even when the dashboard scrolls.

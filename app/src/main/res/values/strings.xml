@@ -135,4 +135,5 @@
     <string name="ui_note_c4">C4 (60)</string>
     <string name="ui_note_d4">D4 (62)</string>
     <string name="ui_note_e4">E4 (64)</string>
+    <string name="ui_midi">MIDI</string>
 </resources>
