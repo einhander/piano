@@ -1,5 +1,16 @@
 # UI redesign — iteration 2
 
+## Final validation
+
+- `./build.sh debug`: BUILD SUCCESSFUL (9s).
+- `./gradlew :app:testDebugUnitTest`: BUILD SUCCESSFUL (3s).
+- `git diff --check dd7644e..HEAD`: passed. Changed paths are UI resources,
+  Kotlin View construction/styling and this document only.
+- Independent static review found no confirmed functional regression in checked
+  callbacks, state maps, Settings IDs or ranges. Device-only uncertainty remains
+  for focus/IME behavior and action-label wrapping, particularly the 64dp More
+  disclosure at font scale 1.3–1.5. Screenshots and live regression remain pending.
+
 Baseline: `dd7644eee8684826de2126f2ae7e5013e01bd11a`, branch
 `feature/ui-redesign`. Root iteration instruction, AGENTS, architecture and
 real-time rules reread before changes. Baseline build/tests owned by parent;
