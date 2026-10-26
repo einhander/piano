@@ -62,6 +62,16 @@ condition; original async Tracks button and current-store guards remain intact.
 All original state maps and restoration methods retained. Compile deferred until
 baseline completion; focused preservation checks recorded below.
 
+Settings implemented XML-only: recording-folder heading/action share a row;
+SoundFont heading/Browse and count/Unload all each share rows; compact loaded
+list and explicit outlined per-SF2 Unload. Reverb/Chorus use existing formatted
+state labels beside original switches. Removed redundant static interpolation/
+buffer labels (existing formatted values already include names); value labels
+sit immediately above full-width 48dp sliders. All Settings Kotlin, including
+SAF locking and specific-SF2 unload binding, unchanged. Static XML checks passed
+for exact ID sets, View types and min/max/progress/checked defaults across all
+three edited layouts; all XML parses and diff whitespace checks passed.
+
 Parent owns final full debug build/unit tests. No device/emulator known: no
 screenshots or visual verification claimed. Pending device matrix: 360–430dp,
 font scale 1.3–1.5, landscape, keyboard open, long filenames, system dark theme,

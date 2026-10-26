@@ -18,7 +18,7 @@
 
     <Button
         android:id="@+id/btnSf2ItemUnload"
-        style="@style/Widget.AppCompat.Button.Borderless"
+        style="@style/Widget.Piano.OutlinedControl"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:minWidth="48dp"
@@ -26,6 +26,7 @@
         android:paddingStart="12dp"
         android:paddingEnd="4dp"
         android:text="@string/settings_unload"
-        android:textColor="?attr/colorError" />
+        android:layout_marginStart="8dp"
+        android:textColor="@color/ui_control_danger_text" />
 
 </LinearLayout>
