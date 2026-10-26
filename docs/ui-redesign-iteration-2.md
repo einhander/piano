@@ -79,6 +79,59 @@ callback or parameter changes. Multi Help gains bounded ripple/outline; compact
 Ch N labels fit original 94dp checkbox column (full accessibility descriptions
 retained). Volume, mask, enable/disable, polling and rack-state logic unchanged.
 
+Focus follow-up: slot actions and Add cell finish whichever tempo edit currently
+has panel focus, including a different cell, through its existing focus-loss
+listener. Numeric field uses 8dp horizontal padding to leave digit space at large
+font scale. Exit retains local disabled text selector rather than overwriting it
+with a flat color.
+
+## Concrete static evidence
+
+- All resource XML parsed; duplicate default-resource names checked; new Kotlin
+  string/color/drawable references resolve; `git diff --check` passes.
+- Exact baseline ID sets, View types and min/max/progress/checked defaults retained
+  in Settings, SF2 row and Sequencer XML.
+- Main tail after `setContentView(root)` byte-identical; diagnostic DOWN/UP/CANCEL
+  and click paths each retained for notes 60/62/64; duplicate MIDI field GONE.
+- Sequencer refresh/backfill, value readers, setting/focus-save handlers,
+  record/test-state methods byte-identical. Nine original button callback bodies
+  unchanged after excluding added UI-only focus completion. Original parameter
+  ranges, track lookup/guards, trigger handling and ten-second timeout retained.
+- SettingsActivity and SequencerActivity entirely unchanged. EffectsActivity,
+  InstrumentActivity and InstrumentEffectsActivity differ only by style calls.
+  Multi routing/volume/enable blocks identical. Explicit native/service/repository
+  call sequences identical in all modified existing Kotlin files.
+- Original global token/theme files and `card_frame`/`ui_action_frame` unchanged.
+  User-owned untracked instruction/test_files untouched and never staged.
+
+## Changed files
+
+- Live: `MainActivity.kt`; local `ui/UiControlStyle.kt`,
+  `drawable/ui_control_outline.xml`, `drawable/ui_control_tonal.xml`,
+  `color/ui_control_text.xml`, `color/ui_control_danger_text.xml`.
+- Sequencer: `ui/MidiFilesPanel.kt`, `layout/activity_sequencer.xml`.
+- Settings: `layout/activity_settings.xml`, `layout/sf2_list_item.xml`,
+  `values/ui_control_styles.xml`.
+- Minimal polish: `EffectsActivity.kt`, `InstrumentEffectsActivity.kt`,
+  `InstrumentActivity.kt`, `ui/MultiChannelDialog.kt`.
+- Labels: `values/strings.xml`. Documentation: this file only.
+
+## Pending device regression (not executed)
+
+| Area | Required device checks |
+|---|---|
+| Live | MIDI reconnect/disconnect/name, status/underruns, held notes and cancellation, all navigation/log/projects/Exit, fixed Panic, MP3 start/stop/cancel/error/busy states |
+| Sequencer | File/Chord, every trigger type and learn/unlearn/timeout, independent Loop/BPM focus loss/Done/action transition, Test/Record refresh/rotation, More/Less, import/export/delete guard, multitrack Tracks/channel visibility and current mapping |
+| Settings | Folder SAF lock while recording/saving, 2+ SF2 load, specific/all unload, restart restoration, every synth setting and original application moment |
+| Other screens | All 16 instrument channels/drums/sets/presets/indicators/channel Effects; complete effect parameters/tabs/bypass/meters/analyzer/CC mapping; Multi-off volume and preserved mask |
+| Visual/accessibility | 360–430dp, landscape, font 1.3–1.5, numeric keyboard, long MIDI/SF2 names, system dark theme, ripple/disabled contrast, TalkBack and 48dp targets |
+| Audio | No interruption, lost SoundFonts, stuck notes, new underruns or MIDI delay while navigating |
+
+No screenshots captured: no device/emulator available. Static checks do not prove
+rendered geometry, input focus traversal or live performance. Compile checks have
+not been run in this lane while awaiting parent's baseline-complete signal;
+parent must perform final Gradle validation before push.
+
 Parent owns final full debug build/unit tests. No device/emulator known: no
 screenshots or visual verification claimed. Pending device matrix: 360–430dp,
 font scale 1.3–1.5, landscape, keyboard open, long filenames, system dark theme,

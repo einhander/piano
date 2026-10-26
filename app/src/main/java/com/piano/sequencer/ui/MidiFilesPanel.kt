@@ -324,6 +324,7 @@ class MidiFilesPanel @JvmOverloads constructor(
             )
             textSize = 14f
             setSingleLine(true)
+            setPadding(dpToPx(8, context), 0, dpToPx(8, context), 0)
             imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
             setOnEditorActionListener { _, actionId, _ ->
                 if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) clearFocus()
@@ -463,12 +464,12 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         recordBtn.setOnClickListener {
-            tempoEdit.clearFocus()
+            this@MidiFilesPanel.findFocus()?.clearFocus()
             onCellRecordClick(cell.id)
         }
 
         exportBtn.setOnClickListener {
-            tempoEdit.clearFocus()
+            this@MidiFilesPanel.findFocus()?.clearFocus()
             onCellExportClick(cell.id)
         }
 
@@ -498,7 +499,7 @@ class MidiFilesPanel @JvmOverloads constructor(
             addView(fileActions)
         }
         actionsButton.setOnClickListener {
-            tempoEdit.clearFocus()
+            this@MidiFilesPanel.findFocus()?.clearFocus()
             val expanded = secondaryActions.visibility != android.view.View.VISIBLE
             secondaryActions.visibility = if (expanded) android.view.View.VISIBLE else android.view.View.GONE
             actionsButton.text = context.getString(if (expanded) R.string.ui_less_actions else R.string.ui_more_actions)
@@ -532,7 +533,7 @@ class MidiFilesPanel @JvmOverloads constructor(
                 }
             }
             tracksBtn.setOnClickListener {
-                tempoEdit.clearFocus()
+                this@MidiFilesPanel.findFocus()?.clearFocus()
                 val names = trackNames ?: return@setOnClickListener
                 // CRITICAL: re-read from store
                 val cur = store.get(cell.id) ?: return@setOnClickListener
@@ -575,7 +576,7 @@ class MidiFilesPanel @JvmOverloads constructor(
         // ── Button handlers ──
 
         modeBtn.setOnClickListener {
-            tempoEdit.clearFocus()
+            this@MidiFilesPanel.findFocus()?.clearFocus()
             val cur = store.get(cell.id) ?: return@setOnClickListener
             // Stop any sounding chord before leaving chord mode; free the slot
             // when leaving either mode so the trigger re-binds cleanly.
@@ -585,7 +586,7 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         learnBtn.setOnClickListener {
-            tempoEdit.clearFocus()
+            this@MidiFilesPanel.findFocus()?.clearFocus()
             if (cell.hasTrigger()) {
                 // UNLEARN (note, CC, or pitch bend): clear the trigger, free the slot
                 // via the encoded trigger key (works for all three trigger types).
@@ -618,7 +619,7 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         testBtn.setOnClickListener {
-            tempoEdit.clearFocus()
+            this@MidiFilesPanel.findFocus()?.clearFocus()
             // CRITICAL: re-read from store
             val cur = store.get(cell.id) ?: return@setOnClickListener
             if (cur.filePath.isEmpty()) {
@@ -634,12 +635,12 @@ class MidiFilesPanel @JvmOverloads constructor(
         }
 
         importBtn.setOnClickListener {
-            tempoEdit.clearFocus()
+            this@MidiFilesPanel.findFocus()?.clearFocus()
             onImportClick(cell.id)
         }
 
         removeBtn.setOnClickListener {
-            tempoEdit.clearFocus()
+            this@MidiFilesPanel.findFocus()?.clearFocus()
             // CRITICAL: re-read from store
             val cur = store.get(cell.id) ?: return@setOnClickListener
             // The activity frees the trigger slot (encoded key) AFTER its
@@ -703,6 +704,7 @@ class MidiFilesPanel @JvmOverloads constructor(
             }
         }
         addBtn.setOnClickListener {
+            this@MidiFilesPanel.findFocus()?.clearFocus()
             store.set(SequencerCell(id = store.nextId()))
             refresh()
         }

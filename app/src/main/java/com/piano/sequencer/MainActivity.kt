@@ -942,7 +942,6 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(8); bottomMargin = dp(4) })
         layout.addView(row(projectsButton, settingsButton))
         layout.addView(row(aboutButton, exitButton))
-        exitButton.setTextColor(getColor(R.color.ui_danger))
         panicButton.background = getDrawable(R.drawable.ui_action_frame)
         panicButton.backgroundTintList = android.content.res.ColorStateList.valueOf(getColor(R.color.ui_danger))
         panicButton.setTextColor(getColor(R.color.ui_surface))
