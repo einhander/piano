@@ -6,7 +6,8 @@ import com.piano.sequencer.service.PlaybackService
 /** Shared preference restoration for a newly loaded master effect chain. */
 internal object EffectStateRestore {
     const val INSTRUMENT_VERSION = 1
-    private val instrumentIds = listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter")
+    private val instrumentIds = listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper")
+    private val sharedParamIds = mapOf("native.delay" to 0..5, "fluidsynth.reverb" to 0..4)
 
     internal fun instrumentRackKey(channel: Int) = "instrument_fx_v${INSTRUMENT_VERSION}_rack_$channel"
     internal fun instrumentEnabledKey(channel: Int, id: String) = "instrument_fx_v${INSTRUMENT_VERSION}_enabled_${channel}_${id.replace('.', '_')}"
@@ -64,5 +65,50 @@ internal object EffectStateRestore {
             }
             runCatching { service.setMasterEffectEnabled(slot, prefs.getBoolean("fx_enabled_$slot", false)) }
         }
+    }
+
+    private const val SHARED_FX_PREFIX = "shared_fx_v1_"
+    internal fun sharedParameterKey(scope: String, id: Int) = "${SHARED_FX_PREFIX}${scope.replace('.', '_')}_param_$id"
+    internal fun delaySendKey(channel: Int) = "${SHARED_FX_PREFIX}delay_send_$channel"
+
+    /** Restore globals after synth initialization, independently of optional LSP availability. */
+    fun restoreShared(context: Context, service: PlaybackService) {
+        val prefs = context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE)
+        for ((scope, ids) in sharedParamIds) {
+            if (!service.isSharedFxAvailable(scope)) continue
+            for (id in ids) {
+                // Existing reverb enable key remains source of truth when present.
+                if (scope == "fluidsynth.reverb" && id == 0) {
+                    val value = when {
+                        prefs.contains("reverb") -> if (prefs.getInt("reverb", 1) != 0) 1f else 0f
+                        prefs.contains(sharedParameterKey(scope, id)) -> prefs.getFloat(sharedParameterKey(scope, id), 1f)
+                        else -> null
+                    }
+                    if (value != null) service.setSharedFxParameter(scope, id, value)
+                    continue
+                }
+                val key = sharedParameterKey(scope, id)
+                if (prefs.contains(key)) service.setSharedFxParameter(scope, id, prefs.getFloat(key, 0f))
+            }
+        }
+        if (service.isSharedFxAvailable("native.delay")) for (channel in 0 until 16) {
+            val key = delaySendKey(channel)
+            if (prefs.contains(key)) service.setDelaySend(channel, prefs.getFloat(key, 0f))
+        }
+    }
+
+    fun persistSharedParameter(context: Context, scope: String, id: Int, value: Float): Boolean {
+        if (scope !in sharedParamIds || id !in sharedParamIds.getValue(scope) || !value.isFinite()) return false
+        if (scope == "fluidsynth.reverb" && id == 0) {
+            return context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit()
+                .putInt("reverb", if (value >= 0.5f) 1 else 0)
+                .remove(sharedParameterKey(scope, id)).commit()
+        }
+        val editor = context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit().putFloat(sharedParameterKey(scope, id), value)
+        return editor.commit()
+    }
+    fun persistDelaySend(context: Context, channel: Int, value: Float): Boolean {
+        if (channel !in 0..15 || !value.isFinite() || value !in 0f..1f) return false
+        return context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit().putFloat(delaySendKey(channel), value).commit()
     }
 }

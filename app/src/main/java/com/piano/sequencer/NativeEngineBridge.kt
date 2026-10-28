@@ -302,6 +302,15 @@ object NativeEngineBridge {
     external fun nativeGetInstrumentEffectParamCount(effectId: String): Int
     external fun nativeGetInstrumentEffectParamInfo(effectId: String, index: Int): FloatArray?
     external fun nativeGetInstrumentEffectParamName(effectId: String, index: Int): String
+    // Shared FX control facade. All setters and native metadata queries run on worker threads.
+    external fun nativeSetSharedFxParameter(scope: String, parameterId: Int, value: Float): Boolean
+    external fun nativeGetSharedFxParameter(scope: String, parameterId: Int): Float
+    external fun nativeGetSharedFxParamInfo(scope: String, parameterId: Int): FloatArray?
+    external fun nativeIsSharedFxAvailable(scope: String): Boolean
+    external fun nativeSetDelaySend(channel: Int, level: Float): Boolean
+    external fun nativeGetDelaySend(channel: Int): Float
+    external fun nativeResetSharedDelay(): Boolean
+    external fun nativeGetInstrumentEffectLatencyFrames(channel: Int, effectId: String): Int
 
     // Count-in metronome
     external fun nativeStartCountIn(beats: Int): Long

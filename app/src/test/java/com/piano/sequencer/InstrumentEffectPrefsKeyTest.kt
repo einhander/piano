@@ -18,4 +18,10 @@ class InstrumentEffectPrefsKeyTest {
         assertNotEquals("fx_enabled_0", EffectStateRestore.instrumentEnabledKey(0, "lsp.parametric_eq"))
         assertNotEquals("fx_param_0_12", EffectStateRestore.instrumentParamKey(0, "lsp.parametric_eq", 12))
     }
+    @Test fun newInsertsAppendWithoutChangingV1KeysAndSharedKeysAreSeparate() {
+        assertEquals("instrument_fx_v1_enabled_2_lsp_chorus", EffectStateRestore.instrumentEnabledKey(2, "lsp.chorus"))
+        assertEquals("shared_fx_v1_native_delay_param_1", EffectStateRestore.sharedParameterKey("native.delay", 1))
+        assertEquals("shared_fx_v1_delay_send_15", EffectStateRestore.delaySendKey(15))
+        assertNotEquals(EffectStateRestore.sharedParameterKey("native.delay", 0), EffectStateRestore.sharedParameterKey("fluidsynth.reverb", 0))
+    }
 }

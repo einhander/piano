@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="instrument_effects_chorus">Chorus</string>
+    <string name="instrument_effects_clipper">Drive / Clipper</string>
     <string name="multi_title">Multi &amp; channel volume</string>
     <string name="multi_enable">Enable Multi</string>
     <string name="multi_routing_hint">Multi adds checked channels to the keyboard’s own channel. Unchecking does not mute a channel.</string>

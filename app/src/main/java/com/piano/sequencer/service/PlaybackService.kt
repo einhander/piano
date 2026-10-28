@@ -480,6 +480,23 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun getInstrumentEffectParamCount(effectId: String): Int = NativeEngineBridge.nativeGetInstrumentEffectParamCount(effectId)
     fun getInstrumentEffectParamInfo(effectId: String, index: Int): FloatArray? = NativeEngineBridge.nativeGetInstrumentEffectParamInfo(effectId, index)
     fun getInstrumentEffectParamName(effectId: String, index: Int): String = NativeEngineBridge.nativeGetInstrumentEffectParamName(effectId, index)
+    /** Shared FX control methods are direct JNI calls; invoke only from worker threads. */
+    fun setSharedFxParameter(scope: String, parameterId: Int, value: Float): Boolean =
+        NativeEngineBridge.nativeSetSharedFxParameter(scope, parameterId, value)
+    fun getSharedFxParameter(scope: String, parameterId: Int): Float =
+        NativeEngineBridge.nativeGetSharedFxParameter(scope, parameterId)
+    fun getSharedFxParamInfo(scope: String, parameterId: Int): FloatArray? =
+        NativeEngineBridge.nativeGetSharedFxParamInfo(scope, parameterId)
+    fun isSharedFxAvailable(scope: String): Boolean = NativeEngineBridge.nativeIsSharedFxAvailable(scope)
+    fun setDelaySend(channel: Int, level: Float): Boolean = NativeEngineBridge.nativeSetDelaySend(channel, level)
+    fun getDelaySend(channel: Int): Float = NativeEngineBridge.nativeGetDelaySend(channel)
+    fun resetSharedDelay(): Boolean = NativeEngineBridge.nativeResetSharedDelay()
+    fun getInstrumentEffectLatencyFrames(channel: Int, effectId: String): Int =
+        NativeEngineBridge.nativeGetInstrumentEffectLatencyFrames(channel, effectId)
+    fun getInstrumentEffectLatencyMillis(channel: Int, effectId: String): Float {
+        val rate = NativeEngineBridge.nativeGetSampleRate()
+        return if (rate > 0) getInstrumentEffectLatencyFrames(channel, effectId) * 1000f / rate else 0f
+    }
 
     // Reverb / Chorus / Interpolation (Fix #10-12). Worker thread only.
     fun setReverb(on: Boolean) = NativeEngineBridge.nativeSetReverb(on)

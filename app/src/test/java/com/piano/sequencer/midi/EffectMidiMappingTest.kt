@@ -5,6 +5,38 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EffectMidiMappingTest {
+    @Test fun scopeWhitelistAndBackwardCompatibleDefault() {
+        val old = mapping()
+        assertEquals(EffectCcScope.INSTRUMENT, old.scope)
+        val global = EffectCcMapping("dev", 0, 8, effectId = "native.delay", parameterId = "0", minRaw = 0f, maxRaw = 1f, scope = EffectCcScope.GLOBAL)
+        assertEquals(EffectCcScope.GLOBAL, global.scope)
+        assertThrows(IllegalArgumentException::class.java) { global.copy(scope = EffectCcScope.INSTRUMENT) }
+        assertThrows(IllegalArgumentException::class.java) { global.copy(effectId = "fluidsynth.reverb", scope = EffectCcScope.INSTRUMENT) }
+    }
+    @Test fun serializedMappingScopeRoundTripsAndMissingScopeMeansInstrument() {
+        val global = EffectCcMapping("dev", 0, 8, effectId = "fluidsynth.reverb", parameterId = "0", minRaw = 0f, maxRaw = 1f, scope = EffectCcScope.GLOBAL)
+        assertEquals(global, global.copy(scope = EffectCcScope.valueOf(global.scope.name)))
+        val oldMapping = EffectCcMapping("dev", 0, 8, 0, "lsp.limiter", "1", 0f, 1f)
+        assertEquals(EffectCcScope.INSTRUMENT, oldMapping.scope)
+    }
+    @Test fun sendUsesChosenInstrumentTargetAndEnabledVirtualParameterIsIndependent() {
+        val send = EffectCcMapping("dev", 3, 9, 12, "native.delay", "6", 0f, 1f, scope = EffectCcScope.GLOBAL)
+        assertEquals(12, effectCcTargetChannel(send)) // incoming MIDI channel 3 is not send destination
+        val enabled = EffectCcMapping("dev", 3, 9, 12, "lsp.chorus", "-1", 0f, 1f)
+        assertEquals(EffectCcScope.INSTRUMENT, enabled.scope)
+        assertEquals("-1", instrumentEffectEnabledDescriptor("lsp.chorus").stableId)
+        assertEquals(EffectParameterType.BOOLEAN, instrumentEffectEnabledDescriptor("lsp.chorus").type)
+        assertEquals(EffectCcAction.INSTRUMENT_ENABLED, effectCcAction(enabled))
+        assertEquals(EffectCcAction.DELAY_SEND, effectCcAction(send))
+    }
+    @Test fun sharedLearnMetadataDecodesNativeInfoWithoutExistingMapping() {
+        val param = sharedFxParameterFromNativeInfo("fluidsynth.reverb", 3, floatArrayOf(3f, 0f, 100f, 80f, 0f, 0f, 0f), 80f)
+        assertNotNull(param)
+        assertEquals(0f, param!!.minimum, 0f)
+        assertEquals(100f, param.maximum, 0f)
+        assertEquals(80f, param.defaultValue, 0f)
+        assertNull(sharedFxParameterFromNativeInfo("native.delay", 99, floatArrayOf(99f, 0f, 1f, 0f, 0f, 0f, 0f), 0f))
+    }
     private fun mapping(source: String? = "dev", channel: Int? = null, cc: Int = 7,
                        min: Float = 0f, max: Float = 1f, invert: Boolean = false) =
         EffectCcMapping(source, channel, cc, 2, "lsp.compressor", "1", min, max, invert)

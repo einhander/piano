@@ -9,19 +9,23 @@ import kotlin.math.roundToInt
 
 enum class PickupMode { SOFT_TAKEOVER }
 enum class CcDisposition { PASS, CONSUME }
+enum class EffectCcScope { INSTRUMENT, GLOBAL }
 
 data class EffectCcMapping(
     val source: String?, val inputChannel: Int?, val controller: Int,
     val targetInstrumentChannel: Int = 0, val effectId: String,
     val parameterId: String, val minRaw: Float, val maxRaw: Float,
     val invert: Boolean = false, val pickupMode: PickupMode = PickupMode.SOFT_TAKEOVER,
-    val disposition: CcDisposition = CcDisposition.PASS
+    val disposition: CcDisposition = CcDisposition.PASS,
+    val scope: EffectCcScope = EffectCcScope.INSTRUMENT
 ) {
     init {
         require(inputChannel == null || inputChannel in 0..15)
         require(controller in 0..127 && targetInstrumentChannel in 0..15)
         require(effectId in EFFECT_IDS)
+        require(if (scope == EffectCcScope.GLOBAL) effectId in GLOBAL_EFFECT_IDS else effectId in INSTRUMENT_EFFECT_IDS)
         require(parameterId.toIntOrNull() != null)
+        require(parameterId.toInt() >= -1)
         require(minRaw.isFinite() && maxRaw.isFinite() && maxRaw > minRaw)
     }
     fun matches(source: String, channel: Int, cc: Int) =
@@ -29,9 +33,28 @@ data class EffectCcMapping(
             (inputChannel == null || inputChannel == channel) && controller == cc
 
     companion object {
-        val EFFECT_IDS = setOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter")
+        val INSTRUMENT_EFFECT_IDS = setOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper")
+        val GLOBAL_EFFECT_IDS = setOf("native.delay", "fluidsynth.reverb")
+        val EFFECT_IDS = INSTRUMENT_EFFECT_IDS + GLOBAL_EFFECT_IDS
     }
 }
+
+/** Resolve target channel from persisted mapping, never from MIDI source channel. */
+fun effectCcTargetChannel(mapping: EffectCcMapping): Int = mapping.targetInstrumentChannel
+enum class EffectCcAction { INSTRUMENT_PARAMETER, INSTRUMENT_ENABLED, SHARED_PARAMETER, DELAY_SEND }
+fun effectCcAction(mapping: EffectCcMapping): EffectCcAction = effectCcAction(mapping.scope, mapping.effectId, mapping.parameterId)
+fun effectCcAction(scope: EffectCcScope, effectId: String, parameterId: String): EffectCcAction = when {
+    scope == EffectCcScope.INSTRUMENT && parameterId == "-1" -> EffectCcAction.INSTRUMENT_ENABLED
+    scope == EffectCcScope.GLOBAL && effectId == "native.delay" && parameterId == "6" -> EffectCcAction.DELAY_SEND
+    scope == EffectCcScope.GLOBAL -> EffectCcAction.SHARED_PARAMETER
+    else -> EffectCcAction.INSTRUMENT_PARAMETER
+}
+
+/** Instrument enable pseudo-target; -1 remains separate from plugin parameter IDs (including old ID 0). */
+fun instrumentEffectEnabledDescriptor(effectId: String, enabled: Boolean = false): EffectParameter = EffectParameter(
+    stableId = "-1", displayName = "Enabled", value = com.piano.sequencer.EffectParameterValue(if (enabled) 1f else 0f),
+    minimum = 0f, maximum = 1f, defaultValue = 0f, type = EffectParameterType.BOOLEAN, logarithmic = false
+)
 
 data class CcConflict(val incoming: EffectCcMapping, val existing: EffectCcMapping)
 

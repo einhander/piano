@@ -211,19 +211,30 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         // Reverb / Chorus switches (Fix #10-11).
+        var updatingReverb = false
         switchReverb.setOnCheckedChangeListener { _, checked ->
+            if (updatingReverb) return@setOnCheckedChangeListener
             tvReverb.text = getString(R.string.settings_reverb_value,
                 if (checked) getString(R.string.settings_on) else getString(R.string.settings_off))
             if (isFinishing || isDestroyed) return@setOnCheckedChangeListener
             val svc = service ?: return@setOnCheckedChangeListener
             val on = checked
-            CompletableFuture.runAsync({ svc.setReverb(on) }, mainExecutor)
-                .whenComplete { _, ex ->
+            switchReverb.isEnabled = false
+            CompletableFuture.supplyAsync({
+                val raw = if (on) 1f else 0f
+                val success = svc.setSharedFxParameter("fluidsynth.reverb", 0, raw)
+                if (success) EffectStateRestore.persistSharedParameter(this, "fluidsynth.reverb", 0, raw)
+                success
+            }, mainExecutor)
+                .whenComplete { success, ex ->
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
-                        if (ex == null) {
-                            getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
-                                .putInt("reverb", if (on) 1 else 0).apply()
+                        switchReverb.isEnabled = true
+                        if (ex != null || success != true) {
+                            updatingReverb = true
+                            switchReverb.isChecked = !on
+                            updatingReverb = false
+                            tvReverb.text = "Reverb change failed · reopen Settings to refresh"
                         }
                     }
                 }

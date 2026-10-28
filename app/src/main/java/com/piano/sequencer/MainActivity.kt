@@ -1431,6 +1431,7 @@ class MainActivity : AppCompatActivity() {
 
         // 2b. Restore reverb / chorus / interps / buffer size (Fix #10-12, #4).
         svc.setReverb(prefs.getInt("reverb", 1) != 0)
+        EffectStateRestore.restoreShared(this, svc)
         svc.setChorus(prefs.getInt("chorus", 1) != 0)
         svc.setInterps(prefs.getInt("interps", 4))
         // m3: restore the auto-tune state (default ON = 1). Backward compat:
