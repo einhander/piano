@@ -5,7 +5,7 @@ namespace piano {
 namespace lsp {
 
 AudioEffect* LspEffectFactory::create(int slot) {
-    const LadspaBinding* b = slot < kMasterEffectCount ? bindingForSlot(slot) : instrumentBindingForSlot(slot);
+    const LadspaBinding* b = slot >= 0 && slot < kMasterEffectCount ? bindingForSlot(slot) : instrumentBindingForSlot(slot);
     if (!b) {
         // Unknown slot — return an unavailable placeholder so the chain slot
         // count stays fixed. (Should not happen for the 3 fixed slots.)

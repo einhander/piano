@@ -133,6 +133,16 @@ calls run on the audio thread):
   `processOneMidi` (held-note tracking + re-arm); control commands arrive via
   SynthCmdQueue.
 
+**Runtime channel/bus contract:** the native synth exposes 128 independent
+absolute MIDI channels (0..127), with one dry stereo audio group per channel.
+Channels are never modulo-folded. Values outside this range are rejected by
+channel-program and MIDI-processing entry points. FluidSynth's reverb/chorus
+stereo return remains a separate shared bus, summed exactly once by stereo
+rendering or returned separately by `renderChannels`. Main uses channels
+0..15; MIDI-file channels remain absolute 16..127. The current NativeEngine
+audio caller still supplies 16 buses and must be expanded before using this
+128-bus render contract.
+
 ### Mixer
 Per-track volume, pan, mute, solo. Equal-power panning.
 

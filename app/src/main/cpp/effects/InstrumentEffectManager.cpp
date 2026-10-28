@@ -21,6 +21,25 @@ InstrumentEffectManager::InstrumentEffectManager(EffectFactory factory) noexcept
     mLeft.fill(nullptr); mRight.fill(nullptr);
 }
 
+bool InstrumentEffectManager::resetChannelRange(int first, int count) noexcept {
+    if (first < 0 || count < 0 || first > kChannels || count > kChannels - first) return false;
+    std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
+    while (mControlBusy.test_and_set(std::memory_order_acquire)) std::this_thread::yield();
+    struct Unlock { std::atomic_flag& f; ~Unlock(){f.clear(std::memory_order_release);} } unlock{mControlBusy};
+    for (int c=first;c<first+count;++c) {
+        mRackEnabled[c].store(false,std::memory_order_release); mWetMix[c].fill(0.0f);
+        mClipperDryL[c].fill(0.0f); mClipperDryR[c].fill(0.0f);
+        mClipperDryCursor[c]=mClipperHistoryCount[c]=mClipperLatency[c]=mClipperWarmFrames[c]=0;
+        mClipperWarmEffect[c]=nullptr; mClipperTimelineActive[c]=false; mClipperAlignMix[c]=0.0f;
+        for(int s=0;s<kEffects;++s) {
+            mEffectEnabled[c][s].store(false,std::memory_order_release);
+            mPublished[c][s].store(nullptr,std::memory_order_release); mEffects[c][s].reset();
+            for(int id=0;id<512;++id) { mPending[c][s][id].store(0.0f,std::memory_order_relaxed); mPendingSet[c][s][id].store(false,std::memory_order_release); }
+        }
+    }
+    return true;
+}
+
 InstrumentEffectManager::~InstrumentEffectManager() {
     // Owner must stop/quiesce audio before destruction. unique_ptr effects and
     // all scratch allocations are then reclaimed exactly once.

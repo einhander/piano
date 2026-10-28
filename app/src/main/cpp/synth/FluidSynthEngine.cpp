@@ -8,6 +8,17 @@
 #include <omp.h>
 #include <cmath>
 
+namespace {
+bool setDrumChannels(fluid_synth_t* synth) {
+    // Preserve General MIDI percussion channel at local channel 9 in every
+    // 16-channel block (Main plus each absolute MIDI-file set).
+    for (int channel = 9; channel < FluidSynthEngine::kInstrumentChannelCount; channel += 16) {
+        if (fluid_synth_set_channel_type(synth, channel, CHANNEL_TYPE_DRUM) != FLUID_OK) return false;
+    }
+    return true;
+}
+}
+
 // ── Lock-free design (see FluidSynthEngine.h for the full rationale) ─────────
 // ALL fluid_synth_* calls happen on the audio thread (the only thread that
 // touches the synths), so no lock is needed on the audio path. SF2 load/unload
@@ -103,7 +114,7 @@ bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
         }
         fluid_settings_setnum(mSettings[i], "synth.sample-rate", sampleRate);
         fluid_settings_setint(mSettings[i], "synth.audio-groups", kAudioGroups);
-        fluid_settings_setint(mSettings[i], "synth.midi-channels", 256);
+        fluid_settings_setint(mSettings[i], "synth.midi-channels", kInstrumentChannelCount);
         fluid_settings_setint(mSettings[i], "synth.audio-channels", kAudioGroups);
         // Preserve FluidSynth's default single shared effects unit. Its return
         // is mixed after dry channel buses; it is deliberately not attributed
@@ -128,6 +139,10 @@ bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
 
         mSynth[i] = new_fluid_synth(mSettings[i]);
         if (!mSynth[i]) {
+            cleanup();
+            return false;
+        }
+        if (!setDrumChannels(mSynth[i])) {
             cleanup();
             return false;
         }
@@ -168,8 +183,9 @@ void FluidSynthEngine::applyDesiredState(fluid_synth_t* synth) {
     fluid_synth_chorus_on(synth, -1, mChorusOn.load());
     fluid_synth_set_interp_method(synth, -1, mInterps.load());
     // Channel programs (packed bank<<8|program; -1 = no explicit program).
-    // MIDI-file sets occupy extended channels 16..255 and must survive SF2 swaps too.
-    for (int ch = 0; ch < 256; ch++) {
+    // Main channel volumes are retained for channels 0..15; all 128 channel
+    // programs survive SF2 swaps. MIDI-file channel identity stays absolute.
+    for (int ch = 0; ch < kInstrumentChannelCount; ch++) {
         if (ch < 16) {
             fluid_synth_cc(synth, ch, 7, mChannelVolumes[ch].load(std::memory_order_relaxed));
         }
@@ -306,13 +322,14 @@ bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
     if (success) {
         fluid_settings_setnum(newSettings, "synth.sample-rate", newRate);
         fluid_settings_setint(newSettings, "synth.audio-groups", kAudioGroups);
-        fluid_settings_setint(newSettings, "synth.midi-channels", 256);
+        fluid_settings_setint(newSettings, "synth.midi-channels", kInstrumentChannelCount);
         fluid_settings_setint(newSettings, "synth.audio-channels", kAudioGroups);
         fluid_settings_setint(newSettings, "synth.effects-groups", 1);
         fluid_settings_setint(newSettings, "synth.cpu-cores", 1);
         fluid_settings_setint(newSettings, "audio.periods", 2);
         newSynth = new_fluid_synth(newSettings);
         success = newSynth != nullptr;
+        if (success && !setDrumChannels(newSynth)) success = false;
         if (success) {
             // Disable FluidSynth audio driver — we render PCM ourselves.
             fluid_settings_setstr(newSettings, "audio.driver", "none");
@@ -515,7 +532,7 @@ void FluidSynthEngine::processCommands() {
 }
 
 void FluidSynthEngine::refreshActiveChannelBit(int channel) {
-    if (channel < 0 || channel >= 256) return;
+    if (channel < 0 || channel >= kInstrumentChannelCount) return;
     bool any = false;
     for (int note = 0; note < 128; ++note) {
         if (mActiveNotes[channel][note] != 0) {
@@ -523,6 +540,8 @@ void FluidSynthEngine::refreshActiveChannelBit(int channel) {
             break;
         }
     }
+    // Legacy activity masks describe Main channels only. Keep high channels
+    // out of this 16-bit surface; note tracking still covers all 128.
     if (channel < 16) {
         const auto bit = static_cast<uint16_t>(1u << channel);
         if (any) mActiveChannelMask.fetch_or(bit, std::memory_order_relaxed);
@@ -534,15 +553,17 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
     switch (cmd.type) {
         case SynthCmdType::NOTE_ON:
             fluid_synth_noteon(synth, cmd.a, cmd.b, static_cast<int>(cmd.f));
-            if (cmd.a >= 0 && cmd.a < 16 && cmd.b >= 0 && cmd.b < 128 && cmd.f > 0) {
+            if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount && cmd.b >= 0 && cmd.b < 128 && cmd.f > 0) {
                 mActiveNotes[cmd.a][cmd.b] = 1;
-                mActiveChannelMask.fetch_or(static_cast<uint16_t>(1u << cmd.a), std::memory_order_relaxed);
-                mRecentNoteOnMask.fetch_or(static_cast<uint16_t>(1u << cmd.a), std::memory_order_relaxed);
+                if (cmd.a < 16) {
+                    mActiveChannelMask.fetch_or(static_cast<uint16_t>(1u << cmd.a), std::memory_order_relaxed);
+                    mRecentNoteOnMask.fetch_or(static_cast<uint16_t>(1u << cmd.a), std::memory_order_relaxed);
+                }
             }
             break;
         case SynthCmdType::NOTE_OFF:
             fluid_synth_noteoff(synth, cmd.a, cmd.b);
-            if (cmd.a >= 0 && cmd.a < 16 && cmd.b >= 0 && cmd.b < 128) {
+            if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount && cmd.b >= 0 && cmd.b < 128) {
                 mActiveNotes[cmd.a][cmd.b] = 0;
                 refreshActiveChannelBit(cmd.a);
             }
@@ -551,7 +572,7 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             fluid_synth_cc(synth, cmd.a, cmd.b, static_cast<int>(cmd.f));
             if (cmd.a >= 0 && cmd.a < 16 && (cmd.b == 120 || cmd.b == 123))
                 mRecentNoteOnMask.fetch_and(static_cast<uint16_t>(~(1u << cmd.a)), std::memory_order_relaxed);
-            if (cmd.a >= 0 && cmd.a < 16 && (cmd.b == 120 || cmd.b == 123)) {
+            if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount && (cmd.b == 120 || cmd.b == 123)) {
                 std::memset(mActiveNotes[cmd.a], 0, sizeof(mActiveNotes[cmd.a]));
                 refreshActiveChannelBit(cmd.a);
             }
@@ -567,7 +588,7 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             break;
         case SynthCmdType::PANIC:
             // Send panic commands to FluidSynth
-            for (int ch = 0; ch < 256; ch++) {
+            for (int ch = 0; ch < kInstrumentChannelCount; ch++) {
                 fluid_synth_all_notes_off(synth, ch);
                 fluid_synth_all_sounds_off(synth, ch);
                 fluid_synth_cc(synth, ch, 123, 0);  // MIDI reset
@@ -584,6 +605,21 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             std::memset(mActiveNotes, 0, sizeof(mActiveNotes));
             mActiveChannelMask.store(0, std::memory_order_relaxed);
             mRecentNoteOnMask.store(0, std::memory_order_relaxed);
+            break;
+        case SynthCmdType::RESET_CHANNEL_RANGE:
+            if (cmd.a >= 0 && cmd.b >= 0 && cmd.a <= kInstrumentChannelCount && cmd.b <= kInstrumentChannelCount - cmd.a) {
+                for (int ch = cmd.a; ch < cmd.a + cmd.b; ++ch) {
+                    fluid_synth_all_sounds_off(synth, ch);
+                    fluid_synth_cc(synth, ch, 64, 0);
+                    fluid_synth_cc(synth, ch, 120, 0);
+                    fluid_synth_cc(synth, ch, 121, 0);
+                    fluid_synth_cc(synth, ch, 123, 0);
+                    std::memset(mActiveNotes[ch], 0, sizeof(mActiveNotes[ch]));
+                    std::memset(mHeldNotes[ch], 0, sizeof(mHeldNotes[ch]));
+                    std::memset(mHeldVel[ch], 0, sizeof(mHeldVel[ch]));
+                    refreshActiveChannelBit(ch);
+                }
+            }
             break;
         case SynthCmdType::SET_POLYPHONY:
             fluid_synth_set_polyphony(synth, cmd.a);
@@ -612,7 +648,7 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             fluid_synth_set_interp_method(synth, -1, cmd.a);
             break;
         case SynthCmdType::SET_CHANNEL_PROGRAM:
-            if (cmd.a >= 0 && cmd.a <= 255) {
+            if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount) {
                 // fluid_synth_bank_select handles bank style (GM/GS/XG) and the
                 // full 0-16383 range; raw CC0 only covers 0-127.
                 fluid_synth_bank_select(synth, cmd.a, cmd.b);
@@ -620,7 +656,7 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             }
             break;
         case SynthCmdType::SET_CHANNEL_VOLUME:
-            if (cmd.a >= 0 && cmd.a < 16) {
+            if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount) {
                 fluid_synth_cc(synth, cmd.a, 7, cmd.b);
                 // Queue order is authoritative: reconcile desired state here,
                 // after any earlier/later live CC7 already drained this callback.
@@ -647,7 +683,7 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
     uint8_t status = m.status;
     uint8_t type = status & 0xF0;
     int channel = m.channel == 0xFFFF ? (status & 0x0F) : m.channel;
-    if (channel < 0 || channel >= 256) return;
+    if (channel < 0 || channel >= kInstrumentChannelCount) return;
     const bool isLive = (m.timestamp == 0);
     bool noteOff = false;
 
@@ -689,9 +725,7 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
         case 0xB0: // Control Change
             fluid_synth_cc(synth, channel, m.data1, m.data2);
             // Preserve live CC7 as synth desired state across SF2/rate swaps.
-            if (m.data1 == 7) {
-                if (channel < 16) mChannelVolumes[channel].store(m.data2, std::memory_order_relaxed);
-            }
+            if (m.data1 == 7) mChannelVolumes[channel].store(m.data2, std::memory_order_relaxed);
             if (m.data1 == 120 || m.data1 == 123) {
                 std::memset(mActiveNotes[channel], 0, sizeof(mActiveNotes[channel]));
                 refreshActiveChannelBit(channel);
@@ -702,7 +736,7 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
             fluid_synth_program_change(synth, channel, m.data1);
             // Track the live program change in the desired channel program so
             // getChannelProgram reflects it (bank unchanged).
-            if (channel >= 0 && channel <= 15) {
+            if (channel >= 0 && channel < kInstrumentChannelCount) {
                 int packed = mChannelPrograms[channel].load(std::memory_order_relaxed);
                 int bank = packed >= 0 ? (packed >> 8) : 0;
                 mChannelPrograms[channel].store((bank << 8) | m.data1,
@@ -759,16 +793,16 @@ void FluidSynthEngine::render(float* output, int numFrames) {
         return;
     }
     if (numFrames <= 0 || numFrames > kRenderCapacity) { std::memset(output, 0, static_cast<size_t>(std::max(numFrames, 0)) * 2 * sizeof(float)); return; }
-    for (int i = 0; i < 32; ++i) std::memset(mRenderAudio[i], 0, static_cast<size_t>(numFrames) * sizeof(float));
+    for (int i = 0; i < kInstrumentChannelCount * 2; ++i) std::memset(mRenderAudio[i], 0, static_cast<size_t>(numFrames) * sizeof(float));
     std::memset(mRenderFx[0], 0, static_cast<size_t>(numFrames) * sizeof(float));
     std::memset(mRenderFx[1], 0, static_cast<size_t>(numFrames) * sizeof(float));
-    if (fluid_synth_process(synth, numFrames, 2, mRenderFxPtrs, 32, mRenderAudioPtrs) != FLUID_OK) {
+    if (fluid_synth_process(synth, numFrames, 2, mRenderFxPtrs, kInstrumentChannelCount * 2, mRenderAudioPtrs) != FLUID_OK) {
         std::memset(output, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
         return;
     }
     for (int i = 0; i < numFrames; ++i) {
         output[i * 2] = output[i * 2 + 1] = 0.0f;
-        for (int ch = 0; ch < 16; ++ch) {
+        for (int ch = 0; ch < kInstrumentChannelCount; ++ch) {
             output[i * 2] += mRenderAudio[ch * 2][i];
             output[i * 2 + 1] += mRenderAudio[ch * 2 + 1][i];
         }
@@ -777,36 +811,36 @@ void FluidSynthEngine::render(float* output, int numFrames) {
     }
 }
 
-void FluidSynthEngine::renderChannels(float* const outputs[16], float* sharedReturn, int numFrames) {
+void FluidSynthEngine::renderChannels(float* const outputs[kInstrumentChannelCount], float* sharedReturn, int numFrames) {
     if (!mInitialized.load() || numFrames <= 0 || numFrames > kRenderCapacity) {
-        for (int ch = 0; ch < 16; ++ch) if (outputs[ch]) std::memset(outputs[ch], 0, static_cast<size_t>(std::max(numFrames, 0)) * 2 * sizeof(float));
+        for (int ch = 0; ch < kInstrumentChannelCount; ++ch) if (outputs[ch]) std::memset(outputs[ch], 0, static_cast<size_t>(std::max(numFrames, 0)) * 2 * sizeof(float));
         if (sharedReturn) std::memset(sharedReturn, 0, static_cast<size_t>(std::max(numFrames, 0)) * 2 * sizeof(float));
         return;
     }
     const int idx = mActiveIndex.load(std::memory_order_acquire);
     fluid_synth_t* synth = mSynth[idx];
     if (!synth) {
-        for (int ch = 0; ch < 16; ++ch) if (outputs[ch]) std::memset(outputs[ch], 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
+        for (int ch = 0; ch < kInstrumentChannelCount; ++ch) if (outputs[ch]) std::memset(outputs[ch], 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
         if (sharedReturn) std::memset(sharedReturn, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
         return;
     }
     // process() accumulates into destination buffers. Clear all dry/return
     // buffers per segment. One effects group provides a shared stereo return.
-    for (int i = 0; i < 16; ++i) {
+    for (int i = 0; i < kInstrumentChannelCount; ++i) {
         std::memset(mRenderAudio[i * 2], 0, static_cast<size_t>(numFrames) * sizeof(float));
         std::memset(mRenderAudio[i * 2 + 1], 0, static_cast<size_t>(numFrames) * sizeof(float));
     }
     std::memset(mRenderFx[0], 0, static_cast<size_t>(numFrames) * sizeof(float));
     std::memset(mRenderFx[1], 0, static_cast<size_t>(numFrames) * sizeof(float));
-    if (fluid_synth_process(synth, numFrames, 2, mRenderFxPtrs, 32, mRenderAudioPtrs) != FLUID_OK) {
-        for (int i = 0; i < 32; ++i) std::memset(mRenderAudio[i], 0, static_cast<size_t>(numFrames) * sizeof(float));
+    if (fluid_synth_process(synth, numFrames, 2, mRenderFxPtrs, kInstrumentChannelCount * 2, mRenderAudioPtrs) != FLUID_OK) {
+        for (int i = 0; i < kInstrumentChannelCount * 2; ++i) std::memset(mRenderAudio[i], 0, static_cast<size_t>(numFrames) * sizeof(float));
         std::memset(mRenderFx[0], 0, static_cast<size_t>(numFrames) * sizeof(float));
         std::memset(mRenderFx[1], 0, static_cast<size_t>(numFrames) * sizeof(float));
-        for (int ch = 0; ch < 16; ++ch) if (outputs[ch]) std::memset(outputs[ch], 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
+        for (int ch = 0; ch < kInstrumentChannelCount; ++ch) if (outputs[ch]) std::memset(outputs[ch], 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
         if (sharedReturn) std::memset(sharedReturn, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
         return;
     }
-    for (int ch = 0; ch < 16; ++ch) {
+    for (int ch = 0; ch < kInstrumentChannelCount; ++ch) {
         if (!outputs[ch]) continue;
         for (int i = 0; i < numFrames; ++i) {
             outputs[ch][i * 2] = mRenderAudio[ch * 2][i];
@@ -832,42 +866,49 @@ static inline void makeCmd(SynthCmd& c, SynthCmdType t, int a = 0, int b = 0, fl
 }
 
 void FluidSynthEngine::noteOn(int channel, int note, int velocity) {
-    if (!mInitialized.load()) return;
+    if (!mInitialized.load() || channel < 0 || channel >= kInstrumentChannelCount) return;
     SynthCmd c;
     makeCmd(c, SynthCmdType::NOTE_ON, channel, note, static_cast<float>(velocity));
     mCmdQueue.push(c);
 }
 
+bool FluidSynthEngine::resetChannelRange(int first, int count) {
+    if (!mInitialized.load() || first < 0 || count <= 0 || first > kInstrumentChannelCount || count > kInstrumentChannelCount - first) return false;
+    SynthCmd c;
+    if (!makeResetChannelRangeCommand(first, count, kInstrumentChannelCount, c)) return false;
+    return mCmdQueue.push(c);
+}
+
 void FluidSynthEngine::noteOff(int channel, int note) {
-    if (!mInitialized.load()) return;
+    if (!mInitialized.load() || channel < 0 || channel >= kInstrumentChannelCount) return;
     SynthCmd c;
     makeCmd(c, SynthCmdType::NOTE_OFF, channel, note);
     mCmdQueue.push(c);
 }
 
 void FluidSynthEngine::controlChange(int channel, int controller, int value) {
-    if (!mInitialized.load()) return;
+    if (!mInitialized.load() || channel < 0 || channel >= kInstrumentChannelCount) return;
     SynthCmd c;
     makeCmd(c, SynthCmdType::CC, channel, controller, static_cast<float>(value));
     mCmdQueue.push(c);
 }
 
 void FluidSynthEngine::programChange(int channel, int program) {
-    if (!mInitialized.load()) return;
+    if (!mInitialized.load() || channel < 0 || channel >= kInstrumentChannelCount) return;
     SynthCmd c;
     makeCmd(c, SynthCmdType::PROGRAM_CHANGE, channel, program);
     mCmdQueue.push(c);
 }
 
 void FluidSynthEngine::pitchBend(int channel, int value) {
-    if (!mInitialized.load()) return;
+    if (!mInitialized.load() || channel < 0 || channel >= kInstrumentChannelCount) return;
     SynthCmd c;
     makeCmd(c, SynthCmdType::PITCH_BEND, channel, value);
     mCmdQueue.push(c);
 }
 
 void FluidSynthEngine::channelPressure(int channel, int value) {
-    if (!mInitialized.load()) return;
+    if (!mInitialized.load() || channel < 0 || channel >= kInstrumentChannelCount) return;
     SynthCmd c;
     makeCmd(c, SynthCmdType::CHANNEL_PRESSURE, channel, value);
     mCmdQueue.push(c);
@@ -1003,7 +1044,7 @@ void FluidSynthEngine::setInterps(int method) {
 
 bool FluidSynthEngine::setChannelProgram(int channel, int bank, int program) {
     if (!mInitialized.load()) return false;
-    if (channel < 0 || channel > 255) return false;
+    if (channel < 0 || channel >= kInstrumentChannelCount) return false;
     if (bank < 0) bank = 0;
     if (bank > 16383) bank = 16383;
     if (program < 0 || program > 127) program = 0;
@@ -1015,7 +1056,7 @@ bool FluidSynthEngine::setChannelProgram(int channel, int bank, int program) {
 
 bool FluidSynthEngine::getChannelProgram(int channel, int& bank, int& program) const {
     if (!mInitialized.load()) return false;
-    if (channel < 0 || channel > 255) return false;
+    if (channel < 0 || channel >= kInstrumentChannelCount) return false;
     int packed = mChannelPrograms[channel].load(std::memory_order_relaxed);
     if (packed < 0) {
         bank = 0;
@@ -1028,7 +1069,7 @@ bool FluidSynthEngine::getChannelProgram(int channel, int& bank, int& program) c
 }
 
 bool FluidSynthEngine::setChannelVolume(int channel, int value) {
-    if (channel < 0 || channel >= 16) return false;
+    if (channel < 0 || channel >= kInstrumentChannelCount) return false;
     value = std::clamp(value, 0, 127);
     mChannelVolumes[channel].store(value, std::memory_order_relaxed);
     if (!mInitialized.load(std::memory_order_relaxed)) return true;
@@ -1038,7 +1079,7 @@ bool FluidSynthEngine::setChannelVolume(int channel, int value) {
 }
 
 int FluidSynthEngine::getChannelVolume(int channel) const {
-    return channel >= 0 && channel < 16 ? mChannelVolumes[channel].load(std::memory_order_relaxed) : 100;
+    return channel >= 0 && channel < kInstrumentChannelCount ? mChannelVolumes[channel].load(std::memory_order_relaxed) : 100;
 }
 
 // ── Getters (worker thread — atomic reads of the desired settings) ───────────

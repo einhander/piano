@@ -24,4 +24,19 @@ class InstrumentEffectPrefsKeyTest {
         assertEquals("shared_fx_v1_delay_send_15", EffectStateRestore.delaySendKey(15))
         assertNotEquals(EffectStateRestore.sharedParameterKey("native.delay", 0), EffectStateRestore.sharedParameterKey("fluidsynth.reverb", 0))
     }
+    @Test fun newInsertKeysRemainV1AndOldMappingsRemainStable() {
+        assertEquals(listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper", "lsp.filter", "lsp.phaser", "lsp.flanger"), EffectStateRestore.instrumentIds)
+        assertEquals("instrument_fx_v1_enabled_2_lsp_filter", EffectStateRestore.instrumentEnabledKey(2, "lsp.filter"))
+        assertEquals("instrument_fx_v1_param_2_lsp_flanger_400", EffectStateRestore.instrumentParamKey(2, "lsp.flanger", 400))
+        assertEquals("instrument_fx_v1_enabled_2_lsp_chorus", EffectStateRestore.instrumentEnabledKey(2, "lsp.chorus"))
+    }
+    @Test fun newInsertPresentationAddsAuditedUnitsAndEnumsWithoutChangingNativeMetadata() {
+        val filterType = EffectParameter("362", "Type", EffectParameterValue(0f), 0f, 10f, 0f, EffectParameterType.INTEGER, false)
+        val presented = instrumentPresentation("lsp.filter", filterType)
+        assertEquals(11, presented.enumValues.size)
+        assertEquals(10f, presented.maximum, 0f)
+        val feedback = instrumentPresentation("lsp.phaser", EffectParameter("383", "Feedback", EffectParameterValue(0f), 0f, .89125f, 0f, EffectParameterType.FLOAT, false))
+        assertEquals("fraction-percent", feedback.scale)
+        assertEquals("%", feedback.unit)
+    }
 }

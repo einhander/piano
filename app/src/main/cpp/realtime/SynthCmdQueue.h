@@ -50,6 +50,7 @@ enum class SynthCmdType : uint8_t {
     SET_CHANNEL_PROGRAM,
     SET_CHANNEL_VOLUME,
     SET_REVERB_PARAMS,
+    RESET_CHANNEL_RANGE,
 };
 
 struct SynthCmd {
@@ -63,6 +64,14 @@ struct SynthCmd {
     float reverbWidth;
     float reverbLevel;
 };
+inline bool makeResetChannelRangeCommand(int first, int count, int channelCount, SynthCmd& out) noexcept {
+    if (channelCount <= 0 || first < 0 || count <= 0 || first > channelCount || count > channelCount - first) return false;
+    out = {};
+    out.type = SynthCmdType::RESET_CHANNEL_RANGE;
+    out.a = first;
+    out.b = count;
+    return true;
+}
 static_assert(std::is_trivially_copyable<SynthCmd>::value, "SynthCmd must remain queue-compatible");
 
 class SynthCmdQueue {

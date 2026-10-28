@@ -22,7 +22,7 @@ class InstrumentEffectCcController(context: Context) {
     private val serviceAttachments = ServiceAttachmentRegistry<PlaybackService>()
     @Volatile private var service: PlaybackService? = null
     @Volatile private var cacheReady = false
-    private data class ParamKey(val target: Int, val effect: String, val parameter: String, val scope: EffectCcScope = EffectCcScope.INSTRUMENT)
+    private data class ParamKey(val setId: String, val target: Int, val effect: String, val parameter: String, val scope: EffectCcScope = EffectCcScope.INSTRUMENT)
     private data class Cached(val descriptor: com.piano.sequencer.EffectParameter, var current: Float)
     private data class Pending(val key: ParamKey, val parameterId: Int, val value: Float)
     private var learning: Learn? = null
@@ -54,30 +54,40 @@ class InstrumentEffectCcController(context: Context) {
     }
     fun mappings() = coordinator.mappings()
     /** Native-derived target metadata for CC Learn UI; includes toggles. */
-    fun parameterMetadata(scope: EffectCcScope, effectId: String, parameterId: Int, targetChannel: Int = 0): com.piano.sequencer.EffectParameter? =
+    fun parameterMetadata(scope: EffectCcScope, effectId: String, parameterId: Int, targetChannel: Int = 0, targetSetId: String = MAIN_INSTRUMENT_SET_ID): com.piano.sequencer.EffectParameter? =
         when {
             scope == EffectCcScope.INSTRUMENT && parameterId == -1 && effectId in EffectCcMapping.INSTRUMENT_EFFECT_IDS -> instrumentEffectEnabledDescriptor(effectId)
             scope == EffectCcScope.INSTRUMENT && effectId == "native.delay" -> nativeDelayMetadata(parameterId)
             scope == EffectCcScope.GLOBAL && effectId == "native.delay" && parameterId == 6 -> sendDescriptorWithoutService(targetChannel)
             scope == EffectCcScope.GLOBAL -> sharedMetadata(effectId, parameterId)
-            else -> synchronized(lock) { cache[ParamKey(targetChannel, effectId, parameterId.toString(), scope)]?.descriptor }
+            else -> synchronized(lock) { cache[ParamKey(targetSetId, targetChannel, effectId, parameterId.toString(), scope)]?.descriptor }
         }
     fun globalTargets(): List<com.piano.sequencer.EffectParameter> = synchronized(lock) {
         listOf("fluidsynth.reverb" to (0..4)).flatMap { (fx, ids) -> ids.mapNotNull { parameterMetadata(EffectCcScope.GLOBAL, fx, it) } }.distinctBy { it.stableId + it.displayName }
     }
     /** Query native-owned current values/defaults off-thread; safe before any mapping exists. */
-    fun queryParameterMetadata(scope: EffectCcScope, effectId: String, parameterId: Int, targetChannel: Int = 0,
+    fun queryParameterMetadata(scope: EffectCcScope, effectId: String, parameterId: Int, targetChannel: Int = 0, targetSetId: String = MAIN_INSTRUMENT_SET_ID,
                                callback: (com.piano.sequencer.EffectParameter?) -> Unit) {
         val svc = service ?: run { callback(parameterMetadata(scope, effectId, parameterId, targetChannel)); return }
         executor.execute {
             val result = if (scope == EffectCcScope.INSTRUMENT && effectId == "native.delay") {
                 val info = runCatching { svc.getInstrumentDelayParamInfo(parameterId) }.getOrNull()
-                val value = runCatching { svc.getInstrumentDelayParameter(targetChannel, parameterId) }.getOrNull() ?: Float.NaN
+                val value = runCatching { svc.getInstrumentDelayParameter(targetSetId, targetChannel, parameterId) }.getOrNull() ?: Float.NaN
                 info?.let { sharedFxParameterFromNativeInfo(effectId, parameterId, it, value) }
             } else if (scope == EffectCcScope.GLOBAL) {
                 val info = runCatching { svc.getSharedFxParamInfo(effectId, parameterId) }.getOrNull()
                 val value = runCatching { svc.getSharedFxParameter(effectId, parameterId) }.getOrNull() ?: Float.NaN
                 info?.let { sharedFxParameterFromNativeInfo(effectId, parameterId, it, value) }
+            } else if (scope == EffectCcScope.INSTRUMENT) {
+                val index = (0 until runCatching { svc.getInstrumentEffectParamCount(effectId) }.getOrDefault(0))
+                    .firstOrNull { i -> runCatching { svc.getInstrumentEffectParamInfo(effectId, i)?.getOrNull(0)?.toInt() == parameterId }.getOrDefault(false) }
+                index?.let { i ->
+                    val info = runCatching { svc.getInstrumentEffectParamInfo(effectId, i) }.getOrNull()
+                    val name = runCatching { svc.getInstrumentEffectParamName(effectId, i) }.getOrDefault("")
+                    val value = runCatching { svc.getInstrumentEffectParameter(targetSetId, targetChannel, effectId, parameterId) }.getOrNull() ?: Float.NaN
+                    info?.let { com.piano.sequencer.effectParameterFromNativeInfo(it, name, value, effectId) }
+                        ?.let { com.piano.sequencer.instrumentPresentation(effectId, it) }
+                }
             } else parameterMetadata(scope, effectId, parameterId, targetChannel)
             callback(result)
         }
@@ -148,7 +158,7 @@ class InstrumentEffectCcController(context: Context) {
         val selected = matching.maxByOrNull { (if (it.source != null) 2 else 0) + if (it.inputChannel != null) 1 else 0 } ?: return false
         val consume = selected.disposition == CcDisposition.CONSUME
         val mappedTarget = effectCcTargetChannel(selected)
-        val key = ParamKey(mappedTarget, selected.effectId, selected.parameterId, selected.scope)
+        val key = ParamKey(selected.targetInstrumentSetId, mappedTarget, selected.effectId, selected.parameterId, selected.scope)
         val cached = synchronized(lock) { cache[key] } ?: when {
             selected.scope == EffectCcScope.INSTRUMENT && selected.parameterId == "-1" -> Cached(instrumentEffectEnabledDescriptor(selected.effectId), 0f)
             selected.scope == EffectCcScope.GLOBAL && selected.effectId == "native.delay" && selected.parameterId == "6" -> Cached(sendDescriptorWithoutService(mappedTarget), 0f)
@@ -173,8 +183,8 @@ class InstrumentEffectCcController(context: Context) {
         }
         return consume
     }
-    fun manualParameterChanged(target: Int, effect: String, parameter: String, value: Float, scope: EffectCcScope = EffectCcScope.INSTRUMENT) {
-        synchronized(lock) { cache[ParamKey(target, effect, parameter, scope)]?.current = value }
+    fun manualParameterChanged(target: Int, effect: String, parameter: String, value: Float, scope: EffectCcScope = EffectCcScope.INSTRUMENT, targetSetId: String = MAIN_INSTRUMENT_SET_ID) {
+        synchronized(lock) { cache[ParamKey(targetSetId, target, effect, parameter, scope)]?.current = value }
     }
     private fun invalidateCache() {
         cacheReady = false
@@ -182,11 +192,16 @@ class InstrumentEffectCcController(context: Context) {
     }
     private fun refreshCache(svc: PlaybackService) {
         try {
-                mappings().map { ParamKey(effectCcTargetChannel(it), it.effectId, it.parameterId, it.scope) }.distinct().forEach { key ->
+                mappings().map { ParamKey(it.targetInstrumentSetId, effectCcTargetChannel(it), it.effectId, it.parameterId, it.scope) }.distinct().forEach { key ->
+                if (key.scope == EffectCcScope.INSTRUMENT && resolveInstrumentIdentityChannel(key.setId, key.target, FileInstrumentSetStore.get(svc).all().firstOrNull { it.id == key.setId }?.channelBase) !in 0..127) {
+                    android.util.Log.w("EffectCc", "Stale instrument-set target rejected set=${key.setId} local=${key.target}")
+                    return@forEach
+                }
                 if (service !== svc) return
                 val id = key.parameter.toIntOrNull() ?: return@forEach
                 if (key.scope == EffectCcScope.INSTRUMENT && id == -1) {
-                    synchronized(lock) { cache[key] = Cached(instrumentEffectEnabledDescriptor(key.effect, svc.isInstrumentEffectEnabled(key.target, key.effect)), if (svc.isInstrumentEffectEnabled(key.target, key.effect)) 1f else 0f) }
+                    val enabled = svc.isInstrumentEffectEnabled(key.setId, key.target, key.effect)
+                    synchronized(lock) { cache[key] = Cached(instrumentEffectEnabledDescriptor(key.effect, enabled), if (enabled) 1f else 0f) }
                     return@forEach
                 }
                 if (key.scope == EffectCcScope.GLOBAL && key.effect == "native.delay" && id == 6) {
@@ -200,14 +215,14 @@ class InstrumentEffectCcController(context: Context) {
                     value = svc.getSharedFxParameter(key.effect, id)
                 } else if (key.effect == "native.delay") {
                     info = svc.getInstrumentDelayParamInfo(id); name = sharedName(key.effect, id)
-                    value = svc.getInstrumentDelayParameter(key.target, id)
+                    value = svc.getInstrumentDelayParameter(key.setId, key.target, id)
                 } else {
                     val index = (0 until svc.getInstrumentEffectParamCount(key.effect)).firstOrNull { i -> svc.getInstrumentEffectParamInfo(key.effect, i)?.getOrNull(0)?.toInt() == id } ?: return@forEach
                     info = svc.getInstrumentEffectParamInfo(key.effect, index) ?: return@forEach
                     name = svc.getInstrumentEffectParamName(key.effect, index)
-                    value = svc.getInstrumentEffectParameter(key.target, key.effect, id)
+                    value = svc.getInstrumentEffectParameter(key.setId, key.target, key.effect, id)
                 }
-                val descriptor = info?.let { effectParameterFromNativeInfo(it, name, value, key.effect) } ?: return@forEach
+                val descriptor = info?.let { effectParameterFromNativeInfo(it, name, value, key.effect) }?.let { com.piano.sequencer.instrumentPresentation(key.effect, it) } ?: return@forEach
                 synchronized(lock) { cache[key] = Cached(descriptor, value) }
             }
             if (service === svc) cacheReady = true
@@ -239,16 +254,14 @@ class InstrumentEffectCcController(context: Context) {
                       }
                       result
                     } else if (event.key.scope == EffectCcScope.INSTRUMENT && event.key.effect == "native.delay") {
-                        svc.setInstrumentDelayParameter(event.key.target, event.parameterId, event.value)
+                        svc.setInstrumentDelayParameter(event.key.setId, event.key.target, event.parameterId, event.value)
                     } else if (action == EffectCcAction.INSTRUMENT_ENABLED) {
                        val enabled = event.value >= .5f
-                       val result = svc.setInstrumentEffectEnabled(event.key.target, event.key.effect, enabled)
-                       if (result) com.piano.sequencer.EffectStateRestore.persistInstrumentEffect(svc, event.key.target, event.key.effect, enabled)
+                        val result = svc.setInstrumentEffectEnabled(event.key.setId, event.key.target, event.key.effect, enabled)
                        result
-                   } else svc.setInstrumentEffectParameter(event.key.target, event.key.effect, event.parameterId, event.value).also { ok ->
-                       if (ok) com.piano.sequencer.EffectStateRestore.persistInstrumentParameter(svc, event.key.target, event.key.effect, event.parameterId, event.value)
+                    } else svc.setInstrumentEffectParameter(event.key.setId, event.key.target, event.key.effect, event.parameterId, event.value).also { ok ->
                    }
-                   if (!ok) android.util.Log.w("EffectCc", "Setter rejected channel=${event.key.target} id=${event.parameterId} result=$ok")
+                    if (!ok) android.util.Log.w("EffectCc", "Setter rejected set=${event.key.setId} local=${event.key.target} id=${event.parameterId} result=$ok")
                 else synchronized(lock) { cache[event.key]?.current = event.value }
              } catch (e: Exception) { android.util.Log.e("EffectCc", "MIDI dispatch failed", e) } }
         }
@@ -256,7 +269,7 @@ class InstrumentEffectCcController(context: Context) {
     private fun persist() { prefs.edit().putString(KEY, encode(coordinator.mappings())).apply() }
     companion object {
         private const val KEY = "instrument_effect_cc_mappings_v1"
-        fun encode(items: List<EffectCcMapping>): String = JSONObject().put("version", 1).put("mappings", JSONArray().also { a -> items.forEach { m -> a.put(JSONObject().put("source",m.source).put("channel",m.inputChannel ?: -1).put("cc",m.controller).put("target",m.targetInstrumentChannel).put("effect",m.effectId).put("parameter",m.parameterId).put("min",m.minRaw.toDouble()).put("max",m.maxRaw.toDouble()).put("invert",m.invert).put("pickup",m.pickupMode.name).put("disposition",m.disposition.name).put("scope",m.scope.name)) } }).toString()
+        fun encode(items: List<EffectCcMapping>): String = JSONObject().put("version", 1).put("mappings", JSONArray().also { a -> items.forEach { m -> a.put(JSONObject().put("source",m.source).put("channel",m.inputChannel ?: -1).put("cc",m.controller).put("target",m.targetInstrumentChannel).put("targetSetId",m.targetInstrumentSetId).put("effect",m.effectId).put("parameter",m.parameterId).put("min",m.minRaw.toDouble()).put("max",m.maxRaw.toDouble()).put("invert",m.invert).put("pickup",m.pickupMode.name).put("disposition",m.disposition.name).put("scope",m.scope.name)) } }).toString()
         fun decode(text: String?): List<EffectCcMapping> {
             if (text == null) return emptyList()
         return try {
@@ -264,7 +277,7 @@ class InstrumentEffectCcController(context: Context) {
             val array = root.getJSONArray("mappings")
             (0 until array.length()).map { i ->
                 val o = array.getJSONObject(i)
-                EffectCcMapping(if (o.isNull("source")) null else o.getString("source"), o.optInt("channel", -1).takeIf { it >= 0 }, o.getInt("cc"), o.getInt("target"), o.getString("effect"), o.getString("parameter"), o.getDouble("min").toFloat(), o.getDouble("max").toFloat(), o.optBoolean("invert"), PickupMode.valueOf(o.optString("pickup", PickupMode.SOFT_TAKEOVER.name)), CcDisposition.valueOf(o.optString("disposition", if (o.optBoolean("consume")) "CONSUME" else "PASS")), EffectCcScope.valueOf(o.optString("scope", EffectCcScope.INSTRUMENT.name)))
+                EffectCcMapping(if (o.isNull("source")) null else o.getString("source"), o.optInt("channel", -1).takeIf { it >= 0 }, o.getInt("cc"), o.getInt("target"), o.getString("effect"), o.getString("parameter"), o.getDouble("min").toFloat(), o.getDouble("max").toFloat(), o.optBoolean("invert"), PickupMode.valueOf(o.optString("pickup", PickupMode.SOFT_TAKEOVER.name)), CcDisposition.valueOf(o.optString("disposition", if (o.optBoolean("consume")) "CONSUME" else "PASS")), EffectCcScope.valueOf(o.optString("scope", EffectCcScope.INSTRUMENT.name)), o.optString("targetSetId", MAIN_INSTRUMENT_SET_ID))
             }.let { items -> items.takeIf { it.indices.all { i -> (0 until i).none { j -> collides(items[i], items[j]) } } } ?: emptyList() }
         } catch (_: Exception) { emptyList() }
         }

@@ -86,15 +86,28 @@ int main(int argc, char** argv) {
             return fail("A: loadSoundFont failed: %s", sf2Path);
         }
 
-        // Extended file channels use same queued preset command path as main channels.
-        // Drain commands through MIDI processing, then inspect desired state.
-        if (!synth.setChannelProgram(200, 258, 12))
-            return fail("A: extended-channel preset command was not queued");
+        // Absolute file channels remain valid through 127, while wider values
+        // are rejected rather than folded or passed to FluidSynth.
+        if (!synth.setChannelProgram(127, 258, 12) || synth.setChannelProgram(128, 258, 12) ||
+            synth.setChannelProgram(255, 258, 12))
+            return fail("A: channel-program bounds mismatch");
         synth.processCommands();
         int extendedBank = -1, extendedProgram = -1;
-        if (!synth.getChannelProgram(200, extendedBank, extendedProgram) ||
+        if (!synth.getChannelProgram(127, extendedBank, extendedProgram) ||
             extendedBank != 258 || extendedProgram != 12)
             return fail("A: extended-channel preset state mismatch");
+        if (synth.getChannelProgram(128, extendedBank, extendedProgram))
+            return fail("A: out-of-range channel-program query accepted");
+        for (int channel : {16, 127}) {
+            MidiMessage high = mkMsg(0x90, 61, 90, 1);
+            high.channel = static_cast<uint16_t>(channel);
+            synth.processOneMidi(high);
+            high.status = 0x80;
+            high.data2 = 0;
+            synth.processOneMidi(high);
+        }
+        if (synth.getActiveChannelMask() != 0)
+            return fail("A: legacy 16-bit activity mask unexpectedly includes file channels");
 
         // A0: Each MIDI channel maps to its corresponding dry stereo bus.
         // Global FluidSynth effects return is exposed independently, not folded
@@ -102,9 +115,9 @@ int main(int argc, char** argv) {
         // that varies with the test SF2, so keep this fixture on channel 2.
         {
             constexpr int frames = 4096;
-            std::vector<float> buses[16];
-            float* outputs[16];
-            for (int ch = 0; ch < 16; ++ch) {
+            std::vector<float> buses[FluidSynthEngine::kInstrumentChannelCount];
+            float* outputs[FluidSynthEngine::kInstrumentChannelCount];
+            for (int ch = 0; ch < FluidSynthEngine::kInstrumentChannelCount; ++ch) {
                 buses[ch].assign(frames * 2, 0.0f);
                 outputs[ch] = buses[ch].data();
             }
@@ -115,7 +128,7 @@ int main(int argc, char** argv) {
                     return fail("A0: routing synth init/SF2 load failed");
                 routed.processOneMidi(mkMsg(static_cast<uint8_t>(0x90 | channel), 60, 110, 0));
                 routed.renderChannels(outputs, sharedReturn.data(), frames);
-                for (int ch = 0; ch < 16; ++ch) {
+                for (int ch = 0; ch < FluidSynthEngine::kInstrumentChannelCount; ++ch) {
                     const double e = energy(outputs[ch], frames);
                     if (ch == channel) {
                         if (e <= 1e-6) return fail("A0: channel %d dry bus silent", channel + 1);

@@ -17,11 +17,12 @@ data class EffectCcMapping(
     val parameterId: String, val minRaw: Float, val maxRaw: Float,
     val invert: Boolean = false, val pickupMode: PickupMode = PickupMode.SOFT_TAKEOVER,
     val disposition: CcDisposition = CcDisposition.PASS,
-    val scope: EffectCcScope = EffectCcScope.INSTRUMENT
+    val scope: EffectCcScope = EffectCcScope.INSTRUMENT,
+    val targetInstrumentSetId: String = MAIN_INSTRUMENT_SET_ID
 ) {
     init {
         require(inputChannel == null || inputChannel in 0..15)
-        require(controller in 0..127 && targetInstrumentChannel in 0..15)
+        require(controller in 0..127 && targetInstrumentChannel in 0..15 && targetInstrumentSetId.isNotBlank())
         require(effectId in EFFECT_IDS)
             require(if (scope == EffectCcScope.GLOBAL) effectId in GLOBAL_EFFECT_IDS else effectId in INSTRUMENT_EFFECT_IDS || effectId == "native.delay")
         require(!(scope == EffectCcScope.INSTRUMENT && effectId == "native.delay") || parameterId.toInt() in 0..5)
@@ -34,7 +35,7 @@ data class EffectCcMapping(
             (inputChannel == null || inputChannel == channel) && controller == cc
 
     companion object {
-        val INSTRUMENT_EFFECT_IDS = setOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper")
+        val INSTRUMENT_EFFECT_IDS = setOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper", "lsp.filter", "lsp.phaser", "lsp.flanger")
         val GLOBAL_EFFECT_IDS = setOf("native.delay", "fluidsynth.reverb")
         val EFFECT_IDS = INSTRUMENT_EFFECT_IDS + GLOBAL_EFFECT_IDS
     }
@@ -42,6 +43,9 @@ data class EffectCcMapping(
 
 /** Resolve target channel from persisted mapping, never from MIDI source channel. */
 fun effectCcTargetChannel(mapping: EffectCcMapping): Int = mapping.targetInstrumentChannel
+fun resolveCcTargetLocalChannel(setId: String, localChannel: Int, validSetIds: List<String>): Int =
+    if (setId == MAIN_INSTRUMENT_SET_ID) localChannel.takeIf { it in 0..15 } ?: -1
+    else if (setId in validSetIds && localChannel in 0..15) localChannel else -1
 enum class EffectCcAction { INSTRUMENT_PARAMETER, INSTRUMENT_ENABLED, SHARED_PARAMETER, DELAY_SEND }
 fun effectCcAction(mapping: EffectCcMapping): EffectCcAction = effectCcAction(mapping.scope, mapping.effectId, mapping.parameterId)
 fun effectCcAction(scope: EffectCcScope, effectId: String, parameterId: String): EffectCcAction = when {

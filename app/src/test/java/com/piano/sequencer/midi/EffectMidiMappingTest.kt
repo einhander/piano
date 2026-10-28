@@ -13,11 +13,39 @@ class EffectMidiMappingTest {
         assertEquals(EffectCcScope.INSTRUMENT, global.copy(scope = EffectCcScope.INSTRUMENT).scope)
         assertThrows(IllegalArgumentException::class.java) { global.copy(effectId = "fluidsynth.reverb", scope = EffectCcScope.INSTRUMENT) }
     }
+    @Test fun newRackIdsAreWhitelistedAndUseVirtualEnabledTarget() {
+        val added = listOf("lsp.filter", "lsp.phaser", "lsp.flanger")
+        assertTrue(EffectCcMapping.INSTRUMENT_EFFECT_IDS.containsAll(added))
+        assertTrue(added.all { it in EffectStateRestore.instrumentIds })
+        added.forEach { id ->
+            val enabled = EffectCcMapping("dev", 0, 10, effectId = id, parameterId = "-1", minRaw = 0f, maxRaw = 1f)
+            assertEquals(EffectCcAction.INSTRUMENT_ENABLED, effectCcAction(enabled))
+            assertEquals("-1", instrumentEffectEnabledDescriptor(id).stableId)
+        }
+        assertEquals(setOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper"),
+            EffectCcMapping.INSTRUMENT_EFFECT_IDS - added.toSet())
+    }
     @Test fun serializedMappingScopeRoundTripsAndMissingScopeMeansInstrument() {
         val global = EffectCcMapping("dev", 0, 8, effectId = "fluidsynth.reverb", parameterId = "0", minRaw = 0f, maxRaw = 1f, scope = EffectCcScope.GLOBAL)
         assertEquals(global, global.copy(scope = EffectCcScope.valueOf(global.scope.name)))
         val oldMapping = EffectCcMapping("dev", 0, 8, 0, "lsp.limiter", "1", 0f, 1f)
         assertEquals(EffectCcScope.INSTRUMENT, oldMapping.scope)
+    }
+    @Test fun targetSetJsonIsBackwardsCompatibleAndDistinctWithinPickupState() {
+        val main = EffectCcMapping("dev", 0, 7, 1, "lsp.filter", "2", 0f, 1f)
+        assertEquals(MAIN_INSTRUMENT_SET_ID, main.targetInstrumentSetId) // legacy JSON decode default
+        val file = main.copy(source = "file-device", targetInstrumentSetId = "file-stable-id")
+        assertEquals(file, file.copy(targetInstrumentSetId = "file-stable-id")) // encoded identity round-trip model
+        assertEquals(1, resolveCcTargetLocalChannel(main.targetInstrumentSetId, main.targetInstrumentChannel, listOf("file-stable-id")))
+        assertEquals(1, resolveCcTargetLocalChannel(file.targetInstrumentSetId, file.targetInstrumentChannel, listOf("file-stable-id")))
+        assertEquals(-1, resolveCcTargetLocalChannel("deleted-id", 1, listOf("file-stable-id")))
+        val cc = EffectMidiCoordinator(); assertNull(cc.add(main)); assertNull(cc.add(file))
+        val out = mutableMapOf("main" to mutableListOf<Float>(), "file-stable-id" to mutableListOf<Float>())
+        fun ccEvent(source: String, target: String) = cc.onCc(source, 0, 7, 64,
+            { _, _ -> parameter() }, { _, _ -> .5f }) { _, _, v -> out.getValue(target).add(v) }
+        ccEvent("dev", "main"); ccEvent("file-device", "file-stable-id")
+        assertEquals(1, out.getValue("main").size)
+        assertEquals(1, out.getValue("file-stable-id").size)
     }
     @Test fun sendUsesChosenInstrumentTargetAndEnabledVirtualParameterIsIndependent() {
         val send = EffectCcMapping("dev", 3, 9, 12, "native.delay", "6", 0f, 1f, scope = EffectCcScope.GLOBAL)

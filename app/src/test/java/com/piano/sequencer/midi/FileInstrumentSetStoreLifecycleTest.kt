@@ -21,7 +21,7 @@ class FileInstrumentSetStoreLifecycleTest {
         prefs.edit().putInt("chan_prog_0", 0x1234).commit()
         val store = FileInstrumentSetStore(prefs)
         val old = store.create("old", emptyList())!!
-        repeat(14) { store.create("other$it", emptyList())!! }
+        repeat(6) { store.create("other$it", emptyList())!! }
         val cell = SequencerCell(1, filePath = "/new.mid")
         val replaced = store.replaceForCell(cell, old.id, emptySet(), List(16) { 0x010203 }, "new")!!
         assertEquals(old.id, replaced.instrumentSetId)

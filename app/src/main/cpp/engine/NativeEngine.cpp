@@ -39,6 +39,16 @@ private:
 
 std::atomic<NativeEngine*> NativeEngine::sInstance{nullptr};
 
+bool NativeEngine::resetInstrumentChannelRange(int first, int count) {
+    if (first < 0 || count < 0 || first > piano::kInstrumentChannelCount ||
+        count > piano::kInstrumentChannelCount - first) return false;
+    if (!mSynth) return false;
+    FluidSynthEngine::WorkerAccessGuard workerAccess(*mSynth);
+    if (!mSynth->resetChannelRange(first, count)) return false;
+    if (!mInstrumentEffects.resetChannelRange(first, count)) return false;
+    return mInstrumentDelays.resetChannelRange(first, count);
+}
+
 NativeEngine::NativeEngine()
     : mSynth(new FluidSynthEngine()),
       mSequencer(),
@@ -113,10 +123,10 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     }
     mMixer.init(16, mMaxSynthFrames);
     mMasterBus.init(mMaxSynthFrames);
-    mSynthChannelBuffers.assign(static_cast<size_t>(16) * mMaxSynthFrames * 2, 0.0f);
+    mSynthChannelBuffers.assign(static_cast<size_t>(piano::kInstrumentChannelCount) * mMaxSynthFrames * 2, 0.0f);
     mSynthReturnBuffer.assign(static_cast<size_t>(mMaxSynthFrames) * 2, 0.0f);
     mDelayBuffers.assign(static_cast<size_t>(mMaxSynthFrames) * 4, 0.0f);
-    for (int ch = 0; ch < 16; ++ch)
+    for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch)
         mSynthChannelPtrs[ch] = mSynthChannelBuffers.data() + static_cast<size_t>(ch) * mMaxSynthFrames * 2;
 
     // Prepare the master effect chain scratch buffers at the same max as
@@ -712,37 +722,37 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
             if (eventOffset < offset) eventOffset = offset;
             if (eventOffset > safeFrames) eventOffset = safeFrames;
             if (eventOffset > offset) {
-                for (int ch = 0; ch < 16; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
+                for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
                 float* sharedReturn = mSynthReturnBuffer.data() + offset * 2;
                 mSynth->renderChannels(mSynthSegmentPtrs, sharedReturn, eventOffset - offset);
                 mInstrumentEffects.process(mSynthSegmentPtrs,eventOffset-offset);
+                float* delayBuses[piano::kInstrumentChannelCount];
+                for (int ch=0; ch<piano::kInstrumentChannelCount; ++ch) delayBuses[ch]=mSynthSegmentPtrs[ch];
+                mInstrumentDelays.process(delayBuses, eventOffset - offset, mTransport.bpmMicros / 1000000.0);
                 for (int f = offset; f < eventOffset; ++f)
-                    for (int ch = 0; ch < 16; ++ch) {
+                    for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) {
                         track0[f * 2] += mSynthChannelPtrs[ch][f * 2];
                         track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
                     }
                 addSharedFxReturn(track0, sharedReturn, offset, eventOffset - offset);
-            float* delayBuses[16];
-            for (int ch=0; ch<16; ++ch) delayBuses[ch]=mSynthChannelPtrs[ch]+offset*2;
-            mInstrumentDelays.process(delayBuses, eventOffset - offset, mTransport.bpmMicros / 1000000.0);
             }
             mSynth->processOneMidi(mSequencerStaging[i].message);
             offset = eventOffset;
         }
         if (offset < safeFrames) {
-            for (int ch = 0; ch < 16; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
+            for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
             float* sharedReturn = mSynthReturnBuffer.data() + offset * 2;
             mSynth->renderChannels(mSynthSegmentPtrs, sharedReturn, safeFrames - offset);
             mInstrumentEffects.process(mSynthSegmentPtrs,safeFrames-offset);
+            float* delayBuses[piano::kInstrumentChannelCount];
+            for (int ch=0; ch<piano::kInstrumentChannelCount; ++ch) delayBuses[ch]=mSynthSegmentPtrs[ch];
+            mInstrumentDelays.process(delayBuses, safeFrames - offset, mTransport.bpmMicros / 1000000.0);
             for (int f = offset; f < safeFrames; ++f)
-                for (int ch = 0; ch < 16; ++ch) {
+                for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) {
                     track0[f * 2] += mSynthChannelPtrs[ch][f * 2];
                     track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
                 }
             addSharedFxReturn(track0, sharedReturn, offset, safeFrames - offset);
-            float* delayBuses[16];
-            for (int ch=0; ch<16; ++ch) delayBuses[ch]=mSynthChannelPtrs[ch]+offset*2;
-            mInstrumentDelays.process(delayBuses, safeFrames - offset, mTransport.bpmMicros / 1000000.0);
         }
 
         mSynth->endSynthAccess();
@@ -1125,8 +1135,8 @@ int instrumentSlot(const char* id) {
 int NativeEngine::loadInstrumentEffectBundle(const char* path) {
     return path && piano::ladspa::LadspaRegistry::instance().open(path) ? piano::lsp::kMasterEffectCount : 0;
 }
-bool NativeEngine::setInstrumentRackEnabled(int c,bool on){if(c<0||c>=16)return false;mInstrumentEffects.setRackEnabled(c,on);return true;}
-bool NativeEngine::isInstrumentRackEnabled(int c)const{return c>=0&&c<16&&mInstrumentEffects.rackEnabled(c);}
+bool NativeEngine::setInstrumentRackEnabled(int c,bool on){if(!piano::isInstrumentChannel(c))return false;mInstrumentEffects.setRackEnabled(c,on);return true;}
+bool NativeEngine::isInstrumentRackEnabled(int c)const{return piano::isInstrumentChannel(c)&&mInstrumentEffects.rackEnabled(c);}
 bool NativeEngine::setInstrumentEffectEnabled(int c,const char* id,bool on){int s=instrumentSlot(id);return s>=0&&mInstrumentEffects.setEffectEnabledChecked(c,s,on);}
 bool NativeEngine::isInstrumentEffectEnabled(int c,const char* id)const{int s=instrumentSlot(id);return s>=0&&mInstrumentEffects.effectEnabled(c,s);}
 bool NativeEngine::isInstrumentEffectAvailable(int c,const char* id)const{int s=instrumentSlot(id);return s>=0&&mInstrumentEffects.isAvailable(c,s);}

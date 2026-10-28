@@ -2,23 +2,53 @@ package com.piano.sequencer
 
 import android.content.Context
 import com.piano.sequencer.service.PlaybackService
+import com.piano.sequencer.midi.FileInstrumentSetStore
+import com.piano.sequencer.midi.MAIN_INSTRUMENT_SET_ID
+import com.piano.sequencer.midi.resolveInstrumentIdentityChannel
+import com.piano.sequencer.midi.legacyInstrumentStateTargetSetId
+import com.piano.sequencer.midi.restoredInstrumentEnabled
+import com.piano.sequencer.midi.legacyInstrumentMigrationNeeded
 
 /** Shared preference restoration for a newly loaded master effect chain. */
 internal object EffectStateRestore {
     const val INSTRUMENT_VERSION = 1
-    private val instrumentIds = listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper")
+    internal val instrumentIds = listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper", "lsp.filter", "lsp.phaser", "lsp.flanger")
     private val sharedParamIds = mapOf("native.delay" to 0..5, "fluidsynth.reverb" to 0..4)
+
+    /** Startup fan-out. Delay restore is independent of optional LSP rack availability. */
+    internal fun restoreInstrumentStartup(
+        bundleAvailable: Boolean,
+        restoreRacks: () -> Unit,
+        restoreDelays: () -> Unit
+    ) {
+        if (bundleAvailable) restoreRacks()
+        restoreDelays()
+    }
 
     internal fun instrumentRackKey(channel: Int) = "instrument_fx_v${INSTRUMENT_VERSION}_rack_$channel"
     internal fun instrumentEnabledKey(channel: Int, id: String) = "instrument_fx_v${INSTRUMENT_VERSION}_enabled_${channel}_${id.replace('.', '_')}"
     internal fun instrumentParamKey(channel: Int, id: String, paramId: Int) = "instrument_fx_v${INSTRUMENT_VERSION}_param_${channel}_${id.replace('.', '_')}_$paramId"
+    internal fun instrumentIdentityKey(kind: String, setId: String, channel: Int, suffix: String = "") =
+        "instrument_fx_v${INSTRUMENT_VERSION}_${kind}_${setId}_${channel}${if (suffix.isEmpty()) "" else "_$suffix"}"
+    internal fun instrumentIdentityRackKey(setId: String, channel: Int) = instrumentIdentityKey("rack", setId, channel)
+    internal fun instrumentIdentityEnabledKey(setId: String, channel: Int, id: String) = instrumentIdentityKey("enabled", setId, channel, id.replace('.', '_'))
+    internal fun instrumentIdentityParamKey(setId: String, channel: Int, id: String, pid: Int) = instrumentIdentityKey("param", setId, channel, "${id.replace('.', '_')}_$pid")
 
     /** Restore off-thread after loading instrument bundle; parameter writes precede lazy instantiation. */
     fun restoreInstruments(context: Context, service: PlaybackService, bundleAvailable: Boolean) {
         val prefs = context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE)
         if (!bundleAvailable || prefs.getInt("instrument_fx_schema_version", 0) != INSTRUMENT_VERSION) return
-        for (channel in 0 until 16) {
-            val rackOn = prefs.getBoolean(instrumentRackKey(channel), false)
+        val sets = FileInstrumentSetStore.get(context).all()
+        sets.filter { it.channelBase !in 16..112 }.forEach {
+            AppLogger.warn("EffectStateRestore", "Unsupported persisted instrument set id=${it.id} base=${it.channelBase}; restore skipped")
+        }
+        val identities = listOf(MAIN_INSTRUMENT_SET_ID to null) + sets
+            .filter { it.channelBase in 16..112 }.map { it.id to it.channelBase }
+        if (!migrateLegacyInstrumentState(prefs)) return
+        for ((setId, base) in identities) for (local in 0 until 16) {
+            val channel = resolveInstrumentIdentityChannel(setId, local, base)
+            if (channel !in 0..127) continue
+            val rackOn = prefs.getBoolean(instrumentIdentityRackKey(setId, local), false)
             service.setInstrumentRackEnabled(channel, rackOn)
             for (id in instrumentIds) {
                 val count = runCatching { service.getInstrumentEffectParamCount(id) }.getOrDefault(0)
@@ -26,28 +56,63 @@ internal object EffectStateRestore {
                     val info = runCatching { service.getInstrumentEffectParamInfo(id, index) }.getOrNull() ?: continue
                     if (info.size < 4) continue
                     val pid = info[0].toInt()
-                    val key = instrumentParamKey(channel, id, pid)
+                    val key = instrumentIdentityParamKey(setId, local, id, pid)
                     if (prefs.contains(key)) runCatching { service.setInstrumentEffectParameter(channel, id, pid, prefs.getFloat(key, info[3])) }
                 }
-                if (prefs.getBoolean(instrumentEnabledKey(channel, id), false)) {
-                    runCatching { service.setInstrumentEffectEnabled(channel, id, true) }
+                runCatching { service.setInstrumentEffectEnabled(channel, id, restoredInstrumentEnabled(prefs.getBoolean(instrumentIdentityEnabledKey(setId, local, id), false))) }
+            }
+        }
+    }
+
+    internal fun migrateLegacyInstrumentState(prefs: android.content.SharedPreferences): Boolean {
+        val marker = "instrument_fx_identity_migration_v1_done"
+        if (!legacyInstrumentMigrationNeeded(prefs.getBoolean(marker, false))) return true
+        val edit = prefs.edit()
+        for (ch in 0..15) {
+            if (prefs.contains(instrumentRackKey(ch))) edit.putBoolean(instrumentIdentityRackKey(legacyInstrumentStateTargetSetId(), ch), prefs.getBoolean(instrumentRackKey(ch), false))
+            for (id in instrumentIds) {
+                val enabled = instrumentEnabledKey(ch, id)
+                if (prefs.contains(enabled)) edit.putBoolean(instrumentIdentityEnabledKey(legacyInstrumentStateTargetSetId(), ch, id), prefs.getBoolean(enabled, false))
+                for (key in prefs.all.keys.filter { it.startsWith("instrument_fx_v${INSTRUMENT_VERSION}_param_${ch}_${id.replace('.', '_')}_") }) {
+                    val pid = key.substringAfterLast('_').toIntOrNull() ?: continue
+                    edit.putFloat(instrumentIdentityParamKey(legacyInstrumentStateTargetSetId(), ch, id, pid), prefs.getFloat(key, 0f))
                 }
             }
         }
+        return edit.putBoolean(marker, true).commit()
     }
 
     /** Persist a changed instrument setting using synchronous commit for crash-safe small preference writes. */
     fun persistInstrumentRack(context: Context, channel: Int, enabled: Boolean): Boolean {
         if (channel !in 0..15) return false
-        return context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit().putInt("instrument_fx_schema_version", INSTRUMENT_VERSION).putBoolean(instrumentRackKey(channel), enabled).commit()
+        return context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit().putInt("instrument_fx_schema_version", INSTRUMENT_VERSION)
+            .putBoolean(instrumentRackKey(channel), enabled).putBoolean(instrumentIdentityRackKey(MAIN_INSTRUMENT_SET_ID, channel), enabled).commit()
     }
     fun persistInstrumentEffect(context: Context, channel: Int, id: String, enabled: Boolean): Boolean {
         if (channel !in 0..15 || id !in instrumentIds) return false
-        return context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit().putInt("instrument_fx_schema_version", INSTRUMENT_VERSION).putBoolean(instrumentEnabledKey(channel,id), enabled).commit()
+        return context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit().putInt("instrument_fx_schema_version", INSTRUMENT_VERSION)
+            .putBoolean(instrumentEnabledKey(channel,id), enabled).putBoolean(instrumentIdentityEnabledKey(MAIN_INSTRUMENT_SET_ID, channel, id), enabled).commit()
     }
     fun persistInstrumentParameter(context: Context, channel: Int, id: String, paramId: Int, value: Float): Boolean {
         if (channel !in 0..15 || id !in instrumentIds || !value.isFinite() || paramId < 0) return false
-        return context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit().putInt("instrument_fx_schema_version", INSTRUMENT_VERSION).putFloat(instrumentParamKey(channel,id,paramId), value).commit()
+        return context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit().putInt("instrument_fx_schema_version", INSTRUMENT_VERSION)
+            .putFloat(instrumentParamKey(channel,id,paramId), value).putFloat(instrumentIdentityParamKey(MAIN_INSTRUMENT_SET_ID, channel, id, paramId), value).commit()
+    }
+    fun persistInstrumentRack(context: Context, setId: String, channel: Int, enabled: Boolean): Boolean =
+        persistIdentityValue(context, setId, channel, instrumentIdentityRackKey(setId, channel), enabled)
+    fun persistInstrumentEffect(context: Context, setId: String, channel: Int, id: String, enabled: Boolean): Boolean {
+        if (id !in instrumentIds) return false
+        return persistIdentityValue(context, setId, channel, instrumentIdentityEnabledKey(setId, channel, id), enabled)
+    }
+    fun persistInstrumentParameter(context: Context, setId: String, channel: Int, id: String, pid: Int, value: Float): Boolean {
+        if (id !in instrumentIds || pid < 0 || !value.isFinite()) return false
+        return persistIdentityValue(context, setId, channel, instrumentIdentityParamKey(setId, channel, id, pid), value)
+    }
+    private fun persistIdentityValue(context: Context, setId: String, channel: Int, key: String, value: Any): Boolean {
+        if (setId.isBlank() || channel !in 0..15 || (setId != MAIN_INSTRUMENT_SET_ID && FileInstrumentSetStore.get(context).all().none { it.id == setId && it.channelBase in 16..112 })) return false
+        val edit = context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit().putInt("instrument_fx_schema_version", INSTRUMENT_VERSION)
+        when (value) { is Boolean -> edit.putBoolean(key, value); is Float -> edit.putFloat(key, value); else -> return false }
+        return edit.commit()
     }
 
     fun restore(context: Context, service: PlaybackService, effectCount: Int) {
@@ -70,6 +135,7 @@ internal object EffectStateRestore {
     private const val SHARED_FX_PREFIX = "shared_fx_v1_"
     private const val DELAY_MIGRATED = "instrument_delay_migration_v1_done"
     internal fun instrumentDelayKey(channel: Int, id: Int) = "instrument_delay_v1_${channel}_$id"
+    internal fun instrumentIdentityDelayKey(setId: String, channel: Int, id: Int) = "instrument_delay_v2_${setId}_${channel}_$id"
     internal fun sharedParameterKey(scope: String, id: Int) = "${SHARED_FX_PREFIX}${scope.replace('.', '_')}_param_$id"
     internal fun delaySendKey(channel: Int) = "${SHARED_FX_PREFIX}delay_send_$channel"
 
@@ -116,15 +182,39 @@ internal object EffectStateRestore {
             }
             if (success) prefs.edit().putBoolean(DELAY_MIGRATED, true).commit()
         }
-        for (channel in 0 until 16) for (id in 0..5) {
-            val key = instrumentDelayKey(channel, id)
-            if (prefs.contains(key)) service.setInstrumentDelayParameter(channel, id, prefs.getFloat(key, 0f))
-            else if (id == 0) service.setInstrumentDelayParameter(channel, id, 0f)
+        migrateLegacyDelay(prefs, service)
+        val identities = listOf(MAIN_INSTRUMENT_SET_ID to null) + FileInstrumentSetStore.get(context).all()
+            .filter { it.channelBase in 16..112 }.map { it.id to it.channelBase }
+        for ((setId, base) in identities) for (local in 0 until 16) {
+            val channel = resolveInstrumentIdentityChannel(setId, local, base)
+            if (channel !in 0..127) continue
+            for (id in 0..5) {
+                val key = instrumentIdentityDelayKey(setId, local, id)
+                if (prefs.contains(key)) service.setInstrumentDelayParameter(channel, id, prefs.getFloat(key, 0f))
+                else if (id == 0) service.setInstrumentDelayParameter(channel, id, 0f)
+            }
         }
+    }
+    private fun migrateLegacyDelay(prefs: android.content.SharedPreferences, service: PlaybackService) {
+        val marker = "instrument_delay_identity_migration_v2_done"
+        if (!legacyInstrumentMigrationNeeded(prefs.getBoolean(marker, false))) return
+        var ok = true
+        for (ch in 0..15) for (id in 0..5) {
+            val old = instrumentDelayKey(ch, id)
+            if (prefs.contains(old) && !service.setInstrumentDelayParameter(ch, id, prefs.getFloat(old, 0f))) ok = false
+            if (prefs.contains(old)) ok = prefs.edit().putFloat(instrumentIdentityDelayKey(legacyInstrumentStateTargetSetId(), ch, id), prefs.getFloat(old, 0f)).commit() && ok
+        }
+        if (ok) prefs.edit().putBoolean(marker, true).commit()
     }
     fun persistInstrumentDelay(context: Context, channel: Int, id: Int, value: Float): Boolean {
         if (channel !in 0..15 || id !in 0..5 || !value.isFinite()) return false
-        return context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit().putFloat(instrumentDelayKey(channel,id), value).commit()
+        return context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit().putFloat(instrumentDelayKey(channel,id), value)
+            .putFloat(instrumentIdentityDelayKey(MAIN_INSTRUMENT_SET_ID, channel, id), value).commit()
+    }
+    fun persistInstrumentDelay(context: Context, setId: String, channel: Int, id: Int, value: Float): Boolean {
+        if (channel !in 0..15 || id !in 0..5 || !value.isFinite() || setId.isBlank()) return false
+        return context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit()
+            .putFloat(instrumentIdentityDelayKey(setId, channel, id), value).commit()
     }
 
     fun persistSharedParameter(context: Context, scope: String, id: Int, value: Float): Boolean {

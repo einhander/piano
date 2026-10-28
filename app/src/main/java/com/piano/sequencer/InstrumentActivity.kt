@@ -69,7 +69,8 @@ class InstrumentActivity : AppCompatActivity() {
         val mask = nativeChannelMask
         physical.forEachIndexed { channel, active ->
             noteIndicators[channel]?.apply {
-                visibility = if (active || (mask and (1 shl channel) != 0)) View.VISIBLE else View.INVISIBLE
+                // Current activity mask reports Main only, not File ranges.
+                visibility = if (selectedSetId == null && (active || (mask and (1 shl channel) != 0))) View.VISIBLE else View.INVISIBLE
             }
         }
     }
@@ -115,6 +116,11 @@ class InstrumentActivity : AppCompatActivity() {
             // screen during service startup) — the executor is already shut down.
             if (isFinishing || isDestroyed) return
             service = (binder as PlaybackService.PlaybackBinder).getService()
+            val connectedService = service!!
+            executor.execute {
+                com.piano.sequencer.midi.MidiFileTriggerController.get(applicationContext)
+                    .bind(this@InstrumentActivity, connectedService)
+            }
             refreshInstruments()
             refreshRackStates()
         }
@@ -176,11 +182,44 @@ class InstrumentActivity : AppCompatActivity() {
                 minHeight = dp(48)
                 minimumHeight = dp(48)
                 setPadding(dp(12), 0, dp(12), 0)
+                isEnabled = set.channelBase in 16..112
                 setOnClickListener { confirmResetFromMidi(setId) }
             }
             (tvHint.parent as? android.view.ViewGroup)?.let { parent ->
                 parent.addView(resetButton, parent.indexOfChild(setSelector) + 1,
                     android.view.ViewGroup.LayoutParams(-2, -2))
+                parent.addView(Button(this).apply {
+                    text = "Remove file set"
+                    isAllCaps = false
+                    setOnClickListener {
+                        AlertDialog.Builder(this@InstrumentActivity).setTitle("Remove file instrument set?")
+                            .setMessage("Stop this set's playback and remove its saved instruments. If playback cleanup fails, the set is kept.")
+                            .setNegativeButton("Cancel", null)
+                            .setPositiveButton("Remove") { _, _ ->
+                                isEnabled = false
+                                executor.execute {
+                                    com.piano.sequencer.midi.MidiFileTriggerController.get(applicationContext)
+                                        .prepareFileInstrumentSetRemoval(setId) { ready ->
+                                            // Callback arrives on main; metadata work stays on worker.
+                                            if (!executor.isShutdown) executor.execute {
+                                                val removed = ready && fileSets.remove(setId)
+                                                runOnUiThread {
+                                                    if (!isFinishing && !isDestroyed) {
+                                                        if (removed) {
+                                                            startActivity(Intent(this@InstrumentActivity, InstrumentActivity::class.java))
+                                                            finish()
+                                                        } else {
+                                                            isEnabled = true
+                                                            Toast.makeText(this@InstrumentActivity, "Could not safely remove set; saved instruments kept", Toast.LENGTH_LONG).show()
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                }
+                            }.show()
+                    }
+                }, parent.indexOfChild(resetButton) + 1, android.view.ViewGroup.LayoutParams(-2, -2))
             }
         } else {
             setSelector.text = "Instrument set: Main instruments ▾"
@@ -347,12 +386,15 @@ class InstrumentActivity : AppCompatActivity() {
                 contentDescription = getString(R.string.ui_effects_channel, ch + 1)
                 setOnClickListener {
                     startActivity(Intent(this@InstrumentActivity, InstrumentEffectsActivity::class.java)
-                        .putExtra(InstrumentEffectsActivity.EXTRA_CHANNEL, ch))
+                        .putExtra(InstrumentEffectsActivity.EXTRA_CHANNEL, ch)
+                        .putExtra(InstrumentEffectsActivity.EXTRA_SET_ID, selectedSetId ?: com.piano.sequencer.midi.MAIN_INSTRUMENT_SET_ID)
+                        .putExtra(InstrumentEffectsActivity.EXTRA_SET_NAME, selectedSetId?.let { id -> fileSets.all().firstOrNull { it.id == id }?.name } ?: "Main"))
                 }
             }
             row.addView(effectsButton, LinearLayout.LayoutParams(dp(84), -2))
             effectsButtons[ch] = effectsButton
             row.setOnClickListener { selectChannel(ch); onChannelTapped(ch) }
+            row.isEnabled = selectedSetId == null || fileSets.all().any { it.id == selectedSetId && it.channelBase in 16..112 }
 
             rowNameLabels[ch] = nameLabel
             channelRows[ch] = row
@@ -371,7 +413,7 @@ class InstrumentActivity : AppCompatActivity() {
     private fun refreshRackStates() {
         val svc = service ?: return
         executor.execute {
-            val states = (0..15).map { runCatching { svc.isInstrumentRackEnabled(it) }.getOrDefault(false) }
+            val states = (0..15).map { runCatching { svc.isInstrumentRackEnabled(selectedSetId ?: com.piano.sequencer.midi.MAIN_INSTRUMENT_SET_ID, it) }.getOrDefault(false) }
             runOnUiThread { states.forEachIndexed { ch, enabled -> showRackState(ch, enabled) } }
         }
     }
@@ -401,8 +443,8 @@ class InstrumentActivity : AppCompatActivity() {
 
             val jsonStr = svc.getInstruments()
             val parsed = parseInstruments(jsonStr)
-            val current = selectedSetId?.let { id -> fileSets.all().firstOrNull { it.id == id }?.programs?.toIntArray() }
-                ?: IntArray(16) { ch -> svc.getChannelProgram(ch) }
+            val current = if (selectedSetId == null) IntArray(16) { ch -> svc.getChannelProgram(ch) }
+                else fileSets.all().firstOrNull { it.id == selectedSetId }?.programs?.toIntArray() ?: IntArray(16) { -1 }
             // Diagnostics: pinpoint where the chain breaks when the SF2 is
             // loaded but the list comes back empty.
             AppLogger.info(
@@ -453,7 +495,7 @@ class InstrumentActivity : AppCompatActivity() {
             return
         }
 
-        tvHint.text = getString(R.string.instrument_hint)
+        tvHint.text = selectedSetId?.let { id -> fileSets.all().firstOrNull { it.id == id }?.let { "${it.name} · " + if (it.channelBase in 16..112) "File instruments" else "Unsupported range · controls disabled" } ?: "File set deleted · controls disabled" } ?: getString(R.string.instrument_hint)
         for (ch in 0 until 16) {
             val packed = current[ch]
             val label = if (packed >= 0) {
@@ -561,7 +603,7 @@ class InstrumentActivity : AppCompatActivity() {
     private fun chooseInstrumentSet() {
         executor.execute {
             val mappings = MidiFileMappingStore.get(applicationContext)
-            fileSets.removeUnreferenced(mappings.all().mapNotNull { it.instrumentSetId }.toSet())
+            // Retain persisted sets, including unsupported legacy ranges; never delete without range cleanup.
             var capacityExhausted = false
             mappings.all().forEach { cell ->
                 if (cell.mode == MODE_FILE && cell.filePath.isNotEmpty() && cell.instrumentSetId == null) {
@@ -573,8 +615,8 @@ class InstrumentActivity : AppCompatActivity() {
             val sets = fileSets.all()
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
-                if (capacityExhausted) Toast.makeText(this, "Could not create instrument sets for all MIDI files: 15-set limit reached", Toast.LENGTH_LONG).show()
-                val labels = listOf("Main instruments") + sets.map { it.name }
+                if (capacityExhausted) Toast.makeText(this, "Could not create instrument sets for all MIDI files: 7-file-set limit reached (plus Main)", Toast.LENGTH_LONG).show()
+                val labels = listOf("Main instruments") + sets.map { it.name + if (it.channelBase !in 16..112) " · Unsupported range" else "" }
                 AlertDialog.Builder(this).setTitle("Choose instrument set")
                     .setItems(labels.toTypedArray()) { _, which ->
                         val target = if (which == 0) null else sets[which - 1].id
@@ -582,6 +624,28 @@ class InstrumentActivity : AppCompatActivity() {
                             if (target != null) putExtra(EXTRA_SET_ID, target)
                         })
                         finish()
+                    }
+                    .setNeutralButton("Add file set") { _, _ ->
+                        val input = EditText(this).apply { hint = "File set name" }
+                        AlertDialog.Builder(this).setTitle("Add file instrument set").setView(input)
+                            .setMessage("Main + up to 7 file sets. Assign this set from a sequencer cell.")
+                            .setNegativeButton("Cancel", null)
+                            .setPositiveButton("Add") { _, _ ->
+                                val name = input.text.toString().ifBlank { "File instruments" }
+                                executor.execute {
+                                val created = fileSets.create(name, FileInstrumentSetStore.initialPrograms())
+                                runOnUiThread { if (!isFinishing && !isDestroyed) {
+                                    if (created == null) Toast.makeText(this, "7-file-set limit reached; Main remains separate", Toast.LENGTH_LONG).show()
+                                    else chooseInstrumentSet()
+                                } }
+                            } }.show()
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .create().apply {
+                        setOnShowListener {
+                            getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = sets.count { it.channelBase in 16..112 } < 7
+                            if (sets.count { it.channelBase in 16..112 } >= 7) setTitle("Choose instrument set · 7-file-set limit")
+                        }
                     }.show()
             }
         }
@@ -598,6 +662,7 @@ class InstrumentActivity : AppCompatActivity() {
         val setId = selectedSetId
         if (setId != null) {
             val set = fileSets.all().firstOrNull { it.id == setId } ?: return
+            if (set.channelBase !in 16..112) { Toast.makeText(this, "Unsupported file set range; controls disabled", Toast.LENGTH_LONG).show(); return }
             val packed = (instrument.bank shl 8) or instrument.program
             executor.execute {
                 val svc = service

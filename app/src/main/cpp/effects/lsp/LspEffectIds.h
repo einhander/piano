@@ -23,9 +23,15 @@ inline constexpr int kSlotCompressor = 1;
 inline constexpr int kSlotLimiter    = 2;
 inline constexpr int kSlotChorus = 3;
 inline constexpr int kSlotClipper = 4;
-inline constexpr int kInstrumentEffectCount = 5;
+inline constexpr int kSlotFilter = 5;
+inline constexpr int kSlotPhaser = 6;
+inline constexpr int kSlotFlanger = 7;
+inline constexpr int kInstrumentEffectCount = 8;
 inline constexpr int kInstrumentSlotChorus = 3;
 inline constexpr int kInstrumentSlotClipper = 4;
+inline constexpr int kInstrumentSlotFilter = 5;
+inline constexpr int kInstrumentSlotPhaser = 6;
+inline constexpr int kInstrumentSlotFlanger = 7;
 
 // Stable effect ids (strings also used as the AudioEffect::stableId()).
 inline constexpr const char* kIdParametricEq = "lsp.parametric_eq";
@@ -33,6 +39,9 @@ inline constexpr const char* kIdCompressor   = "lsp.compressor";
 inline constexpr const char* kIdLimiter      = "lsp.limiter";
 inline constexpr const char* kIdChorus = "lsp.chorus";
 inline constexpr const char* kIdClipper = "lsp.clipper";
+inline constexpr const char* kIdFilter = "lsp.filter";
+inline constexpr const char* kIdPhaser = "lsp.phaser";
+inline constexpr const char* kIdFlanger = "lsp.flanger";
 
 // ── LADSPA binding metadata ──
 //
@@ -66,6 +75,9 @@ inline constexpr LadspaBinding kBindings[] = {
 inline constexpr LadspaBinding kInstrumentBindings[] = {
     {kIdChorus, "http://lsp-plug.in/plugins/ladspa/chorus_stereo", 5002315u, 0, 1, 2, 3, 4, 181},
     {kIdClipper, "http://lsp-plug.in/plugins/ladspa/clipper_stereo", 5002285u, 0, 1, 2, 3, 4, 57},
+    {kIdFilter, "http://lsp-plug.in/plugins/ladspa/filter_stereo", 5002255u, 0, 1, 2, 3, 4, 28},
+    {kIdPhaser, "http://lsp-plug.in/plugins/ladspa/phaser_stereo", 5002325u, 0, 1, 2, 3, 4, 95},
+    {kIdFlanger, "http://lsp-plug.in/plugins/ladspa/flanger_stereo", 5002235u, 0, 1, 2, 3, 4, 44},
 };
 
 // ── Stable parameter ids ──
@@ -126,6 +138,9 @@ enum ParamId : uint32_t {
     kParamClipperDrive = 320, kParamClipperCurve, kParamClipperThreshold, kParamClipperOutputGain,
     kParamClipperLufsEnable = 330, kParamClipperBoostEnable, kParamClipperDither, kParamClipperOdpEnable, kParamClipperEnabled,
     kParamChorusFeedbackEnable = 340, kParamChorusDryAmount, kParamChorusWetAmount, kParamChorusOversampling,
+    kParamFilterCutoff = 360, kParamFilterResonance, kParamFilterType,
+    kParamPhaserRate = 380, kParamPhaserDepth, kParamPhaserStages, kParamPhaserFeedback, kParamPhaserMix,
+    kParamFlangerRate = 400, kParamFlangerDepth, kParamFlangerFeedback, kParamFlangerMix,
 };
 
 // Per-effect LADSPA port index for a stable parameter id. Returns -1 if the
@@ -161,8 +176,8 @@ inline const LadspaBinding* bindingForSlot(int slot) {
     return (slot >= 0 && slot < kMasterEffectCount) ? &kBindings[slot] : nullptr;
 }
 inline const LadspaBinding* instrumentBindingForSlot(int slot) {
-    return slot == kInstrumentSlotChorus ? &kInstrumentBindings[0]
-         : slot == kInstrumentSlotClipper ? &kInstrumentBindings[1] : nullptr;
+    return slot >= kInstrumentSlotChorus && slot < kInstrumentEffectCount
+        ? &kInstrumentBindings[slot - kInstrumentSlotChorus] : nullptr;
 }
 
 } // namespace lsp

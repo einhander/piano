@@ -24,6 +24,7 @@
 #include "engine/MidiRecorder.h"
 #include "engine/MidiFilePlayer.h"
 #include "synth/FluidSynthEngine.h"
+#include "synth/InstrumentChannelContract.h"
 #include "effects/EffectChain.h"
 #include "effects/InstrumentEffectManager.h"
 #include "effects/SharedStereoDelay.h"
@@ -222,6 +223,7 @@ public:
     bool getInstrumentDelayParameterInfo(int parameterId, float& minimum, float& maximum, float& defaultValue, bool& integer, bool& toggled) const { return mInstrumentDelays.getParameterInfo(parameterId, minimum, maximum, defaultValue, integer, toggled); }
     bool isInstrumentDelayPrepared() const noexcept { return mInstrumentDelays.prepared(); }
     void resetInstrumentDelay(int channel) noexcept { mInstrumentDelays.reset(channel); }
+    bool resetInstrumentChannelRange(int first, int count);
     int getInstrumentEffectLatencyFrames(int channel, const char* effectId) const;
 
     // Project loading (called from worker thread, NOT audio callback)
@@ -436,8 +438,8 @@ private:
     int mMaxSynthFrames = kMaxSynthFrames;
     std::vector<float> mSynthChannelBuffers;
     std::vector<float> mSynthReturnBuffer;
-    float* mSynthChannelPtrs[16]{};
-    float* mSynthSegmentPtrs[16]{};
+    float* mSynthChannelPtrs[piano::kInstrumentChannelCount]{};
+    float* mSynthSegmentPtrs[piano::kInstrumentChannelCount]{};
 
     // Count-in metronome state
     std::atomic<bool> mCountingIn{false};

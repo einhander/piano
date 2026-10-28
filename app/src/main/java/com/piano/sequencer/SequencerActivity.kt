@@ -89,6 +89,8 @@ class SequencerActivity : AppCompatActivity() {
     private val executor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "SequencerWorker").apply { isDaemon = true }
     }
+    /** Main-thread guard against duplicate asynchronous last-reference removals. */
+    private val pendingFileSetRemovals = mutableSetOf<String>()
 
     // ── SAF file picker for MIDI import ──
     private val midiFileImportLauncher = registerForActivityResult(
@@ -326,24 +328,35 @@ class SequencerActivity : AppCompatActivity() {
             }
         }
 
-        panel.onCellRemove = { cell ->
+        panel.onCellRemove = removeCell@{ cell ->
             // F3: guard — don't remove a cell that's actively being recorded
             if (cell.id == MidiRecordSession.cellId) {
                 Toast.makeText(this, "Stop recording first", Toast.LENGTH_SHORT).show()
             } else {
-                // Free the trigger slot (encoded key: NOTE 0-127, CC 128-255, PB 256)
-                // ONLY after the recording guard passed — a blocked removal keeps
-                // the cell and its slot. Idempotent for NOTE cells (second free is
-                // a no-op; C++ FREE is idempotent).
-                if (cell.hasTrigger()) {
-                    MidiFileTriggerController.get(this).freeSlotForTrigger(cell.triggerKey())
+                val mappings = MidiFileMappingStore.get(this)
+                val setId = cell.instrumentSetId
+                val lastSetReference = setId != null && mappings.all().none { it.id != cell.id && it.instrumentSetId == setId }
+                if (lastSetReference) {
+                    if (!pendingFileSetRemovals.add(setId!!)) return@removeCell
+                    MidiFileTriggerController.get(this).prepareFileInstrumentSetRemoval(setId) { resetOk ->
+                        pendingFileSetRemovals.remove(setId)
+                        if (!resetOk) {
+                            AppLogger.warn("SequencerActivity", "Cell removal blocked: FILE set range reset failed id=$setId cell=${cell.id}")
+                            Toast.makeText(this, "Could not safely remove FILE instruments; cell and set kept", Toast.LENGTH_LONG).show()
+                            refreshPanel()
+                            return@prepareFileInstrumentSetRemoval
+                        }
+                        if (cell.hasTrigger()) MidiFileTriggerController.get(this).freeSlotForTrigger(cell.triggerKey())
+                        mappings.remove(cell.id)
+                        val removed = FileInstrumentSetStore.get(this).remove(setId)
+                        AppLogger.info("SequencerActivity", "Removed last FILE set reference id=$setId cell=${cell.id} metadataRemoved=$removed")
+                        refreshPanel()
+                    }
+                } else {
+                    if (cell.hasTrigger()) MidiFileTriggerController.get(this).freeSlotForTrigger(cell.triggerKey())
+                    mappings.remove(cell.id)
+                    refreshPanel()
                 }
-                MidiFileMappingStore.get(this).remove(cell.id)
-                cell.instrumentSetId?.let { setId ->
-                    val stillUsed = MidiFileMappingStore.get(this).all().any { it.instrumentSetId == setId }
-                    if (!stillUsed) FileInstrumentSetStore.get(this).remove(setId)
-                }
-                refreshPanel()
             }
         }
     }

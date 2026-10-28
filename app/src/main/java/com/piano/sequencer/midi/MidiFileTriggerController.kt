@@ -818,6 +818,35 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     }
 
     /**
+     * Worker-thread deletion gate. Caller must wait for callback(true) before removing
+     * set metadata; failed native reset leaves persisted identity intact (fail closed).
+     */
+    fun prepareFileInstrumentSetRemoval(setId: String, callback: (Boolean) -> Unit) {
+        trackedSlotExecutor.execute {
+            val svc = service
+            val set = FileInstrumentSetStore.get(appContext).all().firstOrNull { it.id == setId }
+            val ok = if (svc == null || set == null || set.channelBase !in 16..112) false else {
+                prepareFileSetRangeRemoval(
+                    stopOwners = {
+                        val cells = store?.all().orEmpty().filter { it.instrumentSetId == setId }
+                        for (cell in cells) {
+                            val slot = triggerSlotMap[cell.triggerKey()] ?: continue
+                            synchronized(slotLocks[slot]) {
+                                svc.stopMidiFileSlot(slot)
+                                svc.freeMidiFileSlot(slot)
+                                loadedFilePerSlot.remove(slot)
+                            }
+                        }
+                    },
+                    resetRange = { svc.resetInstrumentChannelRange(set.channelBase, 16) }
+                )
+            }
+            if (!ok) AppLogger.warn("TRIG", "FILE set removal blocked; range reset failed or set unsupported id=$setId")
+            mainHandler.post { callback(ok) }
+        }
+    }
+
+    /**
      * Fetch a MIDI file's track names (index = track position) on a worker
      * thread and post the result back on the main thread. Pure file parse via
      * the player's (path, size, mtime) cache — no engine init involved.
@@ -889,14 +918,16 @@ class MidiFileTriggerController private constructor(appContext: Context) {
             AppLogger.info("TRIG", "missing file instrument set id=$id; playback rejected")
             return false
         }
-        for (channel in 0..15) {
-            val packed = set.programs[channel]
+        // Ordinary activation/program changes must preserve restored FX and tails.
+        // Range reset belongs to the removal gate, before its base can be reused.
+        return applyFileProgramAssignments(set.programs) { channel, packed ->
             if (!svc.setChannelProgram(set.channelBase + channel, packed shr 8, packed and 0xFF)) {
                 AppLogger.info("TRIG", "program enqueue rejected set=$id channel=$channel")
-                return false
+                false
+            } else {
+                true
             }
         }
-        return true
     }
 
     /** Desired MAIN program cache snapshot read on slot worker; not proof of synth output/state. */

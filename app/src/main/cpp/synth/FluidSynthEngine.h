@@ -5,6 +5,7 @@
 #include "realtime/SynthCmdQueue.h"
 #include "realtime/CallbackAdmissionGate.h"
 #include "ReverbParameters.h"
+#include "InstrumentChannelContract.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -58,6 +59,9 @@ struct InstrumentInfo {
 // (processOneMidi), pre-allocated, no locks.
 class FluidSynthEngine {
 public:
+    // Runtime routing supports absolute MIDI channels 0..127. MIDI channel
+    // numbers are preserved; no modulo/folding is performed.
+    static constexpr int kInstrumentChannelCount = piano::kInstrumentChannelCount;
     static constexpr int kMaxPolyphony = 2048;
     // Callback admission: exactly one non-blocking attempt per callback.
     bool tryEnterAudioCallback();
@@ -132,9 +136,11 @@ public:
     // Audio thread only (inside the synth access region). NO allocations.
     void render(float* output, int numFrames);
 
-    // Render 16 dry stereo MIDI-channel buses plus FluidSynth's distinct
-    // shared stereo reverb/chorus return. All destinations are interleaved.
-    void renderChannels(float* const outputs[16], float* sharedReturn, int numFrames);
+    // Render one dry stereo bus for each absolute MIDI channel (0..127), plus
+    // FluidSynth's distinct shared stereo reverb/chorus return. All
+    // destinations are interleaved and may be null. Contract: outputs has 128
+    // entries. The return is reported exactly once, never added to a channel.
+    void renderChannels(float* const outputs[kInstrumentChannelCount], float* sharedReturn, int numFrames);
 
     // ── Worker-thread entry points (JNI/settings) — all enqueue, no locks ──
 
@@ -186,6 +192,7 @@ public:
     // Set bank + program on a channel (enqueued).
     // Returns true if the command was enqueued (applied by the audio thread).
     bool setChannelProgram(int channel, int bank, int program);
+    bool resetChannelRange(int first, int count);
     bool setChannelVolume(int channel, int value);
     int getChannelVolume(int channel) const;
 
@@ -304,10 +311,10 @@ private:
 
     int mSampleRate = 48000;
     int mBufferSize = 0;
-    // Fixed-size planar scratch for FluidSynth process() (16 stereo audio
+    // Fixed-size planar scratch for FluidSynth process() (128 stereo audio
     // groups + FluidSynth's shared stereo effects return). Allocated once on
     // the control thread and reused for every event-split segment.
-    static constexpr int kAudioGroups = 16;
+    static constexpr int kAudioGroups = kInstrumentChannelCount;
     static constexpr int kRenderCapacity = 8192;
     float mRenderAudio[kAudioGroups * 2][kRenderCapacity]{};
     float mRenderFx[2][kRenderCapacity]{};

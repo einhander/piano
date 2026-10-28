@@ -1373,9 +1373,12 @@ class MainActivity : AppCompatActivity() {
             AppLogger.warn("MainActivity", "Instrument LSP registry load failed: ${it.message}")
             0
         }
-        if (count > 0) {
-            EffectStateRestore.restoreInstruments(this, svc, true)
-        } else {
+        EffectStateRestore.restoreInstrumentStartup(
+            bundleAvailable = count > 0,
+            restoreRacks = { EffectStateRestore.restoreInstruments(this, svc, true) },
+            restoreDelays = { EffectStateRestore.restoreInstrumentDelays(this, svc) }
+        )
+        if (count <= 0) {
             AppLogger.warn("MainActivity", "Instrument LSP effects unavailable; saved rack state retained")
         }
     }

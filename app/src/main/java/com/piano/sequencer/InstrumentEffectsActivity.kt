@@ -17,6 +17,9 @@ import android.widget.Spinner
 import android.widget.ArrayAdapter
 import android.text.InputType
 import androidx.appcompat.app.AlertDialog
+import com.piano.sequencer.midi.FileInstrumentSetStore
+import com.piano.sequencer.midi.MAIN_INSTRUMENT_SET_ID
+import com.piano.sequencer.midi.resolveInstrumentIdentityChannel
 import com.piano.sequencer.midi.EffectCcMapping
 import com.piano.sequencer.midi.EffectCcScope
 import com.piano.sequencer.midi.EffectCcLearnResult
@@ -41,6 +44,14 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     private lateinit var container: LinearLayout
     private lateinit var status: TextView
     private var channel = -1
+    private var setId = MAIN_INSTRUMENT_SET_ID
+    private var setName = "Main"
+    private val targetLabel get() = "$setName · channel ${channel + 1}"
+
+    private fun absoluteChannel(): Int {
+        val set = FileInstrumentSetStore.get(this).all().firstOrNull { it.id == setId }
+        return if (setId.isBlank()) -1 else resolveInstrumentIdentityChannel(setId, channel, set?.channelBase)
+    }
     private var bound = false
     private val expanded = mutableSetOf<String>()
     private val ccController get() = (application as PianoApp).instrumentEffectCcController
@@ -68,12 +79,14 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         channel = intent.getIntExtra(EXTRA_CHANNEL, -1)
+        setId = instrumentEffectsSetId(intent.hasExtra(EXTRA_SET_ID), intent.getStringExtra(EXTRA_SET_ID)) ?: ""
+        setName = if (setId == MAIN_INSTRUMENT_SET_ID) "Main" else intent.getStringExtra(EXTRA_SET_NAME)?.takeIf { it.isNotBlank() } ?: "File set"
         if (channel !in 0..15) { finish(); return }
         expanded.addAll((savedInstanceState?.getStringArrayList("expanded") ?: intent.getStringArrayListExtra("expanded")).orEmpty())
         setContentView(R.layout.activity_effects)
         setSupportActionBar(findViewById(R.id.toolbar))
         supportActionBar?.apply {
-            title = getString(R.string.instrument_effects_channel_title, channel + 1)
+            title = "$targetLabel · Effects"
             setDisplayHomeAsUpEnabled(true)
         }
         container = findViewById(R.id.effectsContainer)
@@ -105,7 +118,11 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         val svc = service ?: return
         if (worker.isShutdown) return
         worker.execute {
-            try { action(svc) }
+            try {
+                if (absoluteChannel() < 0) {
+                    ui { container.removeAllViews(); status.text = "$targetLabel: set deleted or unsupported (Main + 7 file sets supported). Controls disabled."; container.addView(status) }
+                } else action(svc)
+            }
             catch (e: Exception) {
                 AppLogger.error("InstrumentEffects", "Channel ${channel + 1}: ${e.message}")
                 ui { status.text = getString(R.string.instrument_effects_error) }
@@ -119,32 +136,36 @@ class InstrumentEffectsActivity : AppCompatActivity() {
 
     // All service methods below are direct JNI calls, confined to worker.
     private fun renderSnapshot(svc: PlaybackService, failed: Boolean = false) {
+        if (setId != MAIN_INSTRUMENT_SET_ID) {
+            FileInstrumentSetStore.get(this).all().firstOrNull { it.id == setId }?.let { setName = it.name }
+        }
         if (!svc.isEngineInitialized()) {
             ui { status.text = getString(R.string.master_effects_engine_not_ready) }
             return
         }
-        val rack = svc.isInstrumentRackEnabled(channel)
+        val absolute = absoluteChannel()
+        val rack = svc.isInstrumentRackEnabled(setId, channel)
         val instances = EFFECTS.mapIndexed { slot, (id, title) ->
-            val available = svc.isInstrumentEffectAvailable(channel, id)
+            val available = svc.isInstrumentEffectAvailable(absoluteChannel(), id)
             val parameters = if (!available) emptyList() else (0 until svc.getInstrumentEffectParamCount(id)).mapNotNull { index ->
                 val info = svc.getInstrumentEffectParamInfo(id, index) ?: return@mapNotNull null
                 if (info.size < 7) return@mapNotNull null
                 effectParameterFromNativeInfo(info, svc.getInstrumentEffectParamName(id, index),
-                    svc.getInstrumentEffectParameter(channel, id, info[0].toInt()), id)?.let { instrumentPresentation(id, it) }
+                    svc.getInstrumentEffectParameter(setId, channel, id, info[0].toInt()), id)?.let { instrumentPresentation(id, it) }
             }
             EffectInstance(slot, EffectDescriptor(id, getString(title), parameters),
-                svc.isInstrumentEffectEnabled(channel, id), parameters, available)
+                svc.isInstrumentEffectEnabled(setId, channel, id), parameters, available)
         }
         val shared = instrumentDelayCardIds.map { id ->
             val available = svc.isInstrumentDelayAvailable()
             val controls = if (!available) emptyList() else instrumentDelayControls(channel,
                 { index -> svc.getInstrumentDelayParamInfo(index) },
-                { target, index -> svc.getInstrumentDelayParameter(target, index) })
-            EffectInstance(-1, EffectDescriptor(id, "Instrument Delay · channel ${channel + 1}", controls), false, controls, available)
+                { target, index -> svc.getInstrumentDelayParameter(setId, target, index) })
+            EffectInstance(-1, EffectDescriptor(id, "Instrument Delay · $targetLabel", controls), false, controls, available)
         }
         val latency = instances.filter { it.available }.associate { it.descriptor.stableId to
-            "${svc.getInstrumentEffectLatencyFrames(channel, it.descriptor.stableId)} frames · ${String.format(java.util.Locale.getDefault(), "%.2f", svc.getInstrumentEffectLatencyMillis(channel, it.descriptor.stableId))} ms" }
-        ui { render(rack, instances, failed); renderShared(shared, latency) }
+            "${svc.getInstrumentEffectLatencyFrames(absolute, it.descriptor.stableId)} frames · ${String.format(java.util.Locale.getDefault(), "%.2f", svc.getInstrumentEffectLatencyMillis(absolute, it.descriptor.stableId))} ms" }
+        ui { supportActionBar?.title = "$targetLabel · Effects"; render(rack, instances, failed); renderShared(shared, latency) }
     }
 
     private fun change(action: (PlaybackService) -> Boolean) = submit { svc ->
@@ -156,18 +177,18 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     private fun render(rack: Boolean, instances: List<EffectInstance>, failed: Boolean) {
         parameters = instances.flatMap { instance -> instance.parameters.map { (instance.descriptor.stableId to it.stableId) to it } }.toMap()
         container.removeAllViews()
-        status.text = if (failed) failureDetail ?: getString(R.string.instrument_effects_error) else getString(R.string.instrument_effects_hint)
+        status.text = "$targetLabel\n" + if (failed) failureDetail ?: getString(R.string.instrument_effects_error) else getString(R.string.instrument_effects_hint)
         container.addView(status)
         container.addView(Button(this).apply {
             com.piano.sequencer.ui.UiControlStyle.apply(this)
-            text = "Instrument channel ${channel + 1} ▾"
+            text = "$targetLabel ▾"
             setOnClickListener {
                 AlertDialog.Builder(this@InstrumentEffectsActivity).setTitle("Instrument channel")
                     .setSingleChoiceItems((1..16).map { "Channel $it" }.toTypedArray(), channel) { dialog, selected ->
                         dialog.dismiss()
                         if (selected != channel) {
                             startActivity(Intent(this@InstrumentEffectsActivity, InstrumentEffectsActivity::class.java)
-                                .putExtra(EXTRA_CHANNEL, selected).putStringArrayListExtra("expanded", ArrayList(expanded)))
+                                .putExtra(EXTRA_CHANNEL, selected).putExtra(EXTRA_SET_ID, setId).putExtra(EXTRA_SET_NAME, setName).putStringArrayListExtra("expanded", ArrayList(expanded)))
                             finish()
                         }
                     }.setNegativeButton("Cancel", null).show()
@@ -185,7 +206,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             isEnabled = instances.any { it.available }
             setOnCheckedChangeListener { button, checked ->
                 button.isEnabled = false
-                change { it.setInstrumentRackEnabled(channel, checked) }
+                change { it.setInstrumentRackEnabled(setId, channel, checked) }
             }
         })
         if (!rack) container.addView(label(getString(R.string.instrument_effects_bypass)))
@@ -206,7 +227,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                 setOnCheckedChangeListener { button, checked ->
                     button.isEnabled = false
                     change { svc -> setInsertEnabled(svc, id, checked).also {
-                        if (it) ccController.manualParameterChanged(channel, id, "-1", if (checked) 1f else 0f)
+                        if (it) ccController.manualParameterChanged(channel, id, "-1", if (checked) 1f else 0f, targetSetId = setId)
                     } }
                 }
             })
@@ -239,7 +260,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
 
     private fun renderShared(shared: List<EffectInstance>, latency: Map<String, String>) {
         latency["lsp.clipper"]?.let { container.addView(label("Drive / Clipper latency: $it. Once armed (~0.5 ms), bypass retains latency.")) }
-        container.addView(label("Independent Delay · only instrument channel ${channel + 1}"))
+        container.addView(label("Independent Delay · $targetLabel"))
         shared.forEach { instance ->
             val id = instance.descriptor.stableId
             parameters = parameters + instance.parameters.associateBy { id to it.stableId }
@@ -258,7 +279,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                     com.piano.sequencer.ui.UiControlStyle.apply(this)
                     text = "Reset delay tail"
                     isEnabled = instance.available
-                    setOnClickListener { change { it.resetInstrumentDelay(channel) } }
+                    setOnClickListener { change { it.resetInstrumentDelay(absoluteChannel()) } }
                 })
             }
             container.addView(card)
@@ -268,10 +289,10 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     private fun scope(@Suppress("UNUSED_PARAMETER") id: String) = EffectCcScope.INSTRUMENT
 
     private fun setInsertEnabled(svc: PlaybackService, id: String, enabled: Boolean): Boolean {
-        val accepted = svc.setInstrumentEffectEnabled(channel, id, enabled)
+        val accepted = svc.setInstrumentEffectEnabled(setId, channel, id, enabled)
         if (!accepted) {
-            val available = svc.isInstrumentEffectAvailable(channel, id)
-            val rack = svc.isInstrumentRackEnabled(channel)
+            val available = svc.isInstrumentEffectAvailable(absoluteChannel(), id)
+            val rack = svc.isInstrumentRackEnabled(setId, channel)
             failureDetail = "${EFFECTS.firstOrNull { it.first == id }?.second?.let { getString(it) } ?: id}: ${if (enabled) "enable" else "bypass"} rejected on channel ${channel + 1}. ${if (available) "Native command failed." else "Native effect unavailable."} Copy App Log from the main screen."
             AppLogger.error("InstrumentEffects", "$failureDetail effect=$id available=$available rackEnabled=$rack requested=$enabled")
         }
@@ -281,11 +302,11 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     private fun setParameter(svc: PlaybackService, id: String, p: EffectParameter, raw: Float): Boolean {
         val index = p.stableId.toInt()
         val success = when {
-            id == "native.delay" -> svc.setInstrumentDelayParameter(channel, index, raw)
+            id == "native.delay" -> svc.setInstrumentDelayParameter(setId, channel, index, raw)
             index == -1 -> setInsertEnabled(svc, id, raw >= .5f)
-            else -> svc.setInstrumentEffectParameter(channel, id, index, raw)
+            else -> svc.setInstrumentEffectParameter(setId, channel, id, index, raw)
         }
-        if (success) ccController.manualParameterChanged(channel, id, p.stableId, raw, scope(id))
+        if (success) ccController.manualParameterChanged(channel, id, p.stableId, raw, scope(id), targetSetId = setId)
         return success
     }
 
@@ -294,7 +315,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         setPadding(0, dp(8), 0, 0)
         val value = label("${p.displayName}: ${instrumentValueLabel(p, p.value.rawValue)}")
         addView(value)
-        val mapped = ccController.mappings().filter { it.targetInstrumentChannel == channel && it.effectId == id && it.parameterId == p.stableId && it.scope == EffectCcScope.INSTRUMENT }
+        val mapped = ccController.mappings().filter { it.targetInstrumentSetId == setId && it.targetInstrumentChannel == channel && it.effectId == id && it.parameterId == p.stableId && it.scope == EffectCcScope.INSTRUMENT }
         mapped.forEach { mapping ->
             addView(label(mappingDescription(mapping)))
             addView(Button(this@InstrumentEffectsActivity).apply {
@@ -380,13 +401,13 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     private fun mappingDescription(m: EffectCcMapping): String {
         val name = if (m.parameterId == "-1") "Insert enabled" else parameters[m.effectId to m.parameterId]?.displayName ?: "Parameter ${m.parameterId}"
         val effect = EFFECTS.firstOrNull { it.first == m.effectId }?.second?.let { getString(it) } ?: m.effectId
-        val target = if (m.scope == EffectCcScope.GLOBAL && m.parameterId != "6") "Shared · all 16 channels" else "Instrument ch ${m.targetInstrumentChannel + 1}"
+        val target = if (m.scope == EffectCcScope.GLOBAL && m.parameterId != "6") "Shared · all instrument sets" else "${if (m.targetInstrumentSetId == MAIN_INSTRUMENT_SET_ID) "Main" else if (m.targetInstrumentSetId == setId) setName else "File set ${m.targetInstrumentSetId}"} · channel ${m.targetInstrumentChannel + 1}"
         return "${m.source ?: "Any source"} · MIDI ch ${m.inputChannel?.plus(1) ?: "Any"} · CC ${m.controller}\n$target · $effect · $name\nRaw ${m.minRaw}–${m.maxRaw}${if (m.invert) " · Inverted" else ""} · Soft takeover · ${if (m.disposition == CcDisposition.PASS) "Pass-through" else "Consume"}"
     }
 
     private fun learn(id: String, p: EffectParameter) {
         val owner = WeakReference(this)
-        val started = ccController.startLearn(EffectCcMapping(null, null, 0, channel, id, p.stableId, p.minimum, p.maximum, scope = scope(id))) { result ->
+        val started = ccController.startLearn(instrumentEffectsLearnTemplate(setId, channel, id, p)) { result ->
             owner.get()?.runOnUiThread {
                 owner.get()?.takeUnless { it.isFinishing || it.isDestroyed }?.onLearnResult(result)
             }
@@ -482,7 +503,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         }
 
     private fun showMappings() {
-        val mappings = ccController.mappings().filter { it.targetInstrumentChannel == channel && it.scope == EffectCcScope.INSTRUMENT }
+        val mappings = ccController.mappings().filter { it.targetInstrumentSetId == setId && it.targetInstrumentChannel == channel && it.scope == EffectCcScope.INSTRUMENT }
         if (mappings.isEmpty()) {
             AlertDialog.Builder(this).setTitle("MIDI CC mappings").setMessage("No mappings for this instrument channel. Use MIDI Learn on a parameter.").setPositiveButton("Done", null).show()
             return
@@ -551,10 +572,13 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         "\n\nWarning: CC $cc can change bank, data entry, volume, pan, expression, sustain or channel mode. Pass-through may also affect the instrument; Consume prevents its normal instrument action. Choose deliberately." else ""
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     companion object {
+        const val EXTRA_SET_ID = "instrument_effects_set_id"
+        const val EXTRA_SET_NAME = "instrument_effects_set_name"
         const val EXTRA_CHANNEL = "instrument_effects_channel"
-        private val EFFECTS = listOf("lsp.parametric_eq" to R.string.master_effects_eq,
-            "lsp.compressor" to R.string.master_effects_compressor, "lsp.limiter" to R.string.master_effects_limiter,
-            "lsp.chorus" to R.string.instrument_effects_chorus, "lsp.clipper" to R.string.instrument_effects_clipper)
+        private val EFFECTS = instrumentInsertCardIds.zip(listOf(
+            R.string.master_effects_eq, R.string.master_effects_compressor, R.string.master_effects_limiter,
+            R.string.instrument_effects_chorus, R.string.instrument_effects_clipper,
+            R.string.instrument_effects_filter, R.string.instrument_effects_phaser, R.string.instrument_effects_flanger))
     }
 }
 

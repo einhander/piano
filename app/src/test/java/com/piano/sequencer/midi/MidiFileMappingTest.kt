@@ -937,13 +937,13 @@ class MidiFileMappingTest {
         assertEquals(0, first.programs[1])
 
         val bases = mutableSetOf(first.channelBase)
-        repeat(14) { bases.add(store.create("set-$it", emptyList())!!.channelBase) }
-        assertEquals(15, bases.size)
-        assertTrue(bases.all { it in 16..240 && it % 16 == 0 })
+        repeat(6) { bases.add(store.create("set-$it", emptyList())!!.channelBase) }
+        assertEquals(7, bases.size)
+        assertTrue(bases.all { it in 16..112 && it % 16 == 0 })
         assertNull(store.create("overflow", emptyList()))
 
         val reloaded = FileInstrumentSetStore(prefs)
-        assertEquals(15, reloaded.all().size)
+        assertEquals(7, reloaded.all().size)
         assertTrue(reloaded.remove(imported.instrumentSetId!!))
         assertEquals(first.channelBase, reloaded.create("reused", emptyList())!!.channelBase)
     }

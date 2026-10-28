@@ -2,6 +2,12 @@ package com.piano.sequencer
 
 import com.piano.sequencer.midi.sharedFxParameterFromNativeInfo
 
+/** Order is the native instrument slot identity; append, never reorder. */
+internal val instrumentInsertCardIds = listOf(
+    "lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper",
+    "lsp.filter", "lsp.phaser", "lsp.flanger"
+)
+
 /** Worker-only at call sites. Instrument cards never contain global effects. */
 internal val instrumentDelayCardIds = listOf("native.delay")
 
@@ -33,6 +39,27 @@ internal fun instrumentPresentation(effect: String, p: EffectParameter): EffectP
         321 -> p.copy(displayName = "Curve", enumValues = listOf("Hard clip", "Parabolic", "Sine", "Logistic", "Arctangent", "Hyperbolic tangent", "Guidermannian", "Error function", "Smoothstep", "Smootherstep", "Circle").mapIndexed { i, name -> i.toFloat() to name })
         322 -> p.copy(displayName = "Threshold", unit = "dB")
         323 -> p.copy(displayName = "Output gain", unit = "dB", scale = "linear-amplitude")
+        else -> p
+    }
+    "lsp.filter" -> when (p.stableId.toInt()) {
+        360 -> p.copy(displayName = "Cutoff", unit = "Hz")
+        361 -> p.copy(displayName = "Q", unit = null)
+        362 -> p.copy(displayName = "Type", enumValues = listOf("Lo-pass", "Hi-pass", "Lo-shelf", "Hi-shelf", "Bell", "Bandpass", "Notch", "Resonance", "Ladder-pass", "Ladder-rej", "Allpass").mapIndexed { i, name -> i.toFloat() to name })
+        else -> p
+    }
+    "lsp.phaser" -> when (p.stableId.toInt()) {
+        380 -> p.copy(displayName = "Rate", unit = "Hz")
+        381 -> p.copy(displayName = "Depth", unit = "%", scale = "fraction-percent")
+        382 -> p.copy(displayName = "Stages", enumValues = (1..8).mapIndexed { i, n -> i.toFloat() to n.toString() })
+        383 -> p.copy(displayName = "Feedback", unit = "%", scale = "fraction-percent")
+        384 -> p.copy(displayName = "Mix", unit = "%")
+        else -> p
+    }
+    "lsp.flanger" -> when (p.stableId.toInt()) {
+        400 -> p.copy(displayName = "Rate", unit = "Hz")
+        401 -> p.copy(displayName = "Depth", unit = "ms")
+        402 -> p.copy(displayName = "Feedback", unit = "%", scale = "fraction-percent")
+        403 -> p.copy(displayName = "Mix", unit = "%")
         else -> p
     }
     else -> p

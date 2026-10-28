@@ -19,19 +19,25 @@ static void runPlugin(DescriptorFn get, int slot, double rate) {
  auto* d=static_cast<const LADSPA_Descriptor*>(nullptr);
  for(unsigned long i=0;get(i);++i) if(std::strcmp(get(i)->Label,b->label)==0)d=get(i);
  assert(d && d->UniqueID==b->uniqueId);
- if(slot==lsp::kSlotChorus) assert(d->PortCount==182 && std::strcmp(d->PortNames[8],"Oversampling")==0);
+  if(slot==lsp::kSlotChorus) assert(d->PortCount==182 && std::strcmp(d->PortNames[8],"Oversampling")==0);
   if(slot==lsp::kSlotClipper) assert(d->PortCount==58 && std::strcmp(d->PortNames[20],"Overdrive protection reactivity (ms)")==0 && std::strcmp(d->PortNames[57],"latency")==0);
+   if(slot==lsp::kSlotFilter) assert(d->PortCount==29 && std::strcmp(d->PortNames[20],"Filter type")==0 && std::strcmp(d->PortNames[28],"latency")==0);
+   if(slot==lsp::kSlotPhaser) assert(d->PortCount==96 && std::strcmp(d->PortNames[20],"Number of filters")==0 && std::strcmp(d->PortNames[95],"latency")==0);
+   if(slot==lsp::kSlotFlanger) assert(d->PortCount==45 && std::strcmp(d->PortNames[23],"Depth (ms)")==0 && std::strcmp(d->PortNames[44],"latency")==0);
  for(int n:sizes) {
   ladspa::LadspaEffect fx(slot,b,d);
    const bool prepared=fx.prepare(rate,256);
-   if(slot==lsp::kSlotClipper && !prepared) { assert(!fx.isAvailable()); return; }
-   assert(prepared && fx.isAvailable()); fx.setBypassed(false);
-  if(slot==lsp::kSlotChorus) fx.setParameter(lsp::kParamChorusVoices,3);
-  else { fx.setParameter(lsp::kParamClipperDrive,4.0f); fx.setParameter(lsp::kParamClipperThreshold,-12.0f); }
+    if(slot==lsp::kSlotClipper && !prepared) { assert(!fx.isAvailable()); return; }
+    assert(prepared && fx.isAvailable()); fx.setBypassed(false);
+   if(slot==lsp::kSlotChorus) fx.setParameter(lsp::kParamChorusVoices,3);
+   else if(slot==lsp::kSlotClipper) { fx.setParameter(lsp::kParamClipperDrive,4.0f); fx.setParameter(lsp::kParamClipperThreshold,-12.0f); }
+   else if(slot==lsp::kSlotFilter) fx.setParameter(lsp::kParamFilterCutoff,180.0f);
+   else if(slot==lsp::kSlotPhaser) fx.setParameter(lsp::kParamPhaserRate,1.7f);
+   else fx.setParameter(lsp::kParamFlangerRate,1.7f);
   std::vector<float> l(n),r(n),original(n);
   for(int i=0;i<n;++i) l[i]=r[i]=original[i]=0.65f*std::sin(2*3.141592653589793*440*(i+1)/rate);
   fx.process(l.data(),r.data(),n); assert(finite(l)&&finite(r));
-  if(slot==lsp::kSlotChorus) {
+   if(slot==lsp::kSlotChorus || slot==lsp::kSlotPhaser || slot==lsp::kSlotFlanger) {
    if(n==256) { double delta=0; for(int i=0;i<n;++i) delta+=std::abs(l[i]-original[i]); assert(delta>0.01); }
   } else {
    if(n==256) {
@@ -41,12 +47,51 @@ static void runPlugin(DescriptorFn get, int slot, double rate) {
    }
   }
    assert(fx.isAvailable());
-   if(slot==lsp::kSlotClipper) assert(fx.getLatencyFrames()==static_cast<int>(std::lround(rate*0.0005)));
+    if(slot==lsp::kSlotClipper) assert(fx.getLatencyFrames()==static_cast<int>(std::lround(rate*0.0005)));
    else assert(fx.getLatencyFrames()==0);
  }
  ladspa::LadspaEffect fx(slot,b,d); assert(fx.prepare(rate,256)); fx.setBypassed(true);
  std::vector<float> l(64,.25f),r(64,-.5f); fx.process(l.data(),r.data(),64);
  for(int i=0;i<64;++i) assert(l[i]==.25f && r[i]==-.5f);
+}
+static double rmsTone(ladspa::LadspaEffect& fx,double rate,double hz) {
+ std::vector<float> l(256),r(256); double sum=0; int count=0;
+ for(int block=0;block<24;++block) {
+  for(int i=0;i<256;++i) l[i]=r[i]=.2f*std::sin(2*3.141592653589793*hz*(block*256+i)/rate);
+  fx.process(l.data(),r.data(),256);
+  for(int i=0;i<256;++i) { assert(std::isfinite(l[i])&&std::isfinite(r[i])); if(block>=8) { sum+=l[i]*l[i]; ++count; } }
+ }
+ return std::sqrt(sum/count);
+}
+static void checkFeedback(DescriptorFn get,int slot,double rate) {
+ const auto* b=binding(slot); const LADSPA_Descriptor* d=nullptr;
+ for(unsigned long i=0;get(i);++i) if(std::strcmp(get(i)->Label,b->label)==0)d=get(i);
+ assert(d);
+ ladspa::LadspaEffect dry(slot,b,d), wet(slot,b,d);
+  assert(dry.prepare(rate,256)&&wet.prepare(rate,256));
+  assert(dry.getLatencyFrames()==0 && wet.getLatencyFrames()==0);
+  dry.setBypassed(false); wet.setBypassed(false);
+ const uint32_t id=slot==lsp::kSlotPhaser?lsp::kParamPhaserFeedback:lsp::kParamFlangerFeedback;
+ wet.setParameter(id,.5f);
+  const double base=rmsTone(dry,rate,440);
+  ladspa::LadspaEffect zero(slot,b,d); assert(zero.prepare(rate,256)); zero.setBypassed(false);
+  const double zeroAmount=rmsTone(zero,rate,440);
+  assert(std::abs(base-zeroAmount)<1e-6);
+  const double changed=rmsTone(wet,rate,440);
+ const double difference=std::abs(base-changed);
+ std::printf("feedback slot=%d rate=%.0f dry_rms=%.6f wet_rms=%.6f delta=%.6f\n",slot,rate,base,changed,difference);
+ assert(base>1e-5 && changed>1e-5 && difference>1e-5);
+}
+static void checkFilterResponse(DescriptorFn get,double rate) {
+ const auto* b=binding(lsp::kSlotFilter); const LADSPA_Descriptor* d=nullptr;
+ for(unsigned long i=0;get(i);++i) if(std::strcmp(get(i)->Label,b->label)==0)d=get(i);
+ assert(d);
+ ladspa::LadspaEffect fx(lsp::kSlotFilter,b,d); assert(fx.prepare(rate,256)); fx.setBypassed(false);
+ fx.setParameter(lsp::kParamFilterType,0); fx.setParameter(lsp::kParamFilterCutoff,1000);
+ const double low=rmsTone(fx,rate,100), high=rmsTone(fx,rate,8000);
+ const double ratio=high/low;
+ std::printf("filter rate=%.0f low_rms=%.6f high_rms=%.6f ratio=%.6f\n",rate,low,high,ratio);
+ assert(low>1e-5 && high<low*.6);
 }
 static int checkClipperNonlinearity(DescriptorFn get, double rate) {
  const auto* b=lsp::instrumentBindingForSlot(lsp::kSlotClipper); const LADSPA_Descriptor* d=nullptr;
@@ -112,17 +157,27 @@ static void checkChorusFeedback(DescriptorFn get) {
 }
 int main(int argc,char**argv) {
  assert(sizeof(lsp::kBindings)/sizeof(lsp::kBindings[0])==3);
- assert(lsp::effectSlotForId(lsp::kIdChorus)==3 && lsp::effectSlotForId(lsp::kIdClipper)==4);
+  assert(sizeof(lsp::kInstrumentBindings)/sizeof(lsp::kInstrumentBindings[0])==5);
+  for(int slot=0;slot<lsp::kInstrumentEffectCount;++slot) {
+   int count=0; assert(lsp::paramDescriptors(slot,count) && count>0);
+   if(slot>=3) assert(lsp::instrumentBindingForSlot(slot) && lsp::effectSlotForId(lsp::instrumentBindingForSlot(slot)->stableId)==slot);
+  }
+  assert(lsp::effectSlotForId(lsp::kIdChorus)==3 && lsp::effectSlotForId(lsp::kIdClipper)==4 &&
+         lsp::effectSlotForId(lsp::kIdFilter)==5 && lsp::effectSlotForId(lsp::kIdPhaser)==6 && lsp::effectSlotForId(lsp::kIdFlanger)==7);
  ladspa::LadspaEffect missing(lsp::kSlotChorus,lsp::instrumentBindingForSlot(lsp::kSlotChorus),nullptr);
  assert(!missing.prepare(48000,256) && !missing.isAvailable());
  assert(argc==2); void* so=dlopen(argv[1],RTLD_NOW|RTLD_LOCAL); assert(so);
  auto get=reinterpret_cast<DescriptorFn>(dlsym(so,"ladspa_descriptor")); assert(get);
- runPlugin(get,lsp::kSlotChorus,44100.); runPlugin(get,lsp::kSlotClipper,44100.);
- runPlugin(get,lsp::kSlotChorus,48000.); runPlugin(get,lsp::kSlotClipper,48000.);
+  for(int slot=3;slot<lsp::kInstrumentEffectCount;++slot) { runPlugin(get,slot,44100.); runPlugin(get,slot,48000.); }
  const int latency441=checkClipperNonlinearity(get,44100.);
  const int latency480=checkClipperNonlinearity(get,48000.);
  assert(latency441==22 && latency480==24);
  checkClipperImpulse(get,44100.,latency441); checkClipperImpulse(get,48000.,latency480);
- checkChorusFeedback(get);
- dlclose(so); std::puts("compiled LADSPA Chorus/Clipper DSP tests passed");
+  checkChorusFeedback(get);
+  for(double rate:{44100.,48000.}) {
+   checkFilterResponse(get,rate);
+   checkFeedback(get,lsp::kSlotPhaser,rate);
+   checkFeedback(get,lsp::kSlotFlanger,rate);
+  }
+  dlclose(so); std::puts("compiled LADSPA instrument DSP tests passed");
 }

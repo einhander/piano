@@ -1,4 +1,5 @@
 #include "LspEffectIds.h"
+#include "AudioEffect.h"
 #include <cstring>
 
 namespace piano {
@@ -86,6 +87,23 @@ static const ParamPort kClPorts[] = {
  {kParamClipperDither,15,0,8,0,false,true,false},{kParamClipperOdpEnable,17,0,1,0,false,false,true},
  {kParamClipperEnabled,21,0,1,1,false,false,true}
 };
+static const ParamPort kFilterPorts[] = {
+ {kParamBypass,4,0,1,0,false,false,true}, {kParamInputGain,5,0,10,1,true,false,false},
+ {kParamOutputGain,6,0,10,1,true,false,false}, {kParamFilterCutoff,23,10,24000,1000,true,false,false},
+ {kParamFilterResonance,26,0,100,1,false,false,false}, {kParamFilterType,20,0,10,0,false,true,false}
+};
+static const ParamPort kPhaserPorts[] = {
+ {kParamBypass,4,0,1,0,false,false,true},{kParamInputGain,38,0,1000,1,true,false,false},
+ {kParamOutputGain,42,0,1000,1,true,false,false},{kParamPhaserRate,12,.01f,20,.447214f,true,false,false},
+ {kParamPhaserDepth,13,0,10,1,false,false,false},{kParamPhaserStages,20,0,7,3,false,true,false},
+  {kParamPhaserFeedback,35,0,.89125f,0,false,false,false},{kParamPhaserMix,41,0,100,100,false,false,false}
+};
+static const ParamPort kFlangerPorts[] = {
+ {kParamBypass,4,0,1,0,false,false,true},{kParamInputGain,31,0,1000,1,true,false,false},
+ {kParamOutputGain,35,0,1000,1,true,false,false},{kParamFlangerRate,6,.01f,20,.447214f,true,false,false},
+ {kParamFlangerDepth,23,.1f,20,5.075f,false,false,false},{kParamFlangerFeedback,27,0,.891251f,0,false,false,false},
+  {kParamFlangerMix,34,0,100,100,false,false,false}
+};
 
 const ParamPort* paramTable(int slot, int& count) {
     switch (slot) {
@@ -100,6 +118,9 @@ const ParamPort* paramTable(int slot, int& count) {
             return kLimPorts;
         case kSlotChorus: count=sizeof(kChPorts)/sizeof(kChPorts[0]); return kChPorts;
         case kSlotClipper: count=sizeof(kClPorts)/sizeof(kClPorts[0]); return kClPorts;
+        case kSlotFilter: count=sizeof(kFilterPorts)/sizeof(kFilterPorts[0]); return kFilterPorts;
+        case kSlotPhaser: count=sizeof(kPhaserPorts)/sizeof(kPhaserPorts[0]); return kPhaserPorts;
+        case kSlotFlanger: count=sizeof(kFlangerPorts)/sizeof(kFlangerPorts[0]); return kFlangerPorts;
         default:
             count = 0;
             return nullptr;
@@ -182,6 +203,29 @@ static const EffectParameterDescriptor kClDescriptors[] = {
  {kParamClipperCurve,"curve","Curve enum",0,10,0,false,true,false},{kParamClipperThreshold,"threshold_db","Threshold (dB)",-48,0,0,false,false,false},
  {kParamClipperOutputGain,"output_gain","Output gain (linear)",.01f,1,.5f,true,false,false}
 };
+static const EffectParameterDescriptor kFilterDescriptors[] = {
+ {kParamBypass,"bypass","Bypass",0,1,0,false,false,true},
+ {kParamInputGain,"input_gain","Input gain",0,10,1,true,false,false},
+ {kParamOutputGain,"output_gain","Output gain",0,10,1,true,false,false},
+  {kParamFilterCutoff,"cutoff_hz","Cutoff (Hz)",10,24000,1000,true,false,false},
+  {kParamFilterResonance,"resonance","Quality factor",0,100,1,false,false,false},
+  {kParamFilterType,"type","Filter type",0,10,0,false,true,false}
+};
+static const EffectParameterDescriptor kPhaserDescriptors[] = {
+ {kParamBypass,"bypass","Bypass",0,1,0,false,false,true},
+ {kParamPhaserRate,"rate_hz","Rate (Hz)",.01f,20,.447214f,true,false,false},
+ {kParamPhaserDepth,"depth","Depth (gain)",0,10,1,false,false,false},
+  {kParamPhaserStages,"filter_count","Filter count",0,7,3,false,true,false},
+ {kParamPhaserFeedback,"feedback","Feedback",0,.89125f,0,false,false,false},
+  {kParamPhaserMix,"mix","Mix (%)",0,100,100,false,false,false}
+};
+static const EffectParameterDescriptor kFlangerDescriptors[] = {
+ {kParamBypass,"bypass","Bypass",0,1,0,false,false,true},
+ {kParamFlangerRate,"rate_hz","Rate (Hz)",.01f,20,.447214f,true,false,false},
+  {kParamFlangerDepth,"depth","Depth (ms)",.1f,20,5.075f,false,false,false},
+  {kParamFlangerFeedback,"feedback","Feedback",0,.891251f,0,false,false,false},
+  {kParamFlangerMix,"mix","Mix (%)",0,100,100,false,false,false}
+};
 
 const EffectParameterDescriptor* paramDescriptors(int slot, int& count) {
     switch (slot) {
@@ -196,6 +240,9 @@ const EffectParameterDescriptor* paramDescriptors(int slot, int& count) {
             return kLimDescriptors;
         case kSlotChorus: count=sizeof(kChDescriptors)/sizeof(kChDescriptors[0]); return kChDescriptors;
         case kSlotClipper: count=sizeof(kClDescriptors)/sizeof(kClDescriptors[0]); return kClDescriptors;
+        case kSlotFilter: count=sizeof(kFilterDescriptors)/sizeof(kFilterDescriptors[0]); return kFilterDescriptors;
+        case kSlotPhaser: count=sizeof(kPhaserDescriptors)/sizeof(kPhaserDescriptors[0]); return kPhaserDescriptors;
+        case kSlotFlanger: count=sizeof(kFlangerDescriptors)/sizeof(kFlangerDescriptors[0]); return kFlangerDescriptors;
         default:
             count = 0;
             return nullptr;
@@ -205,7 +252,7 @@ const EffectParameterDescriptor* paramDescriptors(int slot, int& count) {
 int effectSlotForId(const char* id) {
  if (!id) return -1;
  for (int i=0;i<kMasterEffectCount;++i) if (std::strcmp(id,kBindings[i].stableId)==0) return i;
- for (int i=0;i<2;++i) if (std::strcmp(id,kInstrumentBindings[i].stableId)==0) return i+3;
+ for (int i=0;i<kInstrumentEffectCount-kMasterEffectCount;++i) if (std::strcmp(id,kInstrumentBindings[i].stableId)==0) return i+kMasterEffectCount;
  return -1;
 }
 

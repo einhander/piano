@@ -7,6 +7,7 @@
 #include <memory>
 #include <thread>
 #include <atomic>
+#include <iostream>
 
 using namespace piano;
 
@@ -46,7 +47,8 @@ std::unique_ptr<AudioEffect> factory(int slot) {
     if (slot == 0) { if(failSlotZero) return nullptr; return std::make_unique<FakeEffect>(); }
     if (slot == 1) return std::make_unique<FakeEffect>(false);
     if (slot == lsp::kSlotClipper) return std::make_unique<LatencyEffect>(fakeClipperLatency);
-    return nullptr;
+     if (slot >= lsp::kSlotFilter && slot < lsp::kInstrumentEffectCount) return std::make_unique<FakeEffect>();
+     return nullptr;
 }
 }
 
@@ -57,16 +59,25 @@ int main() {
     assert(lsp::effectSlotForId(lsp::kIdLimiter)==2);
     assert(lsp::effectSlotForId(lsp::kIdChorus)==3);
     assert(lsp::effectSlotForId(lsp::kIdClipper)==4);
+    assert(lsp::effectSlotForId(lsp::kIdFilter)==5);
+    assert(lsp::effectSlotForId(lsp::kIdPhaser)==6);
+    assert(lsp::effectSlotForId(lsp::kIdFlanger)==7);
     assert(lsp::instrumentEffectSlotForId(lsp::kIdParametricEq)==0);
     assert(lsp::instrumentEffectSlotForId(lsp::kIdCompressor)==1);
     assert(lsp::instrumentEffectSlotForId(lsp::kIdLimiter)==2);
     assert(lsp::instrumentEffectSlotForId(lsp::kIdChorus)==3);
     assert(lsp::instrumentEffectSlotForId(lsp::kIdClipper)==4);
+    assert(lsp::instrumentEffectSlotForId(lsp::kIdFilter)==5);
+    assert(lsp::instrumentEffectSlotForId(lsp::kIdPhaser)==6);
+    assert(lsp::instrumentEffectSlotForId(lsp::kIdFlanger)==7);
     assert(lsp::instrumentEffectSlotForId("unknown") == -1);
     assert(lsp::instrumentEffectSlotForId(nullptr) == -1);
     assert(lsp::instrumentBindingForSlot(3) && !lsp::bindingForSlot(3));
+    for(int slot=5;slot<8;++slot) assert(lsp::instrumentBindingForSlot(slot));
     constexpr int frames=256;
-    InstrumentEffectManager manager(factory);
+    auto managerStorage = std::make_unique<InstrumentEffectManager>(factory);
+    auto& manager = *managerStorage;
+    std::cerr << "InstrumentEffectManager sizeof=" << sizeof(InstrumentEffectManager) << " bytes; heap fixture\n";
     assert(manager.prepare(48000,frames));
     assert(manager.paramCount(0)>0);
     uint32_t id; float lo,hi,def; bool log,integer,toggled;
@@ -77,10 +88,10 @@ int main() {
     assert(manager.getParameterChecked(4,0,id,read) && read==lo);
     assert(!manager.isAvailable(4,0)); // Registry not loaded; query remains lazy.
 
-    std::array<std::array<float,frames*2>,16> data{};
-    std::array<std::array<float,frames*2>,16> before{};
-    std::array<float*,16> buses{};
-    for(int c=0;c<16;++c) {
+    std::array<std::array<float,frames*2>,kInstrumentChannelCount> data{};
+    std::array<std::array<float,frames*2>,kInstrumentChannelCount> before{};
+    std::array<float*,kInstrumentChannelCount> buses{};
+    for(int c=0;c<kInstrumentChannelCount;++c) {
         buses[c]=data[c].data();
         for(int i=0;i<frames*2;++i) data[c][i]=before[c][i]=float(c+i+1);
     }
@@ -89,6 +100,8 @@ int main() {
     assert(data==before);
 
     assert(manager.instantiate(2,0) && manager.instantiate(7,0));
+    assert(manager.instantiate(127,0));
+    assert(!manager.instantiate(128,0));
     assert(!manager.setEffectEnabledChecked(3,1,true));
     assert(manager.setParameterChecked(2,0,id,lo));
     assert(manager.setParameterChecked(7,0,id,hi));
@@ -97,13 +110,13 @@ int main() {
     assert(manager.setEffectEnabledChecked(2,0,true));
     assert(manager.setEffectEnabledChecked(7,0,true));
 
-    for(int c=0;c<16;++c) {
+    for(int c=0;c<kInstrumentChannelCount;++c) {
         for(int i=0;i<frames*2;++i) data[c][i]=before[c][i]=float(c+i+1);
     }
     // Unavailable slot and disabled racks are exact passthrough while other
     // channels have active effects.
     manager.process(buses.data(),frames);
-    for(int c=0;c<16;++c) if(c!=2 && c!=7) assert(data[c]==before[c]);
+    for(int c=0;c<kInstrumentChannelCount;++c) if(c!=2 && c!=7) assert(data[c]==before[c]);
     assert(data[2][2] == before[2][2]);
     assert(data[2][(frames-1)*2] >= before[2][(frames-1)*2]);
 
@@ -119,9 +132,9 @@ int main() {
     assert(manager.getParameter(2,0,id)==lo && manager.getParameter(7,0,id)==hi);
     assert(manager.rackEnabled(2) && manager.rackEnabled(7));
     assert(manager.effectEnabled(2,0) && manager.effectEnabled(7,0));
-    for(int c=0;c<16;++c) for(int i=0;i<frames*2;++i) data[c][i]=before[c][i]=float(c+i+1);
+    for(int c=0;c<kInstrumentChannelCount;++c) for(int i=0;i<frames*2;++i) data[c][i]=before[c][i]=float(c+i+1);
     manager.process(buses.data(),frames);
-    for(int c=0;c<16;++c) if(c!=2 && c!=7) assert(data[c]==before[c]);
+    for(int c=0;c<kInstrumentChannelCount;++c) if(c!=2 && c!=7) assert(data[c]==before[c]);
     assert(data[2][2] == before[2][2]);
 
     manager.setEffectEnabled(2,0,false);
@@ -134,13 +147,25 @@ int main() {
     manager.process(buses.data(),frames);
     assert(data[7][0] >= before[7][0]-hi);
     assert(data[7][0] <= before[7][0]+hi);
-    for(int c=0;c<16;++c) if(c!=7) assert(data[c]==before[c]);
+    for(int c=0;c<kInstrumentChannelCount;++c) if(c!=7) assert(data[c]==before[c]);
+    assert(manager.setParameterChecked(127,0,id,hi));
+    assert(manager.rackEnabled(127)==false);
+    assert(manager.getParameter(127,0,id)==hi);
+    assert(manager.setParameterChecked(0,0,id,lo));
+    assert(manager.getParameter(0,0,id)==lo && manager.getParameter(16,0,id)==0.0f);
+    assert(manager.resetChannelRange(127,1));
+    assert(!manager.rackEnabled(127) && !manager.effectEnabled(127,0));
+    assert(manager.getParameterChecked(127,0,id,read) && read==def);
+    assert(manager.getParameter(7,0,id)==hi);
+    assert(!manager.resetChannelRange(127,2));
+    assert(!manager.resetChannelRange(-1,1));
+    assert(manager.resetChannelRange(128,0));
 
     // Clipper alignment ring is warm before publication, preserves old all-OFF
     // samples exactly, and stays active when rack/slot bypassed after arming.
-    InstrumentEffectManager aligned(factory);
+    auto alignedStorage = std::make_unique<InstrumentEffectManager>(factory); auto& aligned = *alignedStorage;
     assert(aligned.prepare(48000,frames));
-    std::array<float,frames*2> one{}; float* oneBus[16]{}; oneBus[0]=one.data();
+    std::array<float,frames*2> one{}; float* oneBus[kInstrumentChannelCount]{}; oneBus[0]=one.data();
     for(int block=0;block<3;++block) {
         for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(block*frames+i+1);
         auto orig=one; aligned.process(oneBus,frames); assert(one==orig);
@@ -177,7 +202,7 @@ int main() {
     aligned.process(oneBus,frames);
     for(int i=frames-8;i<frames;++i) assert(std::fabs(one[i*2]-float(10*frames+i-1))<.001f);
 
-    InstrumentEffectManager firstUse(factory); assert(firstUse.prepare(48000,frames));
+    auto firstUseStorage = std::make_unique<InstrumentEffectManager>(factory); auto& firstUse = *firstUseStorage; assert(firstUse.prepare(48000,frames));
     assert(firstUse.instantiate(0,lsp::kSlotClipper));
     firstUse.setRackEnabled(0,true); assert(firstUse.setEffectEnabledChecked(0,lsp::kSlotClipper,true));
     for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(i+1);
@@ -185,7 +210,7 @@ int main() {
     assert(one[0]==1.0f && one[1]==1.0f); // hold dry timeline until delay history valid
     for(float sample:one) assert(std::isfinite(sample));
 
-    InstrumentEffectManager instantEnable(factory); assert(instantEnable.prepare(48000,frames));
+    auto instantEnableStorage = std::make_unique<InstrumentEffectManager>(factory); auto& instantEnable = *instantEnableStorage; assert(instantEnable.prepare(48000,frames));
     for(int block=0;block<3;++block) {
         for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(block*frames+i+1);
         instantEnable.process(oneBus,frames);
@@ -199,7 +224,7 @@ int main() {
     for(float sample:one) assert(std::isfinite(sample));
 
     fakeClipperLatency=128;
-    InstrumentEffectManager maxDelay(factory); assert(maxDelay.prepare(48000,frames));
+    auto maxDelayStorage = std::make_unique<InstrumentEffectManager>(factory); auto& maxDelay = *maxDelayStorage; assert(maxDelay.prepare(48000,frames));
     for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(i+1);
     maxDelay.process(oneBus,frames); assert(maxDelay.instantiate(0,lsp::kSlotClipper));
     maxDelay.setRackEnabled(0,true); assert(maxDelay.setEffectEnabledChecked(0,lsp::kSlotClipper,true));
@@ -210,11 +235,11 @@ int main() {
     for(int i=frames-8;i<frames;++i) assert(std::fabs(one[i*2]-(float(2*frames+i+1-128)+.25f))<.001f);
 
     fakeClipperLatency=129;
-    InstrumentEffectManager invalid(factory); assert(invalid.prepare(48000,frames));
+    auto invalidStorage = std::make_unique<InstrumentEffectManager>(factory); auto& invalid = *invalidStorage; assert(invalid.prepare(48000,frames));
     assert(!invalid.instantiate(0,lsp::kSlotClipper));
     fakeClipperLatency=2;
 
-    InstrumentEffectManager stress(factory); assert(stress.prepare(48000,frames));
+    auto stressStorage = std::make_unique<InstrumentEffectManager>(factory); auto& stress = *stressStorage; assert(stress.prepare(48000,frames));
     assert(stress.instantiate(0,0));
     std::atomic<bool> done{false};
     std::thread rebuild([&]{

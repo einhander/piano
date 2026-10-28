@@ -134,6 +134,17 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
     if (mSlot == lsp::kSlotClipper &&
         (mPortCount <= 20 || !mDescriptor->PortNames ||
          std::strcmp(mDescriptor->PortNames[20], "Overdrive protection reactivity (ms)") != 0)) return false;
+    if (mSlot == lsp::kSlotFilter || mSlot == lsp::kSlotPhaser || mSlot == lsp::kSlotFlanger) {
+        const unsigned long expected = mSlot == lsp::kSlotFilter ? 29u : (mSlot == lsp::kSlotPhaser ? 96u : 45u);
+        if (mPortCount != expected) return false;
+        const int bypass = mBinding->bypassPort;
+        const int latency = mBinding->latencyPort;
+        if (bypass != 4 || latency != static_cast<int>(expected) - 1 ||
+            !LADSPA_IS_PORT_CONTROL(mDescriptor->PortDescriptors[bypass]) ||
+            !LADSPA_IS_PORT_INPUT(mDescriptor->PortDescriptors[bypass]) ||
+            !LADSPA_IS_PORT_CONTROL(mDescriptor->PortDescriptors[latency]) ||
+            !LADSPA_IS_PORT_OUTPUT(mDescriptor->PortDescriptors[latency])) return false;
+    }
     if (mDescriptor->Properties & LADSPA_PROPERTY_INPLACE_BROKEN) {
         mScratchL = std::make_unique<float[]>(maxFrames);
         mScratchR = std::make_unique<float[]>(maxFrames);
@@ -246,6 +257,15 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
     // Pinned Clipper derives latency from ODP reactivity even when ODP is off.
     // Pin the hidden ODP reactivity to supported LADSPA minimum (1 ms); do not expose it.
     if (mSlot == lsp::kSlotClipper) mPortValues[20] = 1.0f;
+    // Pin safe modes from audited LSP metadata; controls remain hidden.
+    if (mSlot == lsp::kSlotFilter) { mPortValues[7]=0.0f; mPortValues[27]=0.0f; }
+    if (mSlot == lsp::kSlotFlanger) mPortValues[25]=0.0f;
+    if (mSlot == lsp::kSlotPhaser) {
+        mPortValues[8]=0.0f; mPortValues[10]=0.0f; mPortValues[11]=10.0f;
+        mPortValues[18]=0.0f;
+    }
+    // Avoid latency-alignment machinery on newly added effects: published
+    // descriptors are latency-bearing but their reported delay is verified zero.
 
     // Activate (if supported). LADSPA activate() is non-realtime; called once
     // before the first run().
@@ -281,6 +301,19 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
         }
         mLatencyFrames=static_cast<int>(latency);
     }
+    if (mSlot == lsp::kSlotFilter || mSlot == lsp::kSlotPhaser || mSlot == lsp::kSlotFlanger) {
+        auto warmL=std::make_unique<float[]>(maxFrames);
+        auto warmR=std::make_unique<float[]>(maxFrames);
+        std::fill_n(warmL.get(),maxFrames,0.0f); std::fill_n(warmR.get(),maxFrames,0.0f);
+        mDescriptor->connect_port(mHandle,mBinding->audioInL,warmL.get());
+        mDescriptor->connect_port(mHandle,mBinding->audioInR,warmR.get());
+        mDescriptor->connect_port(mHandle,mBinding->audioOutL,warmL.get());
+        mDescriptor->connect_port(mHandle,mBinding->audioOutR,warmR.get());
+        mDescriptor->run(mHandle,static_cast<unsigned long>(maxFrames));
+        const float latency=mPortValues[mLatencyPort];
+        if (!std::isfinite(latency) || latency != 0.0f) { cleanupInstance(); return false; }
+        mLatencyFrames=0;
+    }
 
     // Clear the marker — if we reach here, prepare() succeeded.
     writePrepareMarker("done");
@@ -307,6 +340,8 @@ void LadspaEffect::applyParameters() noexcept {
         // The exposed feedback amount also owns its otherwise hidden switch.
         mPortValues[39] = mPortValues[40] > 0.0f ? 1.0f : 0.0f;
     }
+    if (mSlot == lsp::kSlotPhaser) mPortValues[34] = mPortValues[35] > 0.0f ? 1.0f : 0.0f;
+    if (mSlot == lsp::kSlotFlanger) mPortValues[26] = mPortValues[27] > 0.0f ? 1.0f : 0.0f;
 }
 
 void LadspaEffect::process(float* left, float* right, int numFrames) noexcept {

@@ -67,9 +67,9 @@ class FileInstrumentSetStore(private val prefs: SharedPreferences) {
     /** Returns null at capacity or when no safe range remains. */
     fun create(name: String, mainPrograms: List<Int>): InstrumentSet? = synchronized(lock) {
         val sets = read()
-        if (sets.size >= 15) return@synchronized null
+        if (sets.count { it.channelBase in 16..112 } >= 7) return@synchronized null
         val used = sets.map { it.channelBase }.toSet()
-        val base = (16..240 step 16).firstOrNull { it !in used } ?: return@synchronized null
+        val base = (16..112 step 16).firstOrNull { it !in used } ?: return@synchronized null
         val item = InstrumentSet(java.util.UUID.randomUUID().toString(), name, normalize(mainPrograms), base)
         write(sets + item)
         item
@@ -90,7 +90,7 @@ class FileInstrumentSetStore(private val prefs: SharedPreferences) {
     private fun read(): List<InstrumentSet> = try {
         json.decodeFromString<List<InstrumentSet>>(prefs.getString(KEY, "[]") ?: "[]")
             .filter { it.channelBase in 16..240 && it.channelBase % 16 == 0 && it.programs.size == 16 }
-            .distinctBy { it.channelBase }.take(15)
+            .distinctBy { it.id }.distinctBy { it.channelBase }
     } catch (_: Exception) { emptyList() }
 
     private fun write(sets: List<InstrumentSet>) { prefs.edit().putString(KEY, json.encodeToString(sets)).apply() }
@@ -102,5 +102,30 @@ enum class InstrumentSetSource { MAIN, FILE }
 /** Resolve local channel selection without allowing source track numbers to become synth channels. */
 fun resolveSynthChannel(localChannel: Int, source: InstrumentSetSource, channelBase: Int): Int {
     if (localChannel !in 0..15) return -1
-    return if (source == InstrumentSetSource.MAIN) localChannel else (channelBase + localChannel).takeIf { it in 16..255 } ?: -1
+    return if (source == InstrumentSetSource.MAIN) localChannel else (channelBase + localChannel).takeIf { it in 16..127 } ?: -1
 }
+
+/** Main identity stays backward-compatible; file sets use stable persisted IDs. */
+const val MAIN_INSTRUMENT_SET_ID = "main"
+fun resolveInstrumentIdentityChannel(setId: String?, localChannel: Int, channelBase: Int?): Int {
+    if (localChannel !in 0..15) return -1
+    if (setId == null || setId == MAIN_INSTRUMENT_SET_ID) return localChannel
+    val base = channelBase ?: return -1
+    return (base + localChannel).takeIf { base in 16..112 && base % 16 == 0 && it <= 127 } ?: -1
+}
+
+/** Production ordering policy shared by trigger activation and removal tests. */
+internal fun applyFileProgramAssignments(programs: List<Int>, enqueue: (localChannel: Int, packedPreset: Int) -> Boolean): Boolean {
+    for (local in 0 until 16) if (!enqueue(local, programs.getOrElse(local) { 0 })) return false
+    return true
+}
+
+/** Stop old owners before reset; caller may delete persisted metadata only when true returned. */
+internal fun prepareFileSetRangeRemoval(stopOwners: () -> Unit, resetRange: () -> Boolean): Boolean {
+    stopOwners()
+    return resetRange()
+}
+
+internal fun legacyInstrumentStateTargetSetId(): String = MAIN_INSTRUMENT_SET_ID
+internal fun restoredInstrumentEnabled(stored: Boolean?): Boolean = stored ?: false
+internal fun legacyInstrumentMigrationNeeded(alreadyDone: Boolean): Boolean = !alreadyDone

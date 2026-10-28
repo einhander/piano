@@ -463,20 +463,41 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         if (ok) com.piano.sequencer.EffectStateRestore.persistInstrumentRack(this, channel, enabled)
         return ok
     }
+    fun setInstrumentRackEnabled(setId: String, localChannel: Int, enabled: Boolean): Boolean {
+        val absolute = resolveInstrumentChannel(setId, localChannel) ?: return false
+        val ok = NativeEngineBridge.nativeSetInstrumentRackEnabled(absolute, enabled)
+        if (ok) com.piano.sequencer.EffectStateRestore.persistInstrumentRack(this, setId, localChannel, enabled)
+        return ok
+    }
     fun isInstrumentRackEnabled(channel: Int): Boolean = NativeEngineBridge.nativeIsInstrumentRackEnabled(channel)
+    fun isInstrumentRackEnabled(setId: String, localChannel: Int): Boolean = resolveInstrumentChannel(setId, localChannel)?.let { NativeEngineBridge.nativeIsInstrumentRackEnabled(it) } ?: false
     fun setInstrumentEffectEnabled(channel: Int, effectId: String, enabled: Boolean): Boolean {
         val ok = NativeEngineBridge.nativeSetInstrumentEffectEnabled(channel, effectId, enabled)
         if (ok) com.piano.sequencer.EffectStateRestore.persistInstrumentEffect(this, channel, effectId, enabled)
         return ok
     }
+    fun setInstrumentEffectEnabled(setId: String, localChannel: Int, effectId: String, enabled: Boolean): Boolean {
+        val absolute = resolveInstrumentChannel(setId, localChannel) ?: return false
+        val ok = NativeEngineBridge.nativeSetInstrumentEffectEnabled(absolute, effectId, enabled)
+        if (ok) com.piano.sequencer.EffectStateRestore.persistInstrumentEffect(this, setId, localChannel, effectId, enabled)
+        return ok
+    }
     fun isInstrumentEffectEnabled(channel: Int, effectId: String): Boolean = NativeEngineBridge.nativeIsInstrumentEffectEnabled(channel, effectId)
+    fun isInstrumentEffectEnabled(setId: String, localChannel: Int, effectId: String): Boolean = resolveInstrumentChannel(setId, localChannel)?.let { NativeEngineBridge.nativeIsInstrumentEffectEnabled(it, effectId) } ?: false
     fun isInstrumentEffectAvailable(channel: Int, effectId: String): Boolean = NativeEngineBridge.nativeIsInstrumentEffectAvailable(channel, effectId)
     fun setInstrumentEffectParameter(channel: Int, effectId: String, parameterId: Int, value: Float): Boolean {
         val ok = NativeEngineBridge.nativeSetInstrumentEffectParameter(channel, effectId, parameterId, value)
         if (ok) com.piano.sequencer.EffectStateRestore.persistInstrumentParameter(this, channel, effectId, parameterId, value)
         return ok
     }
+    fun setInstrumentEffectParameter(setId: String, localChannel: Int, effectId: String, parameterId: Int, value: Float): Boolean {
+        val absolute = resolveInstrumentChannel(setId, localChannel) ?: return false
+        val ok = NativeEngineBridge.nativeSetInstrumentEffectParameter(absolute, effectId, parameterId, value)
+        if (ok) com.piano.sequencer.EffectStateRestore.persistInstrumentParameter(this, setId, localChannel, effectId, parameterId, value)
+        return ok
+    }
     fun getInstrumentEffectParameter(channel: Int, effectId: String, parameterId: Int): Float = NativeEngineBridge.nativeGetInstrumentEffectParameter(channel, effectId, parameterId)
+    fun getInstrumentEffectParameter(setId: String, localChannel: Int, effectId: String, parameterId: Int): Float = resolveInstrumentChannel(setId, localChannel)?.let { NativeEngineBridge.nativeGetInstrumentEffectParameter(it, effectId, parameterId) } ?: Float.NaN
     fun getInstrumentEffectParamCount(effectId: String): Int = NativeEngineBridge.nativeGetInstrumentEffectParamCount(effectId)
     fun getInstrumentEffectParamInfo(effectId: String, index: Int): FloatArray? = NativeEngineBridge.nativeGetInstrumentEffectParamInfo(effectId, index)
     fun getInstrumentEffectParamName(effectId: String, index: Int): String = NativeEngineBridge.nativeGetInstrumentEffectParamName(effectId, index)
@@ -497,10 +518,30 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         else AppLogger.warn("PlaybackService", "Instrument delay setter rejected channel=$channel id=$parameterId")
         return ok
     }
+    fun setInstrumentDelayParameter(setId: String, localChannel: Int, parameterId: Int, value: Float): Boolean {
+        val absolute = resolveInstrumentChannel(setId, localChannel) ?: return false
+        val ok = NativeEngineBridge.nativeSetInstrumentDelayParameter(absolute, parameterId, value)
+        if (ok) com.piano.sequencer.EffectStateRestore.persistInstrumentDelay(this, setId, localChannel, parameterId, value)
+        return ok
+    }
     fun getInstrumentDelayParameter(channel: Int, parameterId: Int): Float = NativeEngineBridge.nativeGetInstrumentDelayParameter(channel, parameterId)
+    fun getInstrumentDelayParameter(setId: String, localChannel: Int, parameterId: Int): Float = resolveInstrumentChannel(setId, localChannel)?.let { NativeEngineBridge.nativeGetInstrumentDelayParameter(it, parameterId) } ?: Float.NaN
     fun getInstrumentDelayParamInfo(parameterId: Int): FloatArray? = NativeEngineBridge.nativeGetInstrumentDelayParamInfo(parameterId)
     fun isInstrumentDelayAvailable(): Boolean = NativeEngineBridge.nativeIsInstrumentDelayAvailable()
     fun resetInstrumentDelay(channel: Int): Boolean = NativeEngineBridge.nativeResetInstrumentDelay(channel)
+    /** Worker-only reset before a new file-set identity claims its absolute 16-channel range. */
+    fun resetInstrumentSetRange(setId: String): Boolean {
+        val set = com.piano.sequencer.midi.FileInstrumentSetStore.get(this).all().firstOrNull { it.id == setId } ?: return false
+        if (set.channelBase !in 16..112 || set.channelBase % 16 != 0) return false
+        return resetInstrumentChannelRange(set.channelBase, 16)
+    }
+    fun resetInstrumentChannelRange(first: Int, count: Int): Boolean =
+        first in 16..112 && first % 16 == 0 && count == 16 && NativeEngineBridge.nativeResetInstrumentChannelRange(first, count)
+    private fun resolveInstrumentChannel(setId: String, local: Int): Int? {
+        val base = if (setId == com.piano.sequencer.midi.MAIN_INSTRUMENT_SET_ID) null else
+            com.piano.sequencer.midi.FileInstrumentSetStore.get(this).all().firstOrNull { it.id == setId }?.channelBase ?: return null
+        return com.piano.sequencer.midi.resolveInstrumentIdentityChannel(setId, local, base).takeIf { it in 0..127 }
+    }
     fun getInstrumentEffectLatencyFrames(channel: Int, effectId: String): Int =
         NativeEngineBridge.nativeGetInstrumentEffectLatencyFrames(channel, effectId)
     fun getInstrumentEffectLatencyMillis(channel: Int, effectId: String): Float {

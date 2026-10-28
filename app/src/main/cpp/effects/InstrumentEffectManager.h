@@ -1,6 +1,8 @@
 #pragma once
 
 #include "AudioEffect.h"
+#include "lsp/LspEffectIds.h"
+#include "synth/InstrumentChannelContract.h"
 #include <array>
 #include <memory>
 #include <atomic>
@@ -14,8 +16,8 @@ class InstrumentEffectManager {
 public:
     using EffectFactory = std::unique_ptr<AudioEffect> (*)(int slot);
     enum class PrepareStatus : uint8_t { Unprepared, Ready, InvalidArguments, AllocationFailed, ReprepareRequiresQuiescence };
-    static constexpr int kChannels = 16;
-    static constexpr int kEffects = 5;
+    static constexpr int kChannels = kInstrumentChannelCount;
+    static constexpr int kEffects = lsp::kInstrumentEffectCount;
     explicit InstrumentEffectManager(EffectFactory factory = nullptr) noexcept;
     ~InstrumentEffectManager();
     InstrumentEffectManager(const InstrumentEffectManager&) = delete;
@@ -45,6 +47,8 @@ public:
     bool isAvailable(int channel, int slot) const noexcept;
     int effectLatencyFrames(int channel, int slot) const noexcept;
     void process(float* const buses[kChannels], int frames) noexcept;
+    // Worker-thread only while callbacks are quiesced; clears reusable channel state.
+    bool resetChannelRange(int first, int count) noexcept;
 
 private:
     std::array<std::array<std::unique_ptr<AudioEffect>, kEffects>, kChannels> mEffects{};
