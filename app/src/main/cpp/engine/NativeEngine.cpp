@@ -125,8 +125,8 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     // .so path is known). With the bundle absent, process() is a passthrough.
     mMasterEffects.prepare(sampleRate, mMaxSynthFrames);
     const bool insertsReady = mInstrumentEffects.prepare(sampleRate, mMaxSynthFrames);
-    const bool delayReady = mSharedDelay.prepare(sampleRate, mMaxSynthFrames);
-    mSharedDelayPrepared.store(delayReady, std::memory_order_release);
+    const bool delayReady = mInstrumentDelays.prepare(sampleRate, mMaxSynthFrames);
+    mSharedDelayPrepared.store(false, std::memory_order_release); // legacy shared path retired
     mRateGraph.initialize(insertsReady && delayReady, insertsReady && delayReady ? 0 : (insertsReady ? 4 : 3));
     for (auto& send : mDelaySendTargets) send.store(0.0f, std::memory_order_relaxed);
 
@@ -555,10 +555,7 @@ bool NativeEngine::prepareRateInserts(void* context, int sampleRate) {
 bool NativeEngine::prepareRateDelay(void* context, int sampleRate) {
     auto* engine = static_cast<NativeEngine*>(context);
     if (!engine) return false;
-    engine->mSharedDelayPrepared.store(false, std::memory_order_release);
-    const bool ready = engine->mSharedDelay.prepare(sampleRate, engine->mMaxSynthFrames);
-    engine->mSharedDelayPrepared.store(ready, std::memory_order_release);
-    return ready;
+    return engine->mInstrumentDelays.prepare(static_cast<double>(sampleRate), engine->mMaxSynthFrames);
 }
 
 void NativeEngine::activateRateTransport(void* context, int sampleRate) {
@@ -708,33 +705,6 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
         // Immediate queue first; sequencer events render at their frame offsets.
         float* track0 = mMixer.getTrackBuffer(0);
         std::memset(track0, 0, static_cast<size_t>(safeFrames) * 2 * sizeof(float));
-        auto processDelaySegment = [this, track0](int start, int count) noexcept {
-            if (!mSharedDelayPrepared.load(std::memory_order_acquire) || count <= 0) return;
-            float* sendL = mDelayBuffers.data();
-            float* sendR = sendL + mMaxSynthFrames;
-            float* wetL = sendR + mMaxSynthFrames;
-            float* wetR = wetL + mMaxSynthFrames;
-            const float* buses[16];
-            for (int ch=0; ch<16; ++ch) buses[ch] = mSynthChannelPtrs[ch];
-            for (int f = 0; f < count; ++f) {
-                for (int ch = 0; ch < 16; ++ch) {
-                    const float target = mDelaySendTargets[ch].load(std::memory_order_relaxed);
-                    float& level = mDelaySendLevels[ch];
-                    const float delta = target - level;
-                    level += std::max(-1.0f / 128.0f, std::min(1.0f / 128.0f, delta));
-                }
-                float sumL = 0.0f, sumR = 0.0f;
-                sumSharedDelaySends(buses, mDelaySendLevels, start + f, sumL, sumR);
-                sendL[f] = sumL;
-                sendR[f] = sumR;
-            }
-            const double bpm = mTransport.bpmMicros / 1000000.0;
-            mSharedDelay.process(sendL, sendR, wetL, wetR, count, bpm);
-            for (int f = 0; f < count; ++f) {
-                track0[(start + f) * 2] += wetL[f];
-                track0[(start + f) * 2 + 1] += wetR[f];
-            }
-        };
         int offset = 0;
         for (int32_t i = 0; i < sequencerEventCount; ++i) {
             int eventOffset = static_cast<int>(mSequencerStaging[i].targetFrame - framePos);
@@ -751,7 +721,9 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
                         track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
                     }
                 addSharedFxReturn(track0, sharedReturn, offset, eventOffset - offset);
-                processDelaySegment(offset, eventOffset - offset);
+            float* delayBuses[16];
+            for (int ch=0; ch<16; ++ch) delayBuses[ch]=mSynthChannelPtrs[ch]+offset*2;
+            mInstrumentDelays.process(delayBuses, eventOffset - offset, mTransport.bpmMicros / 1000000.0);
             }
             mSynth->processOneMidi(mSequencerStaging[i].message);
             offset = eventOffset;
@@ -767,7 +739,9 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
                     track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
                 }
             addSharedFxReturn(track0, sharedReturn, offset, safeFrames - offset);
-            processDelaySegment(offset, safeFrames - offset);
+            float* delayBuses[16];
+            for (int ch=0; ch<16; ++ch) delayBuses[ch]=mSynthChannelPtrs[ch]+offset*2;
+            mInstrumentDelays.process(delayBuses, safeFrames - offset, mTransport.bpmMicros / 1000000.0);
         }
 
         mSynth->endSynthAccess();

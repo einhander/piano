@@ -10,7 +10,7 @@ class EffectMidiMappingTest {
         assertEquals(EffectCcScope.INSTRUMENT, old.scope)
         val global = EffectCcMapping("dev", 0, 8, effectId = "native.delay", parameterId = "0", minRaw = 0f, maxRaw = 1f, scope = EffectCcScope.GLOBAL)
         assertEquals(EffectCcScope.GLOBAL, global.scope)
-        assertThrows(IllegalArgumentException::class.java) { global.copy(scope = EffectCcScope.INSTRUMENT) }
+        assertEquals(EffectCcScope.INSTRUMENT, global.copy(scope = EffectCcScope.INSTRUMENT).scope)
         assertThrows(IllegalArgumentException::class.java) { global.copy(effectId = "fluidsynth.reverb", scope = EffectCcScope.INSTRUMENT) }
     }
     @Test fun serializedMappingScopeRoundTripsAndMissingScopeMeansInstrument() {

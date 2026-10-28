@@ -68,6 +68,8 @@ internal object EffectStateRestore {
     }
 
     private const val SHARED_FX_PREFIX = "shared_fx_v1_"
+    private const val DELAY_MIGRATED = "instrument_delay_migration_v1_done"
+    internal fun instrumentDelayKey(channel: Int, id: Int) = "instrument_delay_v1_${channel}_$id"
     internal fun sharedParameterKey(scope: String, id: Int) = "${SHARED_FX_PREFIX}${scope.replace('.', '_')}_param_$id"
     internal fun delaySendKey(channel: Int) = "${SHARED_FX_PREFIX}delay_send_$channel"
 
@@ -95,6 +97,34 @@ internal object EffectStateRestore {
             val key = delaySendKey(channel)
             if (prefs.contains(key)) service.setDelaySend(channel, prefs.getFloat(key, 0f))
         }
+    }
+
+    /** Restore independent inserts, migrating legacy shared state without changing audible attenuation. */
+    fun restoreInstrumentDelays(context: Context, service: PlaybackService) {
+        val prefs = context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE)
+        if (!service.isInstrumentDelayAvailable()) return
+        if (!prefs.getBoolean(DELAY_MIGRATED, false)) {
+            val params = (0..5).associateWith { id -> prefs.getFloat(sharedParameterKey("native.delay", id), floatArrayOf(0f,250f,.35f,.30f,0f,0f)[id]) }
+            val enabled = params.getValue(0) >= .5f
+            var success = true
+            for (channel in 0 until 16) {
+                val send = prefs.getFloat(delaySendKey(channel), 0f)
+                if (send <= 0f) continue
+                // Legacy output was delay wet × send. Fold send into wet to preserve level.
+                val channelValues = params.toMutableMap().apply { put(0, if (enabled) 1f else 0f); put(3, params.getValue(3) * send) }
+                for ((id, value) in channelValues) if (!service.setInstrumentDelayParameter(channel, id, value)) success = false
+            }
+            if (success) prefs.edit().putBoolean(DELAY_MIGRATED, true).commit()
+        }
+        for (channel in 0 until 16) for (id in 0..5) {
+            val key = instrumentDelayKey(channel, id)
+            if (prefs.contains(key)) service.setInstrumentDelayParameter(channel, id, prefs.getFloat(key, 0f))
+            else if (id == 0) service.setInstrumentDelayParameter(channel, id, 0f)
+        }
+    }
+    fun persistInstrumentDelay(context: Context, channel: Int, id: Int, value: Float): Boolean {
+        if (channel !in 0..15 || id !in 0..5 || !value.isFinite()) return false
+        return context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE).edit().putFloat(instrumentDelayKey(channel,id), value).commit()
     }
 
     fun persistSharedParameter(context: Context, scope: String, id: Int, value: Float): Boolean {

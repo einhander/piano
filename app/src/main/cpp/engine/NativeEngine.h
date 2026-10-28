@@ -27,6 +27,7 @@
 #include "effects/EffectChain.h"
 #include "effects/InstrumentEffectManager.h"
 #include "effects/SharedStereoDelay.h"
+#include "effects/InstrumentDelayBank.h"
 #include "audio/Mp3AudioRecorder.h"
 
 class OboeOutput;
@@ -215,6 +216,12 @@ public:
     float getDelaySend(int channel) const;
     void resetSharedDelay() noexcept { mSharedDelay.requestReset(); }
     bool isSharedDelayPrepared() const noexcept { return mSharedDelayPrepared.load(std::memory_order_acquire); }
+    // Independent per-channel native delay insert. IDs match legacy delay API.
+    bool setInstrumentDelayParameter(int channel, int parameterId, float value) { return mInstrumentDelays.setParameter(channel, parameterId, value); }
+    float getInstrumentDelayParameter(int channel, int parameterId) const { return mInstrumentDelays.getParameter(channel, parameterId); }
+    bool getInstrumentDelayParameterInfo(int parameterId, float& minimum, float& maximum, float& defaultValue, bool& integer, bool& toggled) const { return mInstrumentDelays.getParameterInfo(parameterId, minimum, maximum, defaultValue, integer, toggled); }
+    bool isInstrumentDelayPrepared() const noexcept { return mInstrumentDelays.prepared(); }
+    void resetInstrumentDelay(int channel) noexcept { mInstrumentDelays.reset(channel); }
     int getInstrumentEffectLatencyFrames(int channel, const char* effectId) const;
 
     // Project loading (called from worker thread, NOT audio callback)
@@ -402,6 +409,7 @@ private:
     piano::EffectChain mMasterEffects;
     piano::InstrumentEffectManager mInstrumentEffects;
     SharedStereoDelay mSharedDelay;
+    InstrumentDelayBank mInstrumentDelays;
     std::atomic<bool> mSharedDelayPrepared{false};
     std::atomic<float> mDelaySendTargets[16];
     float mDelaySendLevels[16]{}; // audio-thread owned slew state

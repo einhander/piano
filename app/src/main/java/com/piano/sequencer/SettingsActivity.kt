@@ -213,7 +213,7 @@ class SettingsActivity : AppCompatActivity() {
         // Reverb / Chorus switches (Fix #10-11).
         var updatingReverb = false
         switchReverb.setOnCheckedChangeListener { _, checked ->
-            if (updatingReverb) return@setOnCheckedChangeListener
+            if (updatingReverb || isRestoringState) return@setOnCheckedChangeListener
             tvReverb.text = getString(R.string.settings_reverb_value,
                 if (checked) getString(R.string.settings_on) else getString(R.string.settings_off))
             if (isFinishing || isDestroyed) return@setOnCheckedChangeListener
@@ -223,14 +223,18 @@ class SettingsActivity : AppCompatActivity() {
             CompletableFuture.supplyAsync({
                 val raw = if (on) 1f else 0f
                 val success = svc.setSharedFxParameter("fluidsynth.reverb", 0, raw)
-                if (success) EffectStateRestore.persistSharedParameter(this, "fluidsynth.reverb", 0, raw)
+                if (success) {
+                    EffectStateRestore.persistSharedParameter(this, "fluidsynth.reverb", 0, raw)
+                    (application as PianoApp).instrumentEffectCcController.manualParameterChanged(0, "fluidsynth.reverb", "0", raw, com.piano.sequencer.midi.EffectCcScope.GLOBAL)
+                } else AppLogger.error("SettingsActivity", "GLOBAL FluidSynth Reverb enable rejected requested=$on")
                 success
             }, mainExecutor)
                 .whenComplete { success, ex ->
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         switchReverb.isEnabled = true
-                        if (ex != null || success != true) {
+                         if (ex != null || success != true) {
+                             AppLogger.error("SettingsActivity", "GLOBAL FluidSynth Reverb enable failed requested=$on error=${ex?.message}")
                             updatingReverb = true
                             switchReverb.isChecked = !on
                             updatingReverb = false
@@ -434,7 +438,14 @@ class SettingsActivity : AppCompatActivity() {
         val gainProgress = (gain * 1000f).toInt().coerceIn(0, 2000)
         val sf2List = parseLoadedSoundFonts(svc.getLoadedSoundFonts())
         val sf2Count = svc.getSoundFontCount()
-        val reverb = svc.getReverb()
+        val reverbAvailable = svc.isSharedFxAvailable("fluidsynth.reverb")
+        val reverb = svc.getSharedFxParameter("fluidsynth.reverb", 0)
+        val reverbControls = if (!reverbAvailable) emptyList() else (1..4).mapNotNull { id ->
+            svc.getSharedFxParamInfo("fluidsynth.reverb", id)?.let { info ->
+                com.piano.sequencer.midi.sharedFxParameterFromNativeInfo("fluidsynth.reverb", id, info,
+                    svc.getSharedFxParameter("fluidsynth.reverb", id))?.let { sharedPresentation("fluidsynth.reverb", it) }
+            }
+        }
         val chorus = svc.getChorus()
         val interps = svc.getInterps()
         val bufferSize = svc.getBufferSizeInFrames()
@@ -449,8 +460,12 @@ class SettingsActivity : AppCompatActivity() {
             tvMasterGain.text = getString(R.string.settings_master_gain_value, gain)
 
             // Reverb / Chorus (Fix #10-11).
-            val reverbOn = reverb != 0
+            val reverbOn = reverb >= .5f
+            isRestoringState = true
             switchReverb.isChecked = reverbOn
+            isRestoringState = false
+            switchReverb.isEnabled = reverbAvailable
+            renderGlobalReverb(reverbControls)
             tvReverb.text = getString(R.string.settings_reverb_value,
                 if (reverbOn) getString(R.string.settings_on) else getString(R.string.settings_off))
             val chorusOn = chorus != 0
@@ -483,6 +498,53 @@ class SettingsActivity : AppCompatActivity() {
             isRestoringState = false
 
             updateSf2List(sf2List, sf2Count)
+        }
+    }
+
+    private fun renderGlobalReverb(parameters: List<EffectParameter>) {
+        val controls = findViewById<LinearLayout>(R.id.globalReverbControls)
+        controls.removeAllViews()
+        parameters.forEach { p ->
+            val label = TextView(this).apply { text = "${p.displayName}: ${instrumentValueLabel(p, p.value.rawValue)}" }
+            controls.addView(label)
+            controls.addView(SeekBar(this).apply {
+                minimumHeight = (48 * resources.displayMetrics.density).toInt()
+                contentDescription = "Global Reverb ${p.displayName}"
+                max = 1000
+                progress = instrumentParameterProgress(p, p.value.rawValue)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    private var tracking = false
+                    private fun save(progress: Int) {
+                        val svc = service ?: return
+                        val raw = instrumentParameterValue(p, progress)
+                        isEnabled = false
+                        CompletableFuture.supplyAsync({
+                            val ok = svc.setSharedFxParameter("fluidsynth.reverb", p.stableId.toInt(), raw)
+                            if (ok) {
+                                EffectStateRestore.persistSharedParameter(this@SettingsActivity, "fluidsynth.reverb", p.stableId.toInt(), raw)
+                                (application as PianoApp).instrumentEffectCcController.manualParameterChanged(0, "fluidsynth.reverb", p.stableId, raw, com.piano.sequencer.midi.EffectCcScope.GLOBAL)
+                            } else AppLogger.error("SettingsActivity", "GLOBAL FluidSynth Reverb rejected parameter=${p.stableId} value=$raw")
+                            ok
+                        }, mainExecutor).whenComplete { ok, error ->
+                            runOnUiThread {
+                                if (isFinishing || isDestroyed) return@runOnUiThread
+                                isEnabled = true
+                                if (ok != true || error != null) {
+                                    tvReverb.text = "GLOBAL Reverb change failed · copy App Log"
+                                    CompletableFuture.runAsync({ loadCurrentValues() }, mainExecutor)
+                                    Toast.makeText(this@SettingsActivity, "Global Reverb change failed. Copy App Log.", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    }
+                    override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                        label.text = "${p.displayName}: ${instrumentValueLabel(p, instrumentParameterValue(p, progress))}"
+                        if (fromUser && !tracking) save(progress)
+                    }
+                    override fun onStartTrackingTouch(bar: SeekBar?) { tracking = true }
+                    override fun onStopTrackingTouch(bar: SeekBar?) { tracking = false; save(bar?.progress ?: 0) }
+                })
+            })
         }
     }
 

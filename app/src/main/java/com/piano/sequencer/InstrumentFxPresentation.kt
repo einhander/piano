@@ -2,21 +2,18 @@ package com.piano.sequencer
 
 import com.piano.sequencer.midi.sharedFxParameterFromNativeInfo
 
-/** Worker-only at call sites: virtual Send is not a native shared parameter. */
-internal fun sharedInstrumentControls(
-    effect: String,
+/** Worker-only at call sites. Instrument cards never contain global effects. */
+internal val instrumentDelayCardIds = listOf("native.delay")
+
+internal fun instrumentDelayControls(
+    channel: Int,
     metadata: (Int) -> FloatArray?,
-    current: (Int) -> Float,
-    currentSend: () -> Float
+    current: (Int, Int) -> Float
 ): List<EffectParameter> {
-    val native = (0..if (effect == "native.delay") 5 else 4).mapNotNull { index ->
-        metadata(index)?.let { sharedFxParameterFromNativeInfo(effect, index, it, current(index)) }
-    }
-    val controls = if (effect == "native.delay") native + EffectParameter(
-        "6", "Delay Send", EffectParameterValue(currentSend()), 0f, 1f, 0f,
-        EffectParameterType.FLOAT, false
-    ) else native
-    return controls.map { sharedPresentation(effect, it) }
+    require(channel in 0..15)
+    return (0..5).mapNotNull { id ->
+        metadata(id)?.let { sharedFxParameterFromNativeInfo("native.delay", id, it, current(channel, id)) }
+    }.map { sharedPresentation("native.delay", it) }
 }
 
 /** Presentation only. Native descriptors own bounds, flags and defaults. */
@@ -44,7 +41,7 @@ internal fun instrumentPresentation(effect: String, p: EffectParameter): EffectP
 internal fun sharedPresentation(effect: String, p: EffectParameter): EffectParameter = when {
     effect == "native.delay" -> when (p.stableId.toInt()) {
         1 -> p.copy(unit = "ms")
-        2, 3, 6 -> p.copy(unit = "%", scale = "fraction-percent")
+        2, 3 -> p.copy(unit = "%", scale = "fraction-percent")
         4 -> p.copy(displayName = "Sync to current transport BPM")
         5 -> p.copy(enumValues = listOf("1/4", "1/8", "Dotted 1/8", "1/16", "Triplet 1/8").mapIndexed { i, name -> i.toFloat() to name })
         else -> p

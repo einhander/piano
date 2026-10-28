@@ -491,6 +491,16 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun setDelaySend(channel: Int, level: Float): Boolean = NativeEngineBridge.nativeSetDelaySend(channel, level)
     fun getDelaySend(channel: Int): Float = NativeEngineBridge.nativeGetDelaySend(channel)
     fun resetSharedDelay(): Boolean = NativeEngineBridge.nativeResetSharedDelay()
+    fun setInstrumentDelayParameter(channel: Int, parameterId: Int, value: Float): Boolean {
+        val ok = NativeEngineBridge.nativeSetInstrumentDelayParameter(channel, parameterId, value)
+        if (ok) com.piano.sequencer.EffectStateRestore.persistInstrumentDelay(this, channel, parameterId, value)
+        else AppLogger.warn("PlaybackService", "Instrument delay setter rejected channel=$channel id=$parameterId")
+        return ok
+    }
+    fun getInstrumentDelayParameter(channel: Int, parameterId: Int): Float = NativeEngineBridge.nativeGetInstrumentDelayParameter(channel, parameterId)
+    fun getInstrumentDelayParamInfo(parameterId: Int): FloatArray? = NativeEngineBridge.nativeGetInstrumentDelayParamInfo(parameterId)
+    fun isInstrumentDelayAvailable(): Boolean = NativeEngineBridge.nativeIsInstrumentDelayAvailable()
+    fun resetInstrumentDelay(channel: Int): Boolean = NativeEngineBridge.nativeResetInstrumentDelay(channel)
     fun getInstrumentEffectLatencyFrames(channel: Int, effectId: String): Int =
         NativeEngineBridge.nativeGetInstrumentEffectLatencyFrames(channel, effectId)
     fun getInstrumentEffectLatencyMillis(channel: Int, effectId: String): Float {

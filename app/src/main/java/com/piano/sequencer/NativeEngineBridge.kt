@@ -310,6 +310,11 @@ object NativeEngineBridge {
     external fun nativeSetDelaySend(channel: Int, level: Float): Boolean
     external fun nativeGetDelaySend(channel: Int): Float
     external fun nativeResetSharedDelay(): Boolean
+    external fun nativeSetInstrumentDelayParameter(channel: Int, parameterId: Int, value: Float): Boolean
+    external fun nativeGetInstrumentDelayParameter(channel: Int, parameterId: Int): Float
+    external fun nativeGetInstrumentDelayParamInfo(parameterId: Int): FloatArray?
+    external fun nativeIsInstrumentDelayAvailable(): Boolean
+    external fun nativeResetInstrumentDelay(channel: Int): Boolean
     external fun nativeGetInstrumentEffectLatencyFrames(channel: Int, effectId: String): Int
 
     // Count-in metronome

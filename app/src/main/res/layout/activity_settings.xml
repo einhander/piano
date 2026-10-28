@@ -208,6 +208,12 @@
                     android:max="2000"
                     android:progress="1000" />
 
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="GLOBAL FluidSynth Reverb · applies to all synth instruments"
+                    android:textColor="@color/ui_text"
+                    android:textSize="14sp" />
                 <!-- Existing formatted state label contains both name and On/Off. -->
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -230,6 +236,12 @@
                     android:layout_height="wrap_content"
                     android:checked="true" />
                 </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/globalReverbControls"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
 
                 <LinearLayout
                     android:layout_width="match_parent"

@@ -64,6 +64,7 @@ add_library(native-lib SHARED
     # ladspa.h (LGPL) is the only header dependency.
     effects/EffectChain.cpp
     effects/SharedStereoDelay.cpp
+    effects/InstrumentDelayBank.cpp
     effects/InstrumentEffectManager.cpp
     effects/ladspa/LadspaEffect.cpp
     effects/ladspa/LadspaRegistry.cpp
