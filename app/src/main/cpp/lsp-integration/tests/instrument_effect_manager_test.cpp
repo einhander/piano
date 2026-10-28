@@ -1,5 +1,6 @@
 #include "effects/InstrumentEffectManager.h"
 #include "effects/lsp/LspEffectIds.h"
+#include "effects/lsp/InstrumentEffectRouting.h"
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -56,6 +57,13 @@ int main() {
     assert(lsp::effectSlotForId(lsp::kIdLimiter)==2);
     assert(lsp::effectSlotForId(lsp::kIdChorus)==3);
     assert(lsp::effectSlotForId(lsp::kIdClipper)==4);
+    assert(lsp::instrumentEffectSlotForId(lsp::kIdParametricEq)==0);
+    assert(lsp::instrumentEffectSlotForId(lsp::kIdCompressor)==1);
+    assert(lsp::instrumentEffectSlotForId(lsp::kIdLimiter)==2);
+    assert(lsp::instrumentEffectSlotForId(lsp::kIdChorus)==3);
+    assert(lsp::instrumentEffectSlotForId(lsp::kIdClipper)==4);
+    assert(lsp::instrumentEffectSlotForId("unknown") == -1);
+    assert(lsp::instrumentEffectSlotForId(nullptr) == -1);
     assert(lsp::instrumentBindingForSlot(3) && !lsp::bindingForSlot(3));
     constexpr int frames=256;
     InstrumentEffectManager manager(factory);

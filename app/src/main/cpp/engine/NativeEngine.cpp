@@ -2,6 +2,7 @@
 #include "engine/SharedFxReturn.h"
 #include <android/log.h>
 #include "effects/lsp/LspEffectIds.h"
+#include "effects/lsp/InstrumentEffectRouting.h"
 #include "effects/ladspa/LadspaRegistry.h"
 #include <limits>
 #include <cstring>
@@ -1118,9 +1119,7 @@ const char* NativeEngine::getMasterEffectParamName(int slot, int index) const {
 
 namespace {
 int instrumentSlot(const char* id) {
-    if(!id)return -1;
-    for(int s=0;s<piano::lsp::kMasterEffectCount;++s) if(std::strcmp(id,piano::lsp::kBindings[s].stableId)==0)return s;
-    return -1;
+    return piano::lsp::instrumentEffectSlotForId(id);
 }
 }
 int NativeEngine::loadInstrumentEffectBundle(const char* path) {
