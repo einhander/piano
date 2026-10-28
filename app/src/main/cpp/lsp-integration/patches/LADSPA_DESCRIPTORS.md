@@ -1,4 +1,4 @@
-# LADSPA descriptor enumeration (Phase 2 / Milestone 2)
+# LADSPA descriptor enumeration (Stage A audit)
 
 This document records the LADSPA descriptors exported by the Android
 `lsp-plugins-ladspa.so` (Phase 1 artifact) and the descriptors selected for
@@ -127,3 +127,109 @@ on x86-64 without the Bionic linker; see PROGRESS.md open question #1). The
 dump confirms 168 LADSPA descriptors and the exact port indexes/ranges/hint
 bits recorded in the per-plugin tables above. Audio ports are `0`=in L,
 `1`=in R, `2`=out L, `3`=out R for all three plugins.
+
+## Stage A additions: compiled host-bundle verification
+
+The current checkout pins LSP meta tag `1.2.34` at
+`92e81191771d23c87f952a2ad21d2a8b8cd1cf45`. Its `modules.mk` pins
+`lsp-plugins-art-delay` `1.0.35`, `lsp-plugins-chorus` `1.0.16`, and
+`lsp-plugins-clipper` `1.0.18`; fetched module commits are recorded in
+`STAGE_A_AUDIT.md`. Existing EQ/compressor/limiter mappings above are unchanged.
+
+Compiled host x86-64 bundle dump confirms these descriptors (all full URI
+labels, 4 audio ports 0..3, counts shown):
+
+| Effect | Label | UID | Ports |
+|---|---|---:|---:|
+| Chorus Stereo | `chorus_stereo` | 5002315 | 182 |
+| Artistic Delay Stereo | `art_delay_stereo` | 5002171 | 741 |
+| Clipper Stereo | `clipper_stereo` | 5002285 | 58 |
+
+### Chorus Stereo controls
+
+Ranges/defaults are the dumper's 48 kHz interpretation of compiled LADSPA
+hints. `DEFAULT_NONE` initializes to zero (explicitly shown). Omitted ports are
+additional mode/LFO/graph controls; exact complete enumeration comes from
+`ladspa_dump.cpp` against the host bundle.
+
+| Port | Control | Range | Default |
+|---:|---|---:|---:|
+| 4 | Bypass (toggle) | 0..1 | 0 |
+| 13 | Rate (Hz, log) | 0.01..20 | 0.447214 |
+| 20 | Number of voices (integer) | 0..14 | unspecified → 0 |
+| 21 | Depth (ms) | 0.1..20 | 5.075 |
+| 22 | Crossfade (%) | 0..50 | 0 |
+| 39 | Feedback on (toggle) | 0..1 | 0 |
+| 40 | Feedback gain (G) | 0..0.891251 | 0.445625 |
+| 44 | Input gain (G) | 0..1000 | 1 |
+| 45 | Dry amount (G) | 0..10 | 1 |
+| 46 | Wet amount (G) | 0..10 | 7.5 |
+| 47 | Dry/Wet balance (%) | 0..100 | 100 |
+| 48 | Output gain (G) | 0..1000 | 1 |
+| 181 | latency (output) | — | unspecified |
+
+### Artistic Delay Stereo controls
+
+Delay exposes 16 lines; each line repeats line-1 layout at stride 43 ports.
+Port map below records global controls and line 1 only; all 741 ports were
+enumerated and are present in the captured host dump.
+
+| Port | Control | Range | Default |
+|---:|---|---:|---:|
+| 4 | Bypass (toggle) | 0..1 | 0 |
+| 5 | Delay line selector (integer) | 0..15 | 0 |
+| 6 | Maximum possible delay selector (integer) | 0..16 | unspecified → 0 |
+| 9 | Dry amount (G) | 0..10 | 1 |
+| 10 | Wet amount (G) | 0..10 | 1 |
+| 11 | Dry/Wet balance (%) | 0..100 | 100 |
+| 12 | Dry enable (toggle) | 0..1 | 1 |
+| 13 | Wet enable (toggle) | 0..1 | 1 |
+| 15 | Feedback (toggle) | 0..1 | 1 |
+| 16 | Feedback gain (G) | 0..1 | 1 |
+| 17 | Output gain (G) | 0..1000 | 1 |
+| 52 | Delay 1 on (toggle) | 0..1 | 0 |
+| 55 | Delay 1 reference (integer) | 0..16 | 0 |
+| 56 | Delay 1 reference multiplier (integer) | 0..1000 | 1 |
+| 58 | Delay 1 bar fraction (integer) | 0..2 | 1 |
+| 59 | Delay 1 bar denominator (integer) | 1..64 | 16.75 → rounded 17 |
+| 60 | Delay 1 bar multiplier (integer) | 0..1000 | 1 |
+| 63 | Delay 1 time addition (s) | 0..256 | 0 |
+| 76 | Delay 1 gain (G) | 0..10 | 1 |
+| 78 | Delay 1 feedback enable (toggle) | 0..1 | 0 |
+| 79 | Delay 1 feedback gain (G) | 0..1 | 0 |
+| 740 | latency (output) | — | unspecified |
+
+### Clipper Stereo controls
+
+| Port | Control | Range | Default |
+|---:|---|---:|---:|
+| 4 | Bypass (toggle) | 0..1 | 0 |
+| 5 | Input gain (G) | 0..1000 | 1 |
+| 6 | Output gain (G) | 0..1000 | 1 |
+| 7 | Enable input LUFS limitation (toggle) | 0..1 | 1 |
+| 8 | Input LUFS limiter threshold | -36..0 | -9 |
+| 13 | Clipping threshold (dB) | -48..0 | 0 |
+| 14 | Boosting mode (toggle) | 0..1 | 1 |
+| 15 | Dithering mode (integer) | 0..8 | 0 (None) |
+| 17 | Overdrive protection (toggle) | 0..1 | 1 |
+| 18 | ODP threshold (dB) | -12..0 | -3 |
+| 19 | ODP knee (dB) | 0..6 | 1.5 |
+| 20 | ODP reactivity (ms, log) | 1..200 | 53.183 |
+| 21 | Clipper enable (toggle) | 0..1 | 1 |
+| 22 | Clipper sigmoid function (integer) | 0..10 | unspecified → 0 |
+| 23 | Clipper sigmoid threshold (G, log) | 0..1 | 0.75 |
+| 24 | Clipper DC offset (%) | -100..100 | 0 |
+| 25 | Clipper DC compensate (toggle) | 0..1 | 1 |
+| 26 | Clipper sigmoid pumping (dB) | -12..12 | 0 |
+| 28 | Stereo link (%) | 0..100 | 50 |
+| 57 | latency (output) | — | unspecified |
+
+Clipper defaults LUFS limitation and ODP **on**; disable those explicitly for
+any intended musical-drive configuration. Default dither is None. Do not infer
+that a sigmoid default of 0 means bypass; port 21 is separately enabled.
+
+`ladspa_dump.cpp` emits LADSPA-hint-derived defaults (sample-rate scaling,
+logarithmic interpolation, integer rounding and toggle normalization) at
+48 kHz. It decodes masked `DEFAULT_*` enum values, not individual bits;
+`DEFAULT_NONE` is marked unspecified. Focused formula checks live in
+`patches/ladspa_hint_defaults_test.cpp`.

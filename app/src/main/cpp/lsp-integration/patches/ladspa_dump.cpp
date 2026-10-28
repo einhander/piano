@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cstdlib>
 #include "ladspa/ladspa.h"
+#include "ladspa_hint_defaults.h"
 
 int main(int argc, char **argv) {
     const char *so_path = (argc > 1) ? argv[1] : "lsp-plugins-ladspa.so";
@@ -30,9 +31,20 @@ int main(int argc, char **argv) {
                     while (*nn && idx < p) { ++nn; ++idx; }
                     if (*nn && idx == p) pname = *nn;
                 }
-                std::printf("  [%3lu] %-6s %-30s hintdesc=0x%lx lo=%g hi=%g\n",
+                const LADSPA_PortRangeHintDescriptor hints = hh->HintDescriptor;
+                const bool bounded_below = (hints & LADSPA_HINT_BOUNDED_BELOW) != 0;
+                const bool bounded_above = (hints & LADSPA_HINT_BOUNDED_ABOVE) != 0;
+                const float lo = bounded_below ? hh->LowerBound : 0.0f;
+                const float hi = bounded_above ? hh->UpperBound : 0.0f;
+                const float scale = (hints & LADSPA_HINT_SAMPLE_RATE) ? 48000.0f : 1.0f;
+                const float dfl = ladspa_hint_default(hints, lo, hi, 48000.0f);
+                std::printf("  [%3lu] %-6s %-30s hintdesc=0x%lx lo=%g hi=%g default=%s%g%s\n",
                     p, kind, pname, (unsigned long)hh->HintDescriptor,
-                    hh->LowerBound, hh->UpperBound);
+                    bounded_below ? hh->LowerBound * scale : 0.0f,
+                    bounded_above ? hh->UpperBound * scale : 0.0f,
+                    (hints & LADSPA_HINT_DEFAULT_MASK) == LADSPA_HINT_DEFAULT_NONE ? "unspecified(" : "",
+                    dfl,
+                    (hints & LADSPA_HINT_DEFAULT_MASK) == LADSPA_HINT_DEFAULT_NONE ? ")" : "");
             }
         }
         ++n;
@@ -41,4 +53,3 @@ int main(int argc, char **argv) {
     dlclose(h);
     return 0;
 }
-
