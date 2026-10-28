@@ -80,10 +80,40 @@ NEEDED `libdl.so`, `libc++_shared.so`, `libm.so`, `libc.so`. Validator:
 host LADSPA enumeration is 168.
 
 The Android build script enables `LSP_ANDROID_INSTANTIATE_DIAGNOSTIC=1` and the
-Android diagnostic patch remains active. Artifact is diagnostic, not production:
-markers write to app files and failed init bypasses cleanup. Do not package as
-production without a separate diagnostic-off rebuild. Build printed non-fatal
-missing-`pkg-config` warnings.
+Android diagnostic patch remains available only as explicit opt-in. Production
+build behavior is documented below; diagnostic artifact from earlier Stage A
+is not the production prebuilt.
+
+## Production Android prebuilt
+
+Updated `build-lsp-ladspa-android.sh`: diagnostics default to `0`, diagnostic
+patch is applied only when explicitly enabled, and build/config paths can be
+isolated using `LSP_BUILDDIR` and `LSP_CONFIG`. Production build and copy:
+
+```sh
+LSP_BUILDDIR=.build-stage-a-production-20261028 \
+LSP_CONFIG=.config-stage-a-production-20261028.mk \
+LSP_ANDROID_INSTANTIATE_DIAGNOSTIC=0 \
+ANDROID_SDK_ROOT="$HOME/tools/android-sdk" \
+JAVA_HOME="$HOME/tools/jdk-17.0.14+7" \
+PATH="$HOME/tools/jdk-17.0.14+7/bin:$PATH" \
+bash app/src/main/cpp/lsp-integration/build-lsp-ladspa-android.sh
+cp app/src/main/cpp/third_party/lsp/.build-stage-a-production-20261028/target/lsp-plugin-fw/lsp-plugins-ladspa.so \
+  app/src/main/cpp/lsp-integration/prebuilt/arm64-v8a/liblsp-plugins-ladspa.so
+```
+
+Build exit 0 using NDK 26.1.10909125. The ignored prebuilt has SHA-256
+`939c4eed49c828d320346969489bb338285494fda04e706dfdd9e971aff359dd`, AArch64
+ELF64/Android API 26, exports `ladspa_descriptor`, and depends only on
+`libdl.so`, `libc++_shared.so`, `libm.so`, `libc.so`. `strings` check found no
+`WI_ENTER`, `I_ENTER`, or marker-file strings. Thus this copy has no diagnostic
+markers/cleanup bypass. Prebuilt path is the Gradle `jniLibs` source configured
+in `app/build.gradle.kts`; only arm64-v8a is supplied. CI now builds in a
+separate diagnostic-off output directory and copies same target path.
+
+`prebuilt/README.md` records regeneration and license/source attribution. The
+three added plugin module roots contain `COPYING` and `COPYING.LESSER`; this is
+not a legal-compliance determination.
 
 ## Artistic Delay callback-safety gate: reject LADSPA path
 

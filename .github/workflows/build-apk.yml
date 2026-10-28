@@ -135,9 +135,11 @@ jobs:
         # The .so is gitignored; it must be (re)produced here every CI run.
         run: |
           set -e
-          bash app/src/main/cpp/lsp-integration/build-lsp-ladspa-android.sh
+          LSP_BUILDDIR=.build-ci-release LSP_CONFIG=.config-ci-release.mk \
+            LSP_ANDROID_INSTANTIATE_DIAGNOSTIC=0 \
+            bash app/src/main/cpp/lsp-integration/build-lsp-ladspa-android.sh
           mkdir -p app/src/main/cpp/lsp-integration/prebuilt/arm64-v8a
-          cp app/src/main/cpp/third_party/lsp/.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so \
+          cp app/src/main/cpp/third_party/lsp/.build-ci-release/target/lsp-plugin-fw/lsp-plugins-ladspa.so \
              app/src/main/cpp/lsp-integration/prebuilt/arm64-v8a/liblsp-plugins-ladspa.so
           ls -lh app/src/main/cpp/lsp-integration/prebuilt/arm64-v8a/liblsp-plugins-ladspa.so
 

@@ -24,28 +24,46 @@ if [ ! -d "$RT_LIB" ] || [ ! -d "$PLUG_FW" ] || [ ! -d "$COMMON_LIB" ]; then
     exit 1
 fi
 
+apply_patch_once() {
+    local module="$1" patch="$2" sentinel="$3" marker="$4"
+    if git -C "$module" apply --whitespace=nowarn --reverse --check "$patch" >/dev/null 2>&1; then
+        echo "   (already applied)"
+    elif grep -Fq "$marker" "$module/$sentinel"; then
+        # Other deterministic build filtering edits may make a full reverse
+        # check fail even though this patch's source changes are present.
+        echo "   (source marker already present)"
+    else
+        git -C "$module" apply --whitespace=nowarn "$patch"
+    fi
+}
+
 echo ">> Applying lsp-common-lib Android patch"
-git -C "$COMMON_LIB" apply --whitespace=nowarn --reverse --check "$PATCH_DIR/lsp-common-lib-android.patch" >/dev/null 2>&1 \
-    && echo "   (already applied)" \
-    || git -C "$COMMON_LIB" apply --whitespace=nowarn "$PATCH_DIR/lsp-common-lib-android.patch"
+apply_patch_once "$COMMON_LIB" "$PATCH_DIR/lsp-common-lib-android.patch" dependencies.mk 'ANDROID_TARGET'
 
 echo ">> Applying lsp-runtime-lib Android patch"
-git -C "$RT_LIB" apply --whitespace=nowarn --reverse --check "$PATCH_DIR/lsp-runtime-lib-android.patch" >/dev/null 2>&1 \
-    && echo "   (already applied)" \
-    || git -C "$RT_LIB" apply --whitespace=nowarn "$PATCH_DIR/lsp-runtime-lib-android.patch"
+apply_patch_once "$RT_LIB" "$PATCH_DIR/lsp-runtime-lib-android.patch" include/lsp-plug.in/io/charset.h 'Bionic ships <iconv.h>'
 
 echo ">> Applying lsp-plugin-fw Android patch"
-git -C "$PLUG_FW" apply --whitespace=nowarn --reverse --check "$PATCH_DIR/lsp-plugin-fw-android.patch" >/dev/null 2>&1 \
-    && echo "   (already applied)" \
-    || git -C "$PLUG_FW" apply --whitespace=nowarn "$PATCH_DIR/lsp-plugin-fw-android.patch"
+apply_patch_once "$PLUG_FW" "$PATCH_DIR/lsp-plugin-fw-android.patch" dependencies.mk 'Bionic libc also has pthread and rt built in'
 
-echo ">> Applying lsp-plugin-fw Android diagnostic patch (instantiate markers)"
-# DIAGNOSTIC ONLY: adds persistent sub-step markers to the LADSPA instantiate()
-# function and bypasses destructive cleanup after init failure. Remove for
-# production. Safe to apply multiple times (idempotent check).
-git -C "$PLUG_FW" apply --whitespace=nowarn --reverse --check "$PATCH_DIR/lsp-plugin-fw-android-diag.patch" >/dev/null 2>&1 \
-    && echo "   (already applied)" \
-    || git -C "$PLUG_FW" apply --whitespace=nowarn "$PATCH_DIR/lsp-plugin-fw-android-diag.patch"
+DIAGNOSTIC="${LSP_ANDROID_INSTANTIATE_DIAGNOSTIC:-0}"
+case "$DIAGNOSTIC" in
+    1)
+        echo ">> Enabling OPTIONAL LADSPA instantiate diagnostics (not for release)"
+        git -C "$PLUG_FW" apply --whitespace=nowarn --reverse --check "$PATCH_DIR/lsp-plugin-fw-android-diag.patch" >/dev/null 2>&1 \
+            && echo "   (already applied)" \
+            || git -C "$PLUG_FW" apply --whitespace=nowarn "$PATCH_DIR/lsp-plugin-fw-android-diag.patch"
+        ;;
+    0)
+        echo ">> Ensuring LADSPA instantiate diagnostics are disabled"
+        if git -C "$PLUG_FW" apply --whitespace=nowarn --reverse --check "$PATCH_DIR/lsp-plugin-fw-android-diag.patch" >/dev/null 2>&1; then
+            git -C "$PLUG_FW" apply --reverse --whitespace=nowarn "$PATCH_DIR/lsp-plugin-fw-android-diag.patch"
+        else
+            echo "   (not applied)"
+        fi
+        ;;
+    *) echo "LSP_ANDROID_INSTANTIATE_DIAGNOSTIC must be 0 or 1" >&2; exit 2 ;;
+esac
 
 echo ">> Copying new stub sources into lsp-runtime-lib"
 # The vendored stub header lives under include/lsp-plug.in/3rdparty/, which
