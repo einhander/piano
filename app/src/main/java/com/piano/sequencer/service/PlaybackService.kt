@@ -233,6 +233,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         val latency = NativeEngineBridge.nativeGetLatencyMillis()
         val sharing = NativeEngineBridge.nativeGetSharingMode()
         val perf = NativeEngineBridge.nativeGetPerformanceMode()
+        val stream = NativeEngineBridge.nativeGetStreamDiagnostics()
         val autoTune = NativeEngineBridge.nativeIsAutoTune()
         val underruns = NativeEngineBridge.nativeGetUnderrunCount()
         val callbacks = NativeEngineBridge.nativeGetCallbackCount()
@@ -252,7 +253,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         val gatedCallbacks = NativeEngineBridge.nativeGetGatedCallbackCount()
 
         var line = "[perf] rate=${rate}Hz buf=${bufSize}/${bufCap}F lat=${latency}ms " +
-            "share=${if (sharing == 0) "Excl" else "Shared"} perf=$perf " +
+            "share=${if (sharing == 0) "Excl" else "Shared"} audio_policy=shared-only perf=$perf stream={$stream} " +
             "autoTune=$autoTune underruns=$underruns cb=$callbacks processed=$processed " +
             "midiDrops=$midiDrops cmdDrops=$cmdDrops voices=$voices poly=$poly " +
             "gain=${gain} reverb=$reverb chorus=$chorus interps=$interps " +

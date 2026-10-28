@@ -555,6 +555,13 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetFramesPerBurst(JNIEnv* env,
     return 0;
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetStreamDiagnostics(JNIEnv* env, jclass) {
+    OboeOutput* output = OboeOutput::getInstance();
+    const std::string snapshot = output ? output->getStreamDiagnostics() : "unavailable";
+    return env->NewStringUTF(snapshot.c_str());
+}
+
 JNIEXPORT void JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeUnloadSoundFonts(JNIEnv* env, jclass) {
     NativeEngine* inst = NativeEngine::getInstance();

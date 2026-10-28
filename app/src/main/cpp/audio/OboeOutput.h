@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 
 class OboeOutput : public oboe::AudioStreamCallback {
 public:
@@ -40,6 +41,8 @@ public:
     int32_t getLatencyMillis() const;
     oboe::SharingMode getSharingMode() const;
     oboe::PerformanceMode getPerformanceMode() const;
+    // Snapshot negotiated stream properties. Worker thread only.
+    std::string getStreamDiagnostics() const;
 
     // ── Buffer size control (worker thread — NOT the audio callback) ──
     // autoTune=true (default): the LatencyTuner manages the buffer size

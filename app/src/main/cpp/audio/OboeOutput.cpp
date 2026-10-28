@@ -1,5 +1,6 @@
 #include "OboeOutput.h"
 #include <cmath>
+#include <sstream>
 
 // Out-of-line definitions for inline static data members
 std::atomic<OboeOutput*> OboeOutput::sInstance{nullptr};
@@ -61,12 +62,9 @@ oboe::Result OboeOutput::open() {
         mStream = nullptr;
     }
 
-    // Try exclusive first (lowest latency), fall back to shared. The sharing
-    // mode order is unchanged (Exclusive → Shared).
-    oboe::SharingMode modes[] = {
-        oboe::SharingMode::Exclusive,
-        oboe::SharingMode::Shared
-    };
+    // Controlled diagnostic A/B: request Shared only, without attempting
+    // Exclusive. All other stream requests and rate fallback remain unchanged.
+    oboe::SharingMode modes[] = {oboe::SharingMode::Shared};
 
     // Sample rate: request 48000 first (the engine's design rate); if the
     // device cannot do it, fall back to the device's native rate (no rate
@@ -281,6 +279,21 @@ oboe::PerformanceMode OboeOutput::getPerformanceMode() const {
     std::lock_guard<std::mutex> streamLock(mStreamMutex);
     if (mStream == nullptr) return oboe::PerformanceMode::LowLatency;
     return mStream->getPerformanceMode();
+}
+
+std::string OboeOutput::getStreamDiagnostics() const {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
+    if (mStream == nullptr) return "closed";
+    std::ostringstream out;
+    out << "api=" << oboe::convertToText(mStream->getAudioApi())
+        << ",format=" << oboe::convertToText(mStream->getFormat())
+        << ",channels=" << mStream->getChannelCount()
+        << ",rate=" << mStream->getSampleRate()
+        << ",sharing=" << oboe::convertToText(mStream->getSharingMode())
+        << ",performance=" << oboe::convertToText(mStream->getPerformanceMode())
+        << ",state=" << oboe::convertToText(mStream->getState())
+        << ",device=" << mStream->getDeviceId();
+    return out.str();
 }
 
 // ── Buffer size control (worker thread) ──────────────────────────────────────

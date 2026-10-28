@@ -184,6 +184,8 @@ object NativeEngineBridge {
     external fun nativeGetPerformanceMode(): Int
     // [perf]: frames per Oboe burst (one-time dump; buffer = N×burst).
     external fun nativeGetFramesPerBurst(): Int
+    // Negotiated Oboe stream properties; query from worker thread only.
+    external fun nativeGetStreamDiagnostics(): String
 
     external fun nativeUnloadSoundFonts()
     external fun nativeUnloadSoundFont(sfId: Int): Boolean
