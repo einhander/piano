@@ -5,17 +5,22 @@ namespace piano {
 namespace lsp {
 
 AudioEffect* LspEffectFactory::create(int slot) {
-    const LadspaBinding* b = bindingForSlot(slot);
+    const LadspaBinding* b = slot < kMasterEffectCount ? bindingForSlot(slot) : instrumentBindingForSlot(slot);
     if (!b) {
         // Unknown slot — return an unavailable placeholder so the chain slot
         // count stays fixed. (Should not happen for the 3 fixed slots.)
-        return new ladspa::LadspaEffect(slot, nullptr);
+        return new ladspa::LadspaEffect(slot, nullptr, nullptr);
     }
     const LADSPA_Descriptor* d = ladspa::LadspaRegistry::instance().findByLabel(b->label);
     // Even if the descriptor is missing (bundle not loaded / label not found),
     // return an effect object; it will report isAvailable()==false and the
     // chain bypasses it. This keeps the engine running without the LSP bundle.
-    return new ladspa::LadspaEffect(slot, d);
+    return new ladspa::LadspaEffect(slot, b, d);
+}
+
+AudioEffect* LspEffectFactory::createById(const char* stableId) {
+    const int slot = effectSlotForId(stableId);
+    return slot < 0 ? new ladspa::LadspaEffect(-1, nullptr) : create(slot);
 }
 
 } // namespace lsp

@@ -233,3 +233,51 @@ logarithmic interpolation, integer rounding and toggle normalization) at
 48 kHz. It decodes masked `DEFAULT_*` enum values, not individual bits;
 `DEFAULT_NONE` is marked unspecified. Focused formula checks live in
 `patches/ladspa_hint_defaults_test.cpp`.
+
+## Stage B/C native instrument inserts
+
+Master `kBindings[]` remains exactly three entries. Instrument indices 0–2 and master catalog remain EQ/Compressor/Limiter;
+instrument-only indices 3/4 are `lsp.chorus` (`chorus_stereo`) and
+`lsp.clipper` (`clipper_stereo`). Compiled-host-verified controls exposed:
+The instrument pending parameter banks grow by two slots × 16 channels × 512
+entries × (`atomic<float>` + `atomic<bool>`), approximately 80 KiB on Android.
+
+| ID / parameter | Port | Range / default | Meaning |
+|---|---:|---|---|
+| Chorus bypass | 4 | 0..1 / 0 | toggle |
+| Rate | 13 | .01..20 Hz / .447214 | log |
+| Voices | 20 | 0..14 / 0 | integer |
+| Depth | 21 | .1..20 ms / 5.075 | |
+| Feedback | 40 | 0..0.891251 / 0 | linear gain; feedback enable port 39 forced OFF |
+| Mix | 47 | 0..100% / 100 | balance; dry/wet and gains retain compiled defaults |
+| Clipper bypass | 4 | 0..1 / 0 | toggle |
+| Input drive | 5 | 1..10 / 1 | linear gain; changes slew ≤0.05 gain per callback block |
+| Curve | 22 | 0..10 / 0 | integer enum (UI labels require LSP enum mapping) |
+| Threshold | 13 | -48..0 dB / 0 | |
+| Output gain | 6 | 0.01..1 / 0.5 | conservative linear gain |
+
+Clipper LUFS(7), boosting(14), dither(15), and ODP(17) are explicitly set OFF;
+clipper enable(21) remains ON. Clipper ODP reactivity (port 20) is hidden and
+set to supported minimum 1 ms before warm-up; pinned DSP reports latency
+unconditionally from this control even when ODP is disabled. Chorus oversampling (compiled port 8,
+integer/toggled range 0..10) is explicitly set to zero. Chorus feedback is
+disabled while compiled dry/wet amount defaults are preserved. New plugins
+report no meter snapshots. Scratch output buffers are preallocated when
+descriptor advertises `INPLACE_BROKEN`; new bindings validate audio port
+directions/count. Missing descriptors remain unavailable. Clipper worker
+prewarm validates finite integer latency in 0..128 before publication. Manager
+keeps per-channel 128-frame dry rings warm while preserving legacy output before
+first effective Clipper enable; merely instantiating/restoring a disabled insert
+does not shift timing. The published Clipper runs continuously so bypass does
+not stale its DSP state. Once enabled, delayed dry path persists through bypass
+with a bounded 5 ms alignment transition. `getInstrumentEffectLatencyFrames`
+reports measured frames (expected 22/24 for supported rates).
+host runner is `tests/run_ladspa_instrument_dsp_test.sh` (override via
+`LSP_LADSPA_SO`). Pinned compiled host reports 22/24 frames at 44.1/48 kHz with
+port 20 at supported minimum. Adapter accepts and retains measured latency;
+availability stays immutable after publication. Raw DSP test proves
+nonlinear residual 0.04743, DC 0.00189, peak 0.12559 at 44.1 kHz with the
+audited drive settings; at 48 kHz residual 0.05233, DC 0.01705, peak 0.12559.
+Impulse onset matches reported 22/24-frame latency. Manager synthetic fixture
+tests dry/wet alignment, warmed activation, bypass transitions and >128-frame
+rejection. Android diagnostic artifact must not be shipped.

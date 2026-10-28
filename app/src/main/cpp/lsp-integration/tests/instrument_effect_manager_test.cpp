@@ -4,11 +4,14 @@
 #include <cassert>
 #include <cmath>
 #include <memory>
+#include <thread>
+#include <atomic>
 
 using namespace piano;
 
 namespace {
 bool failSlotZero = false;
+int fakeClipperLatency = 2;
 class FakeEffect final : public AudioEffect {
 public:
     explicit FakeEffect(bool usable = true) : usable(usable) {}
@@ -25,14 +28,35 @@ public:
     int getLatencyFrames() const noexcept override { return 0; }
     float value=0; double sampleRate=0; bool bypassed=true, available=false, usable=true;
 };
+class LatencyEffect final : public AudioEffect {
+public:
+ explicit LatencyEffect(int latency):latency(latency){}
+ bool prepare(double,int) override { return available=true; }
+ void process(float* l,float* r,int n) noexcept override {
+  for(int i=0;i<n;++i){float a=left[(cursor-latency+128)%128],b=right[(cursor-latency+128)%128];left[cursor]=l[i];right[cursor]=r[i];l[i]=a+.25f;r[i]=b+.25f;cursor=(cursor+1)%128;}
+ }
+ void setParameter(uint32_t,float) noexcept override {} float getParameter(uint32_t)const noexcept override{return 0;}
+ void setBypassed(bool b) noexcept override{bypassed=b;} bool isBypassed()const noexcept override{return bypassed;}
+ const char* stableId()const noexcept override{return lsp::kIdClipper;} bool isAvailable()const noexcept override{return available;}
+ int getLatencyFrames()const noexcept override{return latency;}
+ int latency,cursor=0; float left[128]{},right[128]{}; bool available=false,bypassed=true;
+};
 std::unique_ptr<AudioEffect> factory(int slot) {
     if (slot == 0) { if(failSlotZero) return nullptr; return std::make_unique<FakeEffect>(); }
     if (slot == 1) return std::make_unique<FakeEffect>(false);
+    if (slot == lsp::kSlotClipper) return std::make_unique<LatencyEffect>(fakeClipperLatency);
     return nullptr;
 }
 }
 
 int main() {
+    static_assert(sizeof(lsp::kBindings)/sizeof(lsp::kBindings[0]) == 3, "master catalog identity");
+    assert(lsp::effectSlotForId(lsp::kIdParametricEq)==0);
+    assert(lsp::effectSlotForId(lsp::kIdCompressor)==1);
+    assert(lsp::effectSlotForId(lsp::kIdLimiter)==2);
+    assert(lsp::effectSlotForId(lsp::kIdChorus)==3);
+    assert(lsp::effectSlotForId(lsp::kIdClipper)==4);
+    assert(lsp::instrumentBindingForSlot(3) && !lsp::bindingForSlot(3));
     constexpr int frames=256;
     InstrumentEffectManager manager(factory);
     assert(manager.prepare(48000,frames));
@@ -103,4 +127,99 @@ int main() {
     assert(data[7][0] >= before[7][0]-hi);
     assert(data[7][0] <= before[7][0]+hi);
     for(int c=0;c<16;++c) if(c!=7) assert(data[c]==before[c]);
+
+    // Clipper alignment ring is warm before publication, preserves old all-OFF
+    // samples exactly, and stays active when rack/slot bypassed after arming.
+    InstrumentEffectManager aligned(factory);
+    assert(aligned.prepare(48000,frames));
+    std::array<float,frames*2> one{}; float* oneBus[16]{}; oneBus[0]=one.data();
+    for(int block=0;block<3;++block) {
+        for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(block*frames+i+1);
+        auto orig=one; aligned.process(oneBus,frames); assert(one==orig);
+    }
+    assert(aligned.instantiate(0,lsp::kSlotClipper));
+    assert(aligned.effectLatencyFrames(0,lsp::kSlotClipper)==2);
+    aligned.setRackEnabled(0,false);
+    for(int block=3;block<5;++block) {
+        for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(block*frames+i+1);
+        auto orig=one; aligned.process(oneBus,frames); assert(one==orig);
+    }
+    assert(aligned.reprepareQuiescent(48000,frames)); // inactive restore must not arm compensation
+    for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(5*frames+i+1);
+    auto disabledOrig=one; aligned.process(oneBus,frames); assert(one==disabledOrig);
+    aligned.setRackEnabled(0,true);
+    assert(aligned.setEffectEnabledChecked(0,lsp::kSlotClipper,true));
+    for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(6*frames+i+1);
+    aligned.process(oneBus,frames);
+    assert(one[0]!=0.0f);
+    for(int i=frames-8;i<frames;++i) assert(std::fabs(one[i*2]-(float(6*frames+i-1)+.25f))<.001f);
+    assert(aligned.setEffectEnabledChecked(0,lsp::kSlotClipper,false));
+    for(int block=7;block<=8;++block) {
+        for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(block*frames+i+1);
+        aligned.process(oneBus,frames);
+    }
+    for(int i=frames-8;i<frames;++i) assert(std::fabs(one[i*2]-float(8*frames+i-1))<.001f);
+    assert(aligned.setEffectEnabledChecked(0,lsp::kSlotClipper,true));
+    for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(9*frames+i+1);
+    aligned.process(oneBus,frames);
+    assert(std::fabs(one[0]-(float(9*frames-1)+.25f/240.0f))<.002f); // DSP pipeline stayed current while bypassed
+    for(int i=frames-8;i<frames;++i) assert(std::fabs(one[i*2]-(float(9*frames+i-1)+.25f))<.001f);
+    aligned.setRackEnabled(0,false);
+    for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(10*frames+i+1);
+    aligned.process(oneBus,frames);
+    for(int i=frames-8;i<frames;++i) assert(std::fabs(one[i*2]-float(10*frames+i-1))<.001f);
+
+    InstrumentEffectManager firstUse(factory); assert(firstUse.prepare(48000,frames));
+    assert(firstUse.instantiate(0,lsp::kSlotClipper));
+    firstUse.setRackEnabled(0,true); assert(firstUse.setEffectEnabledChecked(0,lsp::kSlotClipper,true));
+    for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(i+1);
+    firstUse.process(oneBus,frames);
+    assert(one[0]==1.0f && one[1]==1.0f); // hold dry timeline until delay history valid
+    for(float sample:one) assert(std::isfinite(sample));
+
+    InstrumentEffectManager instantEnable(factory); assert(instantEnable.prepare(48000,frames));
+    for(int block=0;block<3;++block) {
+        for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(block*frames+i+1);
+        instantEnable.process(oneBus,frames);
+    }
+    assert(instantEnable.instantiate(0,lsp::kSlotClipper)); // published disabled
+    instantEnable.setRackEnabled(0,true);
+    assert(instantEnable.setEffectEnabledChecked(0,lsp::kSlotClipper,true)); // no callback between publish/enable
+    for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(3*frames+i+1);
+    instantEnable.process(oneBus,frames);
+    assert(one[0]==3*frames+1 && one[1]==3*frames+1);
+    for(float sample:one) assert(std::isfinite(sample));
+
+    fakeClipperLatency=128;
+    InstrumentEffectManager maxDelay(factory); assert(maxDelay.prepare(48000,frames));
+    for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(i+1);
+    maxDelay.process(oneBus,frames); assert(maxDelay.instantiate(0,lsp::kSlotClipper));
+    maxDelay.setRackEnabled(0,true); assert(maxDelay.setEffectEnabledChecked(0,lsp::kSlotClipper,true));
+    for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(frames+i+1);
+    maxDelay.process(oneBus,frames);
+    for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(2*frames+i+1);
+    maxDelay.process(oneBus,frames);
+    for(int i=frames-8;i<frames;++i) assert(std::fabs(one[i*2]-(float(2*frames+i+1-128)+.25f))<.001f);
+
+    fakeClipperLatency=129;
+    InstrumentEffectManager invalid(factory); assert(invalid.prepare(48000,frames));
+    assert(!invalid.instantiate(0,lsp::kSlotClipper));
+    fakeClipperLatency=2;
+
+    InstrumentEffectManager stress(factory); assert(stress.prepare(48000,frames));
+    assert(stress.instantiate(0,0));
+    std::atomic<bool> done{false};
+    std::thread rebuild([&]{
+        for(int i=0;i<80;++i) assert(stress.reprepareQuiescent(48000,frames));
+        done.store(true,std::memory_order_release);
+    });
+    int reads=0;
+    do {
+        float value=0; assert(stress.getParameterChecked(0,0,id,value));
+        (void)stress.getParameter(0,0,id);
+        assert(stress.isAvailable(0,0));
+        assert(stress.effectLatencyFrames(0,0)==0);
+        ++reads;
+    } while(!done.load(std::memory_order_acquire) || reads<1000);
+    rebuild.join();
 }

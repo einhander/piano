@@ -4,6 +4,7 @@
 #include <array>
 #include <memory>
 #include <atomic>
+#include <mutex>
 
 namespace piano {
 
@@ -14,7 +15,7 @@ public:
     using EffectFactory = std::unique_ptr<AudioEffect> (*)(int slot);
     enum class PrepareStatus : uint8_t { Unprepared, Ready, InvalidArguments, AllocationFailed, ReprepareRequiresQuiescence };
     static constexpr int kChannels = 16;
-    static constexpr int kEffects = 3;
+    static constexpr int kEffects = 5;
     explicit InstrumentEffectManager(EffectFactory factory = nullptr) noexcept;
     ~InstrumentEffectManager();
     InstrumentEffectManager(const InstrumentEffectManager&) = delete;
@@ -42,6 +43,7 @@ public:
     void setParameter(int channel, int slot, uint32_t id, float value) noexcept;
     float getParameter(int channel, int slot, uint32_t id) const noexcept;
     bool isAvailable(int channel, int slot) const noexcept;
+    int effectLatencyFrames(int channel, int slot) const noexcept;
     void process(float* const buses[kChannels], int frames) noexcept;
 
 private:
@@ -53,12 +55,25 @@ private:
     std::array<std::array<std::array<std::atomic<bool>, 512>, kEffects>, kChannels> mPendingSet{};
     // Callback-thread-owned wet gains; deliberately non-atomic.
     std::array<std::array<float, kEffects>, kChannels> mWetMix{};
+    static constexpr int kClipperDelayCapacity = 128;
+    std::array<std::array<float, kClipperDelayCapacity>, kChannels> mClipperDryL{}, mClipperDryR{};
+    std::array<int, kChannels> mClipperDryCursor{};
+    std::array<int, kChannels> mClipperHistoryCount{};
+    std::array<int, kChannels> mClipperLatency{};
+    std::array<AudioEffect*, kChannels> mClipperWarmEffect{};
+    std::array<int, kChannels> mClipperWarmFrames{};
+    // Callback-owned latch: starts on first effective Clip enable and remains
+    // set across bypass. Reprepare is quiescent and may preserve/reset it.
+    std::array<bool, kChannels> mClipperTimelineActive{};
+    std::array<float, kChannels> mClipperAlignMix{};
     std::array<float*, kChannels> mLeft{}, mRight{};
     double mSampleRate = 0.0;
     int mMaxFrames = 0;
     bool mPrepared = false;
     std::atomic<PrepareStatus> mPrepareStatus{PrepareStatus::Unprepared};
     std::atomic_flag mControlBusy = ATOMIC_FLAG_INIT;
+    // Control/getter lifetime guard. Audio callback never acquires this mutex.
+    mutable std::mutex mLifetimeMutex;
     EffectFactory mFactory = nullptr;
 };
 }

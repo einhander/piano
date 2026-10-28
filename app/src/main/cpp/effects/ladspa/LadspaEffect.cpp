@@ -70,7 +70,10 @@ static void writePrepareMarker(const char* line) {
 }
 
 LadspaEffect::LadspaEffect(int slot, const LADSPA_Descriptor* descriptor)
-    : mSlot(slot), mDescriptor(descriptor), mBinding(lsp::bindingForSlot(slot)) {
+    : LadspaEffect(slot, slot < lsp::kMasterEffectCount ? lsp::bindingForSlot(slot) : lsp::instrumentBindingForSlot(slot), descriptor) {}
+
+LadspaEffect::LadspaEffect(int slot, const lsp::LadspaBinding* binding, const LADSPA_Descriptor* descriptor)
+    : mSlot(slot), mDescriptor(descriptor), mBinding(binding) {
 }
 
 LadspaEffect::~LadspaEffect() {
@@ -111,10 +114,33 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
     if (mPortCount == 0) {
         return false;
     }
+    if (!mDescriptor->PortDescriptors || !mDescriptor->PortRangeHints || !mDescriptor->connect_port || !mDescriptor->run ||
+        mPortCount <= static_cast<unsigned long>(std::max({mBinding->audioInL,mBinding->audioInR,mBinding->audioOutL,mBinding->audioOutR,mBinding->bypassPort,mBinding->latencyPort}))) return false;
+    if (mSlot >= lsp::kSlotChorus) {
+        for (int p : {mBinding->audioInL,mBinding->audioInR}) if (!LADSPA_IS_PORT_AUDIO(mDescriptor->PortDescriptors[p]) || !LADSPA_IS_PORT_INPUT(mDescriptor->PortDescriptors[p])) return false;
+        for (int p : {mBinding->audioOutL,mBinding->audioOutR}) if (!LADSPA_IS_PORT_AUDIO(mDescriptor->PortDescriptors[p]) || !LADSPA_IS_PORT_OUTPUT(mDescriptor->PortDescriptors[p])) return false;
+        int parameterCount=0;
+        const auto* params=lsp::paramTable(mSlot,parameterCount);
+        for (int i=0;i<parameterCount;++i) {
+            const int p=params[i].port;
+            if (p<0 || static_cast<unsigned long>(p)>=mPortCount || !LADSPA_IS_PORT_CONTROL(mDescriptor->PortDescriptors[p]) || !LADSPA_IS_PORT_INPUT(mDescriptor->PortDescriptors[p])) return false;
+        }
+        if (mBinding->bypassPort<0 || !LADSPA_IS_PORT_CONTROL(mDescriptor->PortDescriptors[mBinding->bypassPort]) ||
+            !LADSPA_IS_PORT_INPUT(mDescriptor->PortDescriptors[mBinding->bypassPort]) ||
+            !LADSPA_IS_PORT_CONTROL(mDescriptor->PortDescriptors[mBinding->latencyPort]) ||
+            !LADSPA_IS_PORT_OUTPUT(mDescriptor->PortDescriptors[mBinding->latencyPort])) return false;
+    }
+    if (mSlot == lsp::kSlotClipper &&
+        (mPortCount <= 20 || !mDescriptor->PortNames ||
+         std::strcmp(mDescriptor->PortNames[20], "Overdrive protection reactivity (ms)") != 0)) return false;
+    if (mDescriptor->Properties & LADSPA_PROPERTY_INPLACE_BROKEN) {
+        mScratchL = std::make_unique<float[]>(maxFrames);
+        mScratchR = std::make_unique<float[]>(maxFrames);
+    }
 
     // Discover only output control ports using pinned LSP names. Unit suffixes
     // vary by generated descriptor; match the exact semantic prefix.
-    if (mSlot != lsp::kSlotEq && mDescriptor->PortDescriptors && mDescriptor->PortNames) {
+    if ((mSlot == lsp::kSlotCompressor || mSlot == lsp::kSlotLimiter) && mDescriptor->PortNames) {
         const char* names[] = {"Input level meter Left", "Input level meter Right",
             "Output level meter Left", "Output level meter Right",
             mSlot == lsp::kSlotCompressor ? "Reduction level meter Left" : "Gain reduction level meter Left",
@@ -199,17 +225,26 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
         mParams[i].paramId = table[i].paramId;
         mParams[i].port = table[i].port;
         mParams[i].value.store(table[i].def);
+        mParams[i].smoothed = table[i].def;
         mParams[i].logarithmic = table[i].logarithmic;
     }
 
     // Apply defaults into the port storage immediately so the plugin starts
     // from a known state.
     for (int i = 0; i < mParamCount; ++i) {
-        const AtomicParam& p = mParams[i];
+        AtomicParam& p = mParams[i];
         if (p.port >= 0 && static_cast<unsigned long>(p.port) < mPortCount) {
-            mPortValues[p.port] = p.value.load(std::memory_order_relaxed);
+            const float target=p.value.load(std::memory_order_relaxed);
+            if (mSlot==lsp::kSlotClipper && p.paramId==lsp::kParamClipperDrive)
+                p.smoothed += std::clamp(target-p.smoothed,-0.05f,0.05f);
+            else p.smoothed=target;
+            mPortValues[p.port] = p.smoothed;
         }
     }
+
+    // Pinned Clipper derives latency from ODP reactivity even when ODP is off.
+    // Pin the hidden ODP reactivity to supported LADSPA minimum (1 ms); do not expose it.
+    if (mSlot == lsp::kSlotClipper) mPortValues[20] = 1.0f;
 
     // Activate (if supported). LADSPA activate() is non-realtime; called once
     // before the first run().
@@ -223,10 +258,31 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
         mActivated = true;
     }
 
-    // Clear the marker — if we reach here, prepare() succeeded.
-    writePrepareMarker("done");
     mLatencyPort = mBinding->latencyPort;
     mLatencyFrames = 0;
+
+    if (mSlot == lsp::kSlotClipper) {
+        // Warm plugin settings/state on control thread using preallocated zeroed
+        // audio storage. Validate reported latency before publication.
+        auto warmL=std::make_unique<float[]>(maxFrames);
+        auto warmR=std::make_unique<float[]>(maxFrames);
+        std::fill_n(warmL.get(),maxFrames,0.0f);
+        std::fill_n(warmR.get(),maxFrames,0.0f);
+        mDescriptor->connect_port(mHandle,mBinding->audioInL,warmL.get());
+        mDescriptor->connect_port(mHandle,mBinding->audioInR,warmR.get());
+        mDescriptor->connect_port(mHandle,mBinding->audioOutL,warmL.get());
+        mDescriptor->connect_port(mHandle,mBinding->audioOutR,warmR.get());
+        mDescriptor->run(mHandle,static_cast<unsigned long>(maxFrames));
+        const float latency=mPortValues[mLatencyPort];
+        if (!std::isfinite(latency) || latency < 0.0f || latency > 128.0f || std::floor(latency)!=latency) {
+            cleanupInstance();
+            return false;
+        }
+        mLatencyFrames=static_cast<int>(latency);
+    }
+
+    // Clear the marker — if we reach here, prepare() succeeded.
+    writePrepareMarker("done");
 
     mPrepared = true;
     mAvailable = true;
@@ -237,9 +293,13 @@ void LadspaEffect::applyParameters() noexcept {
     // Copy the atomic pending values into the LADSPA control-port storage.
     // Plain float writes — realtime-safe.
     for (int i = 0; i < mParamCount; ++i) {
-        const AtomicParam& p = mParams[i];
+        AtomicParam& p = mParams[i];
         if (p.port >= 0 && static_cast<unsigned long>(p.port) < mPortCount) {
-            mPortValues[p.port] = p.value.load(std::memory_order_relaxed);
+            const float target=p.value.load(std::memory_order_relaxed);
+            if (mSlot==lsp::kSlotClipper && p.paramId==lsp::kParamClipperDrive)
+                p.smoothed += std::clamp(target-p.smoothed,-0.05f,0.05f);
+            else p.smoothed=target;
+            mPortValues[p.port] = p.smoothed;
         }
     }
 }
@@ -269,12 +329,15 @@ void LadspaEffect::process(float* left, float* right, int numFrames) noexcept {
     // connect_port is a pointer store — realtime-safe.
     mDescriptor->connect_port(mHandle, static_cast<unsigned long>(mBinding->audioInL),  left);
     mDescriptor->connect_port(mHandle, static_cast<unsigned long>(mBinding->audioInR),  right);
-    mDescriptor->connect_port(mHandle, static_cast<unsigned long>(mBinding->audioOutL), left);
-    mDescriptor->connect_port(mHandle, static_cast<unsigned long>(mBinding->audioOutR), right);
+    float* outL = mScratchL ? mScratchL.get() : left;
+    float* outR = mScratchR ? mScratchR.get() : right;
+    mDescriptor->connect_port(mHandle, static_cast<unsigned long>(mBinding->audioOutL), outL);
+    mDescriptor->connect_port(mHandle, static_cast<unsigned long>(mBinding->audioOutR), outR);
 
     // run() — realtime DSP. The plugin reads control ports from mPortValues
     // (set above) and the audio ports (connected above).
     mDescriptor->run(mHandle, static_cast<unsigned long>(numFrames));
+    if (mScratchL) { std::memcpy(left, outL, sizeof(float)*numFrames); std::memcpy(right, outR, sizeof(float)*numFrames); }
 
     for (int i = 0; i < 6; ++i) {
         if (mMeterPorts[i] >= 0) mMeters[i].store(mPortValues[mMeterPorts[i]], std::memory_order_relaxed);
@@ -282,12 +345,6 @@ void LadspaEffect::process(float* left, float* right, int numFrames) noexcept {
 
     // Read latency (CTL_OUT) once it is stable. This is a read of a float the
     // plugin wrote during run(); cheap and safe.
-    if (mLatencyPort >= 0 && static_cast<unsigned long>(mLatencyPort) < mPortCount) {
-        float lat = mPortValues[mLatencyPort];
-        if (std::isfinite(lat) && lat >= 0.0f) {
-            mLatencyFrames = static_cast<int>(lat);
-        }
-    }
 }
 
 void LadspaEffect::setParameter(uint32_t parameterId, float value) noexcept {

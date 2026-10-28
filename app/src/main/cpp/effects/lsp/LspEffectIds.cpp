@@ -1,4 +1,5 @@
 #include "LspEffectIds.h"
+#include <cstring>
 
 namespace piano {
 namespace lsp {
@@ -69,6 +70,23 @@ static const ParamPort kLimPorts[] = {
     {kParamLimKneeDb,       44,  -48.0f,  0.0f,       0.0f, false, false, false},
 };
 
+static const ParamPort kChPorts[] = {
+ {kParamBypass,4,0,1,0,false,false,true},{kParamChorusRate,13,.01f,20,.447214f,true,false,false},
+ {kParamChorusVoices,20,0,14,0,false,true,false},{kParamChorusDepth,21,.1f,20,5.075f,false,false,false},
+ {kParamChorusFeedback,40,0,.891251f,0,false,false,false},{kParamChorusMix,47,0,100,100,false,false,false},
+ {kParamInputGain,44,0,1000,1,true,false,false},{kParamOutputGain,48,0,1000,1,true,false,false},
+ {kParamChorusOversampling,8,0,10,0,false,true,true},{kParamChorusFeedbackEnable,39,0,1,0,false,false,true},
+ {kParamChorusDryAmount,45,0,10,1,true,false,false},{kParamChorusWetAmount,46,0,10,7.5f,true,false,false}
+};
+static const ParamPort kClPorts[] = {
+ {kParamBypass,4,0,1,0,false,false,true},{kParamClipperDrive,5,0,10,1,true,false,false},
+ {kParamClipperCurve,22,0,10,0,false,true,false},{kParamClipperThreshold,13,-48,0,0,false,false,false},
+ {kParamClipperOutputGain,6,0,1,.5f,true,false,false},
+ {kParamClipperLufsEnable,7,0,1,0,false,false,true},{kParamClipperBoostEnable,14,0,1,0,false,false,true},
+ {kParamClipperDither,15,0,8,0,false,true,false},{kParamClipperOdpEnable,17,0,1,0,false,false,true},
+ {kParamClipperEnabled,21,0,1,1,false,false,true}
+};
+
 const ParamPort* paramTable(int slot, int& count) {
     switch (slot) {
         case kSlotEq:
@@ -80,6 +98,8 @@ const ParamPort* paramTable(int slot, int& count) {
         case kSlotLimiter:
             count = static_cast<int>(sizeof(kLimPorts) / sizeof(kLimPorts[0]));
             return kLimPorts;
+        case kSlotChorus: count=sizeof(kChPorts)/sizeof(kChPorts[0]); return kChPorts;
+        case kSlotClipper: count=sizeof(kClPorts)/sizeof(kClPorts[0]); return kClPorts;
         default:
             count = 0;
             return nullptr;
@@ -152,6 +172,16 @@ static const EffectParameterDescriptor kLimDescriptors[] = {
     {kParamLimReleaseMs,   "release",     "Release (ms)",  0.25f,   20.0f,     5.0f, false, false, false},
     {kParamLimKneeDb,      "knee_db",     "Knee (dB)",    -48.0f,  0.0f,       0.0f, false, false, false},
 };
+static const EffectParameterDescriptor kChDescriptors[] = {
+ {kParamBypass,"bypass","Bypass",0,1,0,false,false,true},{kParamChorusRate,"rate_hz","Rate (Hz)",.01f,20,.447214f,true,false,false},
+ {kParamChorusVoices,"voices","Voices",0,14,0,false,true,false},{kParamChorusDepth,"depth_ms","Depth (ms)",.1f,20,5.075f,false,false,false},
+ {kParamChorusFeedback,"feedback","Feedback",0,.891251f,0,false,false,false},{kParamChorusMix,"mix","Mix (%)",0,100,100,false,false,false}
+};
+static const EffectParameterDescriptor kClDescriptors[] = {
+ {kParamBypass,"bypass","Bypass",0,1,0,false,false,true},{kParamClipperDrive,"drive","Input drive (linear gain)",1,10,1,true,false,false},
+ {kParamClipperCurve,"curve","Curve enum",0,10,0,false,true,false},{kParamClipperThreshold,"threshold_db","Threshold (dB)",-48,0,0,false,false,false},
+ {kParamClipperOutputGain,"output_gain","Output gain (linear)",.01f,1,.5f,true,false,false}
+};
 
 const EffectParameterDescriptor* paramDescriptors(int slot, int& count) {
     switch (slot) {
@@ -164,16 +194,25 @@ const EffectParameterDescriptor* paramDescriptors(int slot, int& count) {
         case kSlotLimiter:
             count = static_cast<int>(sizeof(kLimDescriptors) / sizeof(kLimDescriptors[0]));
             return kLimDescriptors;
+        case kSlotChorus: count=sizeof(kChDescriptors)/sizeof(kChDescriptors[0]); return kChDescriptors;
+        case kSlotClipper: count=sizeof(kClDescriptors)/sizeof(kClDescriptors[0]); return kClDescriptors;
         default:
             count = 0;
             return nullptr;
     }
 }
 
+int effectSlotForId(const char* id) {
+ if (!id) return -1;
+ for (int i=0;i<kMasterEffectCount;++i) if (std::strcmp(id,kBindings[i].stableId)==0) return i;
+ for (int i=0;i<2;++i) if (std::strcmp(id,kInstrumentBindings[i].stableId)==0) return i+3;
+ return -1;
+}
+
 const char* paramDisplayName(uint32_t paramId) {
     // Names are the same across effects for shared ids; search any table.
     int count = 0;
-    for (int slot = 0; slot < kMasterEffectCount; ++slot) {
+    for (int slot = 0; slot < kInstrumentEffectCount; ++slot) {
         const EffectParameterDescriptor* d = paramDescriptors(slot, count);
         for (int i = 0; i < count; ++i) {
             if (d[i].id == paramId) return d[i].displayName;

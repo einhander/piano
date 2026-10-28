@@ -34,6 +34,7 @@ public:
     // from the LadspaRegistry by the factory before construction; if nullptr,
     // the effect is unavailable.
     LadspaEffect(int slot, const LADSPA_Descriptor* descriptor);
+    LadspaEffect(int catalogSlot, const lsp::LadspaBinding* binding, const LADSPA_Descriptor* descriptor);
     ~LadspaEffect() override;
 
     bool prepare(double sampleRate, int maxFrames) override;
@@ -92,6 +93,7 @@ private:
     float* mInR = nullptr;
     float* mOutL = nullptr;
     float* mOutR = nullptr;
+    std::unique_ptr<float[]> mScratchL, mScratchR;
 
     // Pending parameter values, written atomically from any thread and read
     // at the top of process(). A fixed array (sized once in prepare()) —
@@ -102,6 +104,7 @@ private:
         uint32_t paramId;
         int port;
         std::atomic<float> value;
+        float smoothed;
         bool logarithmic;
     };
     std::unique_ptr<AtomicParam[]> mParams;  // fixed, sized in prepare()

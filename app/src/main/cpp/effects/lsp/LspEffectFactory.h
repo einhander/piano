@@ -16,6 +16,7 @@ public:
     // return an unavailable effect (non-null but isAvailable()==false) if the
     // descriptor was not found — never returns null.
     static AudioEffect* create(int slot);
+    static AudioEffect* createById(const char* stableId);
 };
 
 } // namespace lsp

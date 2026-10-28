@@ -17,6 +17,7 @@ InstrumentEffectManager::InstrumentEffectManager(EffectFactory factory) noexcept
     for(auto& channel:mPublished)for(auto& x:channel)x.store(nullptr,std::memory_order_relaxed);
     for(auto& channel:mPendingSet)for(auto& effect:channel)for(auto& x:effect)x.store(false,std::memory_order_relaxed);
     for(auto& channel:mPending)for(auto& effect:channel)for(auto& x:effect)x.store(0.0f,std::memory_order_relaxed);
+    mClipperTimelineActive.fill(false);
     mLeft.fill(nullptr); mRight.fill(nullptr);
 }
 
@@ -43,6 +44,9 @@ bool InstrumentEffectManager::prepare(double sampleRate, int maxFrames) {
     }
     mLeft=left; mRight=right;
     for (auto& channel : mWetMix) channel.fill(0.0f);
+    for (auto& row:mClipperDryL) row.fill(0.0f);
+    for (auto& row:mClipperDryR) row.fill(0.0f);
+    mClipperDryCursor.fill(0); mClipperHistoryCount.fill(0); mClipperLatency.fill(0); mClipperTimelineActive.fill(false); mClipperAlignMix.fill(0.0f);
     mSampleRate = sampleRate;
     mMaxFrames = maxFrames;
     mPrepared=true;
@@ -55,6 +59,7 @@ bool InstrumentEffectManager::reprepareQuiescent(double sampleRate, int maxFrame
         mPrepareStatus.store(PrepareStatus::InvalidArguments, std::memory_order_release);
         return false;
     }
+    std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
     while (mControlBusy.test_and_set(std::memory_order_acquire)) std::this_thread::yield();
     struct Unlock { std::atomic_flag& f; ~Unlock(){f.clear(std::memory_order_release);} } unlock{mControlBusy};
     // Stage every fallible operation before changing published state.
@@ -80,6 +85,10 @@ bool InstrumentEffectManager::reprepareQuiescent(double sampleRate, int maxFrame
             mPrepareStatus.store(PrepareStatus::AllocationFailed,std::memory_order_release);
             return false;
         }
+        if(s==lsp::kSlotClipper && (candidate->getLatencyFrames()<0 || candidate->getLatencyFrames()>kClipperDelayCapacity)) {
+            for(int i=0;i<kChannels;++i){std::free(left[i]);std::free(right[i]);}
+            mPrepareStatus.store(PrepareStatus::AllocationFailed,std::memory_order_release); return false;
+        }
         int count=0; const auto* ds=lsp::paramDescriptors(s,count);
         for(int i=0;i<count;++i) if(ds[i].id<512 && mPendingSet[c][s][ds[i].id].load(std::memory_order_acquire))
             candidate->setParameter(ds[i].id,mPending[c][s][ds[i].id].load(std::memory_order_relaxed));
@@ -91,10 +100,19 @@ bool InstrumentEffectManager::reprepareQuiescent(double sampleRate, int maxFrame
     for(auto& row:mEffects) for(auto& effect:row) effect.reset();
     for(int c=0;c<kChannels;++c){std::free(mLeft[c]);std::free(mRight[c]);}
     mLeft=left; mRight=right;
+    for(auto& row:mClipperDryL) row.fill(0.0f);
+    for(auto& row:mClipperDryR) row.fill(0.0f);
+    mClipperDryCursor.fill(0); mClipperHistoryCount.fill(0); mClipperLatency.fill(0); mClipperAlignMix.fill(0.0f);
+    mClipperWarmEffect.fill(nullptr); mClipperWarmFrames.fill(0);
     for(int c=0;c<kChannels;++c) for(int s=0;s<kEffects;++s) {
         mEffects[c][s]=std::move(staged[c][s]);
+        if(s==lsp::kSlotClipper && mEffects[c][s]) {
+            mClipperLatency[c]=mEffects[c][s]->getLatencyFrames();
+        }
         mPublished[c][s].store(mEffects[c][s].get(),std::memory_order_release);
     }
+    for(int c=0;c<kChannels;++c) if(mEffects[c][lsp::kSlotClipper])
+        mClipperWarmEffect[c]=nullptr; // quiescent pointer replacement resets DSP warm-up
     for(auto& channel:mWetMix) channel.fill(0.0f);
     mSampleRate=sampleRate; mMaxFrames=maxFrames; mPrepared=true;
     mPrepareStatus.store(PrepareStatus::Ready,std::memory_order_release);
@@ -115,7 +133,12 @@ bool InstrumentEffectManager::instantiate(int channel, int slot) {
     for(int i=0;i<count;++i) if(descriptors[i].id < 512 && mPendingSet[channel][slot][descriptors[i].id].load())
         candidate->setParameter(descriptors[i].id,mPending[channel][slot][descriptors[i].id].load());
     candidate->setBypassed(false);
+    const int clipperLatency=slot==lsp::kSlotClipper?candidate->getLatencyFrames():0;
+    if(slot==lsp::kSlotClipper && (clipperLatency<0 || clipperLatency>kClipperDelayCapacity)) return false;
     effect = std::move(candidate);
+    if (slot==lsp::kSlotClipper) {
+        mClipperLatency[channel]=clipperLatency;
+    }
     mPublished[channel][slot].store(effect.get(),std::memory_order_release);
     return true;
 }
@@ -129,6 +152,7 @@ bool InstrumentEffectManager::setEffectEnabledChecked(int channel,int slot,bool 
 }
 bool InstrumentEffectManager::setParameterChecked(int c,int s,uint32_t id,float v) noexcept { return setParameterBeforeInstantiate(c,s,id,v); }
 bool InstrumentEffectManager::getParameterChecked(int c,int s,uint32_t id,float& value) const noexcept {
+    std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
     if(c<0||c>=kChannels||s<0||s>=kEffects)return false;
     int n=0; const auto* d=lsp::paramDescriptors(s,n); bool valid=false;
     for(int i=0;i<n;++i) if(d[i].id==id){valid=true;break;}
@@ -181,15 +205,23 @@ void InstrumentEffectManager::setParameter(int channel, int slot, uint32_t id, f
 }
 float InstrumentEffectManager::getParameter(int channel, int slot, uint32_t id) const noexcept {
     if (channel < 0 || channel >= kChannels || slot < 0 || slot >= kEffects) return 0.0f;
+    std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
     const auto* effect = mPublished[channel][slot].load(std::memory_order_acquire);
     return effect ? effect->getParameter(id) : 0.0f;
 }
 bool InstrumentEffectManager::isAvailable(int channel, int slot) const noexcept {
     if(channel<0||channel>=kChannels||slot<0||slot>=kEffects)return false;
+    std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
     auto* e=mPublished[channel][slot].load(std::memory_order_acquire);
     if(e) return e->isAvailable();
-    const auto* binding=lsp::bindingForSlot(slot);
+    const auto* binding=slot<lsp::kMasterEffectCount?lsp::bindingForSlot(slot):lsp::instrumentBindingForSlot(slot);
     return binding && ladspa::LadspaRegistry::instance().findByLabel(binding->label)!=nullptr;
+}
+int InstrumentEffectManager::effectLatencyFrames(int channel,int slot) const noexcept {
+    if(channel<0||channel>=kChannels||slot<0||slot>=kEffects)return 0;
+    std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
+    auto* e=mPublished[channel][slot].load(std::memory_order_acquire);
+    return e&&e->isAvailable()?e->getLatencyFrames():0;
 }
 
 void InstrumentEffectManager::process(float* const buses[kChannels], int frames) noexcept {
@@ -197,8 +229,57 @@ void InstrumentEffectManager::process(float* const buses[kChannels], int frames)
     for (int channel = 0; channel < kChannels; ++channel) {
         float* bus = buses[channel];
         if (!bus) continue;
+        // Continuously retain a short input history without modifying output.
+        // Before first Clipper publication the complete rack remains bit-exact.
         for (int slot = 0; slot < kEffects; ++slot) {
             auto* effect = mPublished[channel][slot].load(std::memory_order_acquire);
+            if (slot==lsp::kSlotClipper) {
+                const bool published=effect && effect->isAvailable();
+                const int latency=published?mClipperLatency[channel]:0;
+                float mix=mWetMix[channel][slot];
+                const bool effectiveEnable=mRackEnabled[channel].load(std::memory_order_acquire) &&
+                    mEffectEnabled[channel][slot].load(std::memory_order_acquire) && published && !effect->isBypassed();
+                if (effect != mClipperWarmEffect[channel]) {
+                    mClipperWarmEffect[channel]=effect;
+                    mClipperWarmFrames[channel]=0;
+                }
+                const int warmFramesBefore=mClipperWarmFrames[channel];
+                if (published) {
+                    for(int f=0;f<frames;++f){mLeft[channel][f]=bus[f*2];mRight[channel][f]=bus[f*2+1];}
+                    effect->process(mLeft[channel],mRight[channel],frames);
+                    mClipperWarmFrames[channel]=std::min(kClipperDelayCapacity,warmFramesBefore+frames);
+                }
+                if(effectiveEnable) mClipperTimelineActive[channel]=true;
+                const float alignStep=static_cast<float>(1.0/(mSampleRate*0.005));
+                const float wetTarget=(mClipperTimelineActive[channel] && effectiveEnable)?1.0f:0.0f;
+                const float wetStep=static_cast<float>(1.0/(mSampleRate*0.005));
+                int cursor=mClipperDryCursor[channel];
+                for(int f=0;f<frames;++f) {
+                    const float inL=bus[f*2], inR=bus[f*2+1];
+                    const bool historyReady=latency==0 || mClipperHistoryCount[channel]>=latency;
+                    int read=cursor-latency; if(read<0) read+=kClipperDelayCapacity;
+                    const float delayedL=latency==0?inL:mClipperDryL[channel][read];
+                    const float delayedR=latency==0?inR:mClipperDryR[channel][read];
+                    mClipperDryL[channel][cursor]=inL; mClipperDryR[channel][cursor]=inR;
+                    if(mClipperHistoryCount[channel]<kClipperDelayCapacity) ++mClipperHistoryCount[channel];
+                    float& align=mClipperAlignMix[channel];
+                    const bool pluginWarm=published && warmFramesBefore+f>=latency;
+                    const bool alignReady=mClipperTimelineActive[channel] && historyReady && pluginWarm;
+                    if(alignReady && align<1.0f) align=std::min(1.0f,align+alignStep);
+                    const float dryL=inL+(delayedL-inL)*align, dryR=inR+(delayedR-inR)*align;
+                    const float frameWetTarget=alignReady?wetTarget:0.0f;
+                    if(mix<frameWetTarget) mix=std::min(frameWetTarget,mix+wetStep);
+                    else if(mix>frameWetTarget) mix=std::max(frameWetTarget,mix-wetStep);
+                    const float wetL=published?mLeft[channel][f]:dryL;
+                    const float wetR=published?mRight[channel][f]:dryR;
+                    bus[f*2]=dryL+(wetL-dryL)*mix;
+                    bus[f*2+1]=dryR+(wetR-dryR)*mix;
+                    if(++cursor==kClipperDelayCapacity)cursor=0;
+                }
+                mClipperDryCursor[channel]=cursor;
+                mWetMix[channel][slot]=mix;
+                continue;
+            }
             if (!effect || !effect->isAvailable()) continue;
             float& mix=mWetMix[channel][slot];
             const float target=(mRackEnabled[channel].load(std::memory_order_acquire) && mEffectEnabled[channel][slot].load(std::memory_order_acquire) && !effect->isBypassed()) ? 1.0f : 0.0f;
