@@ -74,10 +74,10 @@ static const ParamPort kLimPorts[] = {
 static const ParamPort kChPorts[] = {
  {kParamBypass,4,0,1,0,false,false,true},{kParamChorusRate,13,.01f,20,.447214f,true,false,false},
  {kParamChorusVoices,20,0,14,0,false,true,false},{kParamChorusDepth,21,.1f,20,5.075f,false,false,false},
- {kParamChorusFeedback,40,0,.891251f,0,false,false,false},{kParamChorusMix,47,0,100,100,false,false,false},
+  {kParamChorusFeedback,40,0,.891251f,0,false,false,false},{kParamChorusMix,47,0,100,100,false,false,false},
  {kParamInputGain,44,0,1000,1,true,false,false},{kParamOutputGain,48,0,1000,1,true,false,false},
  {kParamChorusOversampling,8,0,10,0,false,true,true},{kParamChorusFeedbackEnable,39,0,1,0,false,false,true},
- {kParamChorusDryAmount,45,0,10,1,true,false,false},{kParamChorusWetAmount,46,0,10,7.5f,true,false,false}
+  {kParamChorusDryAmount,45,0,10,1,true,false,false},{kParamChorusWetAmount,46,0,10,.501187f,true,false,false}
 };
 static const ParamPort kClPorts[] = {
  {kParamBypass,4,0,1,0,false,false,true},{kParamClipperDrive,5,0,10,1,true,false,false},
@@ -90,7 +90,8 @@ static const ParamPort kClPorts[] = {
 static const ParamPort kFilterPorts[] = {
  {kParamBypass,4,0,1,0,false,false,true}, {kParamInputGain,5,0,10,1,true,false,false},
  {kParamOutputGain,6,0,10,1,true,false,false}, {kParamFilterCutoff,23,10,24000,1000,true,false,false},
- {kParamFilterResonance,26,0,100,1,false,false,false}, {kParamFilterType,20,0,10,0,false,true,false}
+  {kParamFilterResonance,26,0,100,0,false,false,false}, {kParamFilterType,20,0,10,0,false,true,false},
+  {kParamFilterGain,25,0.01585f,63.0957f,1,true,false,false}, {kParamFilterWidth,24,0,12,6,false,false,false}
 };
 static const ParamPort kPhaserPorts[] = {
  {kParamBypass,4,0,1,0,false,false,true},{kParamInputGain,38,0,1000,1,true,false,false},
@@ -196,7 +197,8 @@ static const EffectParameterDescriptor kLimDescriptors[] = {
 static const EffectParameterDescriptor kChDescriptors[] = {
  {kParamBypass,"bypass","Bypass",0,1,0,false,false,true},{kParamChorusRate,"rate_hz","Rate (Hz)",.01f,20,.447214f,true,false,false},
  {kParamChorusVoices,"voices","Voices",0,14,0,false,true,false},{kParamChorusDepth,"depth_ms","Depth (ms)",.1f,20,5.075f,false,false,false},
- {kParamChorusFeedback,"feedback","Feedback",0,.891251f,0,false,false,false},{kParamChorusMix,"mix","Mix (%)",0,100,100,false,false,false}
+  {kParamChorusFeedback,"feedback","Feedback",0,.891251f,0,false,false,false},{kParamChorusMix,"mix","Mix (%)",0,100,100,false,false,false},
+  {kParamChorusDryAmount,"dry_gain","Dry gain (linear)",0,10,1,true,false,false},{kParamChorusWetAmount,"wet_gain","Wet gain (linear; nominal -6 dB)",0,10,.501187f,true,false,false}
 };
 static const EffectParameterDescriptor kClDescriptors[] = {
  {kParamBypass,"bypass","Bypass",0,1,0,false,false,true},{kParamClipperDrive,"drive","Input drive (linear gain)",1,10,1,true,false,false},
@@ -208,8 +210,10 @@ static const EffectParameterDescriptor kFilterDescriptors[] = {
  {kParamInputGain,"input_gain","Input gain",0,10,1,true,false,false},
  {kParamOutputGain,"output_gain","Output gain",0,10,1,true,false,false},
   {kParamFilterCutoff,"cutoff_hz","Cutoff (Hz)",10,24000,1000,true,false,false},
-  {kParamFilterResonance,"resonance","Quality factor",0,100,1,false,false,false},
-  {kParamFilterType,"type","Filter type",0,10,0,false,true,false}
+   {kParamFilterResonance,"resonance","Quality factor",0,100,0,false,false,false},
+   {kParamFilterType,"type","Filter type",0,10,0,false,true,false},
+   {kParamFilterGain,"gain","Gain (linear amplitude; ±36 dB)",0.01585f,63.0957f,1,true,false,false},
+   {kParamFilterWidth,"width_octaves","Width (octaves)",0,12,6,false,false,false}
 };
 static const EffectParameterDescriptor kPhaserDescriptors[] = {
  {kParamBypass,"bypass","Bypass",0,1,0,false,false,true},

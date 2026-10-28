@@ -17,7 +17,7 @@ class InstrumentFxPresentationTest {
             .01f, 123f, .75f, EffectParameterType.FLOAT, true))
 
     @Test fun newPresentationPreservesNativeValuesBoundsDefaultsAndScaling() {
-        listOf("lsp.filter" to (360..362), "lsp.phaser" to (380..384), "lsp.flanger" to (400..403)).forEach { (effect, ids) ->
+        listOf("lsp.filter" to (360..364), "lsp.phaser" to (380..384), "lsp.flanger" to (400..403), "lsp.chorus" to (341..342)).forEach { (effect, ids) ->
             ids.forEach { id ->
                 val p = presented(effect, id)
                 assertEquals(id.toString(), p.stableId)
@@ -86,6 +86,37 @@ class InstrumentFxPresentationTest {
     @Test fun instrumentCardsExcludeGlobalReverb() {
         assertEquals(listOf("native.delay"), instrumentDelayCardIds)
         assertFalse(instrumentDelayCardIds.contains("fluidsynth.reverb"))
+    }
+
+    @Test fun filterApplicabilityMatchesPinnedUpstreamForAllElevenTypes() {
+        for (type in 0..10) {
+            assertEquals(type in listOf(2, 3, 4, 7, 8, 9), instrumentFilterControlVisible("363", type.toFloat()))
+            assertEquals(type in listOf(5, 8, 9), instrumentFilterControlVisible("364", type.toFloat()))
+            listOf("360", "361", "362").forEach { assertTrue(instrumentFilterControlVisible(it, type.toFloat())) }
+        }
+    }
+
+    @Test fun gainIsLinearAmplitudeAndWidthIsPlainOctaves() {
+        listOf("lsp.filter" to 363, "lsp.chorus" to 341, "lsp.chorus" to 342).forEach { (effect, id) ->
+            val p = presented(effect, id)
+            assertEquals("dB", p.unit)
+            assertEquals("linear-amplitude", p.scale)
+            assertEquals("0.0 dB", instrumentValueLabel(p, 1f))
+            assertEquals(formatEffectParameterValue(p, .501187f), instrumentValueLabel(p, .501187f))
+        }
+        assertEquals("Dry gain", presented("lsp.chorus", 341).displayName)
+        assertEquals("Wet gain", presented("lsp.chorus", 342).displayName)
+        val width = presented("lsp.filter", 364)
+        assertEquals("octaves", width.unit)
+        assertEquals(null, width.scale)
+        assertTrue(instrumentValueLabel(width, 6f).endsWith(" octaves"))
+        assertEquals("Frequency", presented("lsp.filter", 360).displayName)
+        listOf("lsp.chorus" to 304, "lsp.phaser" to 384, "lsp.flanger" to 403).forEach { (effect, id) ->
+            val p = presented(effect, id)
+            assertEquals("Dry/Wet", p.displayName)
+            assertEquals("%", p.unit)
+            assertEquals(null, p.scale)
+        }
     }
 
     @Test(expected = IllegalArgumentException::class)

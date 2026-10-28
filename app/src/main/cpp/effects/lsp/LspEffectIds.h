@@ -139,6 +139,7 @@ enum ParamId : uint32_t {
     kParamClipperLufsEnable = 330, kParamClipperBoostEnable, kParamClipperDither, kParamClipperOdpEnable, kParamClipperEnabled,
     kParamChorusFeedbackEnable = 340, kParamChorusDryAmount, kParamChorusWetAmount, kParamChorusOversampling,
     kParamFilterCutoff = 360, kParamFilterResonance, kParamFilterType,
+    kParamFilterGain, kParamFilterWidth,
     kParamPhaserRate = 380, kParamPhaserDepth, kParamPhaserStages, kParamPhaserFeedback, kParamPhaserMix,
     kParamFlangerRate = 400, kParamFlangerDepth, kParamFlangerFeedback, kParamFlangerMix,
 };

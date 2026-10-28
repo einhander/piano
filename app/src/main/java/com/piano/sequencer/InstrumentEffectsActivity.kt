@@ -242,7 +242,15 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                 orientation = LinearLayout.VERTICAL
                 visibility = if (id in expanded) View.VISIBLE else View.GONE
             }
-            instance.parameters.filter { it.writable }.forEach { p -> controls.addView(parameterControl(id, p)) }
+            if (id == "lsp.filter") {
+                controls.addView(label("Gain at 0 dB leaves Bell and shelves neutral. Allpass changes phase, not amplitude. Gain and Width appear only for applicable types."))
+            }
+            if (id in listOf("lsp.chorus", "lsp.phaser", "lsp.flanger")) {
+                controls.addView(label("Dry/Wet: 0% = dry input; 100% = effect balance. Dry and wet gains set that balance; level can vary with phase and modulation."))
+            }
+            val filterType = instance.parameters.firstOrNull { it.stableId == "362" }?.value?.rawValue ?: 0f
+            instance.parameters.filter { it.writable && (id != "lsp.filter" || instrumentFilterControlVisible(it.stableId, filterType)) }
+                .forEach { p -> controls.addView(parameterControl(id, p)) }
             card.addView(Button(this).apply {
                 com.piano.sequencer.ui.UiControlStyle.apply(this)
                 text = getString(if (id in expanded) R.string.instrument_effects_hide else R.string.instrument_effects_configure)

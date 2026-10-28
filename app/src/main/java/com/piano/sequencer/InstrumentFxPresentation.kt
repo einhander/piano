@@ -30,7 +30,9 @@ internal fun instrumentPresentation(effect: String, p: EffectParameter): EffectP
         301 -> p.copy(displayName = "Voices", enumValues = (2..16).mapIndexed { i, n -> i.toFloat() to n.toString() })
         302 -> p.copy(displayName = "Depth", unit = "ms")
         303 -> p.copy(unit = "%", scale = "fraction-percent")
-        304 -> p.copy(displayName = "Mix", unit = "%")
+        304 -> p.copy(displayName = "Dry/Wet", unit = "%")
+        341 -> p.copy(displayName = "Dry gain", unit = "dB", scale = "linear-amplitude")
+        342 -> p.copy(displayName = "Wet gain", unit = "dB", scale = "linear-amplitude")
         else -> p
     }
     "lsp.clipper" -> when (p.stableId.toInt()) {
@@ -42,9 +44,11 @@ internal fun instrumentPresentation(effect: String, p: EffectParameter): EffectP
         else -> p
     }
     "lsp.filter" -> when (p.stableId.toInt()) {
-        360 -> p.copy(displayName = "Cutoff", unit = "Hz")
+        360 -> p.copy(displayName = "Frequency", unit = "Hz")
         361 -> p.copy(displayName = "Q", unit = null)
         362 -> p.copy(displayName = "Type", enumValues = listOf("Lo-pass", "Hi-pass", "Lo-shelf", "Hi-shelf", "Bell", "Bandpass", "Notch", "Resonance", "Ladder-pass", "Ladder-rej", "Allpass").mapIndexed { i, name -> i.toFloat() to name })
+        363 -> p.copy(displayName = "Gain", unit = "dB", scale = "linear-amplitude")
+        364 -> p.copy(displayName = "Width", unit = "octaves", scale = null)
         else -> p
     }
     "lsp.phaser" -> when (p.stableId.toInt()) {
@@ -52,14 +56,14 @@ internal fun instrumentPresentation(effect: String, p: EffectParameter): EffectP
         381 -> p.copy(displayName = "Depth", unit = "%", scale = "fraction-percent")
         382 -> p.copy(displayName = "Stages", enumValues = (1..8).mapIndexed { i, n -> i.toFloat() to n.toString() })
         383 -> p.copy(displayName = "Feedback", unit = "%", scale = "fraction-percent")
-        384 -> p.copy(displayName = "Mix", unit = "%")
+        384 -> p.copy(displayName = "Dry/Wet", unit = "%")
         else -> p
     }
     "lsp.flanger" -> when (p.stableId.toInt()) {
         400 -> p.copy(displayName = "Rate", unit = "Hz")
         401 -> p.copy(displayName = "Depth", unit = "ms")
         402 -> p.copy(displayName = "Feedback", unit = "%", scale = "fraction-percent")
-        403 -> p.copy(displayName = "Mix", unit = "%")
+        403 -> p.copy(displayName = "Dry/Wet", unit = "%")
         else -> p
     }
     else -> p
@@ -80,4 +84,12 @@ internal fun sharedPresentation(effect: String, p: EffectParameter): EffectParam
 
 internal fun instrumentValueLabel(p: EffectParameter, raw: Float): String =
     if (p.scale == "fraction-percent") formatEffectParameterValue(p.copy(scale = null), raw * 100f)
+    else if (p.unit == "octaves") "${formatEffectParameterValue(p.copy(unit = null), raw)} octaves"
     else formatEffectParameterValue(p, raw)
+
+/** Pinned Filter filter_has_width/adjust_gain, for the catalog's RLC type mapping. */
+internal fun instrumentFilterControlVisible(parameterId: String, type: Float): Boolean = when (parameterId) {
+    "363" -> type in listOf(2f, 3f, 4f, 7f, 8f, 9f)
+    "364" -> type in listOf(5f, 8f, 9f)
+    else -> true
+}

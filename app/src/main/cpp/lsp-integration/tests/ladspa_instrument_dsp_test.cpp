@@ -82,16 +82,59 @@ static void checkFeedback(DescriptorFn get,int slot,double rate) {
  std::printf("feedback slot=%d rate=%.0f dry_rms=%.6f wet_rms=%.6f delta=%.6f\n",slot,rate,base,changed,difference);
  assert(base>1e-5 && changed>1e-5 && difference>1e-5);
 }
+static double checkMix(DescriptorFn get,int slot,double rate,float mix) {
+ const auto* b=binding(slot); const LADSPA_Descriptor* d=nullptr;
+ for(unsigned long i=0;get(i);++i) if(std::strcmp(get(i)->Label,b->label)==0)d=get(i);
+ assert(d);
+ ladspa::LadspaEffect fx(slot,b,d); assert(fx.prepare(rate,256)); fx.setBypassed(false);
+ const uint32_t id=slot==lsp::kSlotChorus?lsp::kParamChorusMix:
+                   slot==lsp::kSlotPhaser?lsp::kParamPhaserMix:lsp::kParamFlangerMix;
+ fx.setParameter(id,mix);
+ if(slot==lsp::kSlotChorus) fx.setParameter(lsp::kParamChorusVoices,3);
+ // Two seconds let LFO/delay state settle; measure next 0.5 s of identical input.
+ double sum=0,delta=0; int count=0;
+ for(int block=0;block<469;++block) {
+  std::array<float,256> l{},r{};
+  for(int i=0;i<256;++i) l[i]=r[i]=.1f*std::sin(2*3.141592653589793*440*(block*256+i)/rate);
+  fx.process(l.data(),r.data(),256);
+  if(block>=375) for(int i=0;i<256;++i) {
+   const float x=.1f*std::sin(2*3.141592653589793*440*(block*256+i)/rate);
+   sum+=l[i]*l[i]; delta+=std::abs(l[i]-x); ++count;
+  }
+ }
+ const double rms=std::sqrt(sum/count);
+ if(mix==0) assert(delta/count<1e-6 && std::abs(rms-.1/std::sqrt(2.0))<1e-4);
+ else { assert(delta/count>1e-4); assert(rms<.15); }
+ return rms;
+}
+static void checkMixes(DescriptorFn get,int slot,double rate) {
+ const double dry=checkMix(get,slot,rate,0), half=checkMix(get,slot,rate,50), wet=checkMix(get,slot,rate,100);
+ std::printf("mix slot=%d rate=%.0f rms0=%.6f rms50=%.6f rms100=%.6f\n",slot,rate,dry,half,wet);
+}
 static void checkFilterResponse(DescriptorFn get,double rate) {
  const auto* b=binding(lsp::kSlotFilter); const LADSPA_Descriptor* d=nullptr;
  for(unsigned long i=0;get(i);++i) if(std::strcmp(get(i)->Label,b->label)==0)d=get(i);
  assert(d);
  ladspa::LadspaEffect fx(lsp::kSlotFilter,b,d); assert(fx.prepare(rate,256)); fx.setBypassed(false);
- fx.setParameter(lsp::kParamFilterType,0); fx.setParameter(lsp::kParamFilterCutoff,1000);
+  fx.setParameter(lsp::kParamFilterType,0); fx.setParameter(lsp::kParamFilterCutoff,1000);
  const double low=rmsTone(fx,rate,100), high=rmsTone(fx,rate,8000);
  const double ratio=high/low;
  std::printf("filter rate=%.0f low_rms=%.6f high_rms=%.6f ratio=%.6f\n",rate,low,high,ratio);
  assert(low>1e-5 && high<low*.6);
+}
+static void checkFilterTypes(DescriptorFn get,double rate) {
+ const auto* b=binding(lsp::kSlotFilter); const LADSPA_Descriptor* d=nullptr;
+ for(unsigned long i=0;get(i);++i) if(std::strcmp(get(i)->Label,b->label)==0)d=get(i);
+ assert(d);
+ for(int type=0;type<=10;++type) {
+  ladspa::LadspaEffect fx(lsp::kSlotFilter,b,d); assert(fx.prepare(rate,256)); fx.setBypassed(false);
+  fx.setParameter(lsp::kParamFilterType,static_cast<float>(type));
+  fx.setParameter(lsp::kParamFilterCutoff,1000); fx.setParameter(lsp::kParamFilterGain,2.0f);
+  const double below=rmsTone(fx,rate,100), center=rmsTone(fx,rate,1000), above=rmsTone(fx,rate,8000);
+  assert(std::isfinite(below)&&std::isfinite(center)&&std::isfinite(above));
+  assert(below>=0.0 && center>=0.0 && above>=0.0);
+  std::printf("filter type=%d rate=%.0f rms100=%.6f rms1000=%.6f rms8000=%.6f\n",type,rate,below,center,above);
+ }
 }
 static int checkClipperNonlinearity(DescriptorFn get, double rate) {
  const auto* b=lsp::instrumentBindingForSlot(lsp::kSlotClipper); const LADSPA_Descriptor* d=nullptr;
@@ -174,8 +217,12 @@ int main(int argc,char**argv) {
  assert(latency441==22 && latency480==24);
  checkClipperImpulse(get,44100.,latency441); checkClipperImpulse(get,48000.,latency480);
   checkChorusFeedback(get);
-  for(double rate:{44100.,48000.}) {
-   checkFilterResponse(get,rate);
+   for(double rate:{44100.,48000.}) {
+    checkMixes(get,lsp::kSlotChorus,rate);
+    checkMixes(get,lsp::kSlotPhaser,rate);
+    checkMixes(get,lsp::kSlotFlanger,rate);
+    checkFilterResponse(get,rate);
+    checkFilterTypes(get,rate);
    checkFeedback(get,lsp::kSlotPhaser,rate);
    checkFeedback(get,lsp::kSlotFlanger,rate);
   }

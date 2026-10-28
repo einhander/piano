@@ -259,6 +259,10 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
     if (mSlot == lsp::kSlotClipper) mPortValues[20] = 1.0f;
     // Pin safe modes from audited LSP metadata; controls remain hidden.
     if (mSlot == lsp::kSlotFilter) { mPortValues[7]=0.0f; mPortValues[27]=0.0f; }
+    // Generated LADSPA logarithmic default for wet gain is 7.5, but pinned
+    // metadata specifies -6 dB (0.501187 linear) for Chorus/Flanger. Chorus
+    // maps this control explicitly; Flanger keeps it internal.
+    if (mSlot == lsp::kSlotFlanger) mPortValues[33]=0.501187f;
     if (mSlot == lsp::kSlotFlanger) mPortValues[25]=0.0f;
     if (mSlot == lsp::kSlotPhaser) {
         mPortValues[8]=0.0f; mPortValues[10]=0.0f; mPortValues[11]=10.0f;
