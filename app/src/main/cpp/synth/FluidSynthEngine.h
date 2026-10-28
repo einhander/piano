@@ -3,6 +3,8 @@
 #include <fluidsynth.h>
 #include "realtime/MidiQueue.h"
 #include "realtime/SynthCmdQueue.h"
+#include "realtime/CallbackAdmissionGate.h"
+#include "ReverbParameters.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -157,6 +159,23 @@ public:
 
     // Set reverb on/off (enqueued).
     void setReverb(bool on);
+    bool setReverbEnabledChecked(bool on);
+    // Set all reverb controls as one audio-thread command. Invalid or
+    // non-finite values and queue overflow return false without changing desired state.
+    bool setReverbParameters(float roomSize, float damping, float width, float level);
+    piano::reverb::Parameters getDesiredReverbParameters() const;
+    piano::reverb::Parameters getDefaultReverbParameters() const;
+    // Compatibility query surface for NativeEngine callers; IDs 1..4 are
+    // room-size, damping, width, level; ID 0 is the existing enable switch.
+    bool setReverbParameter(int parameterId, float value);
+    float getReverbParameter(int parameterId) const;
+    float getAppliedReverbParameter(int parameterId) const;
+    float getReverbParameterDefault(int parameterId) const;
+    static constexpr int kReverbEnabled = 0;
+    static constexpr int kReverbRoomSize = 1;
+    static constexpr int kReverbDamping = 2;
+    static constexpr int kReverbWidth = 3;
+    static constexpr int kReverbLevel = 4;
 
     // Set chorus on/off (enqueued).
     void setChorus(bool on);
@@ -211,7 +230,10 @@ public:
     // Used on a mid-session rate change (e.g. BT device switch 44.1k→48k) — the
     // init() path is idempotent, so a reopen at a new rate would otherwise
     // leave the transport tempo + FluidSynth pitch off by the rate ratio.
-    bool reprepareAtNewRate(int newRate, const std::vector<std::string>& sfPaths);
+    // Optional worker finalizer executes while the same callback gate remains
+    // closed after synth swap; use for transport/effect graph rate activation.
+    bool reprepareAtNewRate(int newRate, const std::vector<std::string>& sfPaths,
+                            bool (*finalizer)(void*, int) = nullptr, void* context = nullptr);
 
     // Enumerate all presets of all loaded SoundFonts (worker thread, NOT audio
     // callback). Synchronized with the audio thread via the sequence lock.
@@ -225,9 +247,7 @@ public:
     int getLastRearmVelocity() const { return mLastRearmVel; }
 
 private:
-    static constexpr uint32_t kAudioGateBit = uint32_t{1} << 31;
-    static constexpr uint32_t kAudioReaderMask = ~kAudioGateBit;
-    std::atomic<uint32_t> mAudioAccess{0};
+    CallbackAdmissionGate mCallbackGate;
     std::atomic<int64_t> mWorkerGateHeldMicros{0};
     std::atomic<int64_t> mWorkerGateStartNanos{0};
     std::atomic<uint32_t> mGatedCallbackCount{0};
@@ -235,6 +255,8 @@ private:
     // Apply a single control command to one synth slot.
     void applyCommandToSynth(fluid_synth_t* synth, const SynthCmd& cmd);
     void refreshActiveChannelBit(int channel);
+    bool setReverbParametersLocked(float roomSize, float damping, float width, float level);
+    bool setReverbEnabledLocked(bool on);
 
     // Prepare the inactive synth slot so it contains exactly the given list of
     // SF2 paths (worker thread): unload all SF2s from it, then load each path
@@ -302,6 +324,14 @@ private:
     std::atomic<float> mGain{1.0f};
     std::atomic<float> mDuckGain{1.0f};
     std::atomic<int> mReverbOn{1};
+    piano::reverb::Parameters mReverbDesired{0.2f, 0.2f, 0.8f, 0.7f};
+    std::atomic<float> mReverbDefaults[4]{};
+    std::atomic<int> mAppliedReverbOn{1};
+    std::atomic<float> mAppliedReverbRoomSize{0.2f};
+    std::atomic<float> mAppliedReverbDamping{0.0f};
+    std::atomic<float> mAppliedReverbWidth{100.0f};
+    std::atomic<float> mAppliedReverbLevel{0.9f};
+    mutable std::mutex mReverbConfigMutex; // producers/preparation only; never audio callback
     std::atomic<int> mChorusOn{1};
     std::atomic<int> mInterps{4};
     // Packed bank<<8|program per channel; -1 = no explicit program.

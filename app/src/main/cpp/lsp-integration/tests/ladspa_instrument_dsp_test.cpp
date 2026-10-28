@@ -95,6 +95,21 @@ static void checkClipperImpulse(DescriptorFn get,double rate,int expectedLatency
  if(d->deactivate) d->deactivate(h);
  d->cleanup(h);
 }
+static void checkChorusFeedback(DescriptorFn get) {
+ const auto* b=lsp::instrumentBindingForSlot(lsp::kSlotChorus); const LADSPA_Descriptor* d=nullptr;
+ for(unsigned long i=0;get(i);++i) if(std::strcmp(get(i)->Label,b->label)==0)d=get(i);
+ assert(d); ladspa::LadspaEffect dry(lsp::kSlotChorus,b,d), feedback(lsp::kSlotChorus,b,d);
+ assert(dry.prepare(48000,256)&&feedback.prepare(48000,256)); dry.setBypassed(false); feedback.setBypassed(false);
+ dry.setParameter(lsp::kParamChorusVoices,3); feedback.setParameter(lsp::kParamChorusVoices,3);
+ feedback.setParameter(lsp::kParamChorusFeedback,.5f);
+ std::array<float,256> a{},ar{},c{},cr{}; double difference=0;
+ for(int block=0;block<200;++block) {
+  for(int i=0;i<256;++i) a[i]=ar[i]=c[i]=cr[i]=.1f*std::sin(2*3.141592653589793*440*(block*256+i)/48000.);
+  dry.process(a.data(),ar.data(),256); feedback.process(c.data(),cr.data(),256);
+  for(int i=0;i<256;++i) { assert(std::isfinite(c[i])&&std::isfinite(cr[i])); difference+=std::abs(a[i]-c[i]); }
+ }
+ assert(difference>.01);
+}
 int main(int argc,char**argv) {
  assert(sizeof(lsp::kBindings)/sizeof(lsp::kBindings[0])==3);
  assert(lsp::effectSlotForId(lsp::kIdChorus)==3 && lsp::effectSlotForId(lsp::kIdClipper)==4);
@@ -108,5 +123,6 @@ int main(int argc,char**argv) {
  const int latency480=checkClipperNonlinearity(get,48000.);
  assert(latency441==22 && latency480==24);
  checkClipperImpulse(get,44100.,latency441); checkClipperImpulse(get,48000.,latency480);
+ checkChorusFeedback(get);
  dlclose(so); std::puts("compiled LADSPA Chorus/Clipper DSP tests passed");
 }

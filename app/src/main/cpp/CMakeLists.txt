@@ -63,6 +63,7 @@ add_library(native-lib SHARED
     # so a clean checkout builds with the chain as a passthrough. The vendored
     # ladspa.h (LGPL) is the only header dependency.
     effects/EffectChain.cpp
+    effects/SharedStereoDelay.cpp
     effects/InstrumentEffectManager.cpp
     effects/ladspa/LadspaEffect.cpp
     effects/ladspa/LadspaRegistry.cpp

@@ -13,6 +13,7 @@
 #include "realtime/MidiQueue.h"
 #include "model/TransportState.h"
 #include "realtime/TransportCmdQueue.h"
+#include "realtime/SampleRateGraphState.h"
 #include "engine/ClipSlotState.h"
 #include "engine/Sequencer.h"
 #include "engine/SceneManager.h"
@@ -25,12 +26,17 @@
 #include "synth/FluidSynthEngine.h"
 #include "effects/EffectChain.h"
 #include "effects/InstrumentEffectManager.h"
+#include "effects/SharedStereoDelay.h"
 #include "audio/Mp3AudioRecorder.h"
 
 class OboeOutput;
 
 class NativeEngine {
 public:
+    enum SharedDelayParameterId : int {
+        SharedDelayEnabled = 0, SharedDelayTimeMs = 1, SharedDelayFeedback = 2,
+        SharedDelayWet = 3, SharedDelaySync = 4, SharedDelayDivision = 5
+    };
     NativeEngine();
     ~NativeEngine();
     NativeEngine(const NativeEngine&) = delete;
@@ -68,6 +74,13 @@ public:
     void setAudioDuck(bool ducked);
     void setPolyphony(int polyphony);
     void setReverb(bool on);
+    bool setReverbParameter(int parameterId, float value);
+    float getReverbParameter(int parameterId) const;
+    float getAppliedReverbParameter(int parameterId) const;
+    int getReverbParameterCount() const noexcept { return 5; }
+    bool getReverbParameterInfo(int parameterId, float& minimum, float& maximum,
+                                float& defaultValue, bool& toggled) const;
+    static constexpr const char* kReverbEffectId = "fluidsynth.reverb";
     void setChorus(bool on);
     void setInterps(int method);  // 0=none, 1=linear, 4=4th order
     int getPolyphony() const;
@@ -189,6 +202,21 @@ public:
     bool getInstrumentEffectParamInfo(const char* effectId, int index, uint32_t& id, float& minValue, float& maxValue, float& defaultValue, bool& logarithmic, bool& integer, bool& toggled) const;
     const char* getInstrumentEffectParamName(const char* effectId, int index) const;
 
+    // Shared original stereo send delay. Setters are worker-thread safe; audio
+    // callback consumes atomic targets. Parameter IDs: enabled=0,timeMs=1,
+    // feedback=2,wet=3,sync=4,division=5. Metadata ranges are documented in
+    // SharedStereoDelay; no per-channel delay instances are created.
+    bool setSharedDelayParameter(int parameterId, float value);
+    float getSharedDelayParameter(int parameterId) const;
+    int getSharedDelayParameterCount() const noexcept { return 6; }
+    bool getSharedDelayParameterInfo(int parameterId, float& minimum, float& maximum,
+                                     float& defaultValue, bool& integer, bool& toggled) const;
+    bool setDelaySend(int channel, float level);
+    float getDelaySend(int channel) const;
+    void resetSharedDelay() noexcept { mSharedDelay.requestReset(); }
+    bool isSharedDelayPrepared() const noexcept { return mSharedDelayPrepared.load(std::memory_order_acquire); }
+    int getInstrumentEffectLatencyFrames(int channel, const char* effectId) const;
+
     // Project loading (called from worker thread, NOT audio callback)
     void loadProject(const char* json);
 
@@ -288,6 +316,8 @@ public:
     // (create synth at new rate, reload current SF2, apply desired state,
     // flip). No-op if the engine is not initialized or the rate is unchanged.
     void handleSampleRateChange(int newRate);
+    bool isAudioGraphReady() const noexcept { return mRateGraph.ready(); }
+    int getSampleRateTransitionStatus() const noexcept { return mRateGraph.status(); }
 
     // Callback hook — called from OboeOutput audio callback
     // MUST be real-time safe: no allocations, no locks, no syscalls
@@ -310,6 +340,10 @@ public:
     static NativeEngine* getInstance();
 
 private:
+    static bool finishSampleRateTransition(void* context, int sampleRate);
+    static bool prepareRateInserts(void* context, int sampleRate);
+    static bool prepareRateDelay(void* context, int sampleRate);
+    static void activateRateTransport(void* context, int sampleRate);
     // MIDI thread — decouples FluidSynth calls from audio callback
     void midiThreadFunc();
     void startMidiThread();
@@ -340,7 +374,9 @@ private:
     std::atomic<uint32_t> mAppliedTpfFixed{0};
     std::atomic<int32_t> mPublishedSampleRate{48000};
     std::atomic<int32_t> mRequestedSampleRate{48000};
-    std::atomic<int32_t> mPendingSynthReprepareRate{0};
+    SampleRateGraphState mRateGraph;
+    // Status reported once per distinct failure on worker thread.
+    std::atomic<int32_t> mLastLoggedSampleRateStatus{0};
     std::atomic<uint32_t> mTransportSnapshotSeq{0};
     std::atomic<int64_t> mSnapshotFrame{0};
 
@@ -365,6 +401,11 @@ private:
     // passthrough — the engine behaves exactly as before LSP integration.
     piano::EffectChain mMasterEffects;
     piano::InstrumentEffectManager mInstrumentEffects;
+    SharedStereoDelay mSharedDelay;
+    std::atomic<bool> mSharedDelayPrepared{false};
+    std::atomic<float> mDelaySendTargets[16];
+    float mDelaySendLevels[16]{}; // audio-thread owned slew state
+    std::vector<float> mDelayBuffers; // [sendL, sendR, wetL, wetR], maxFrames each
 
     // Clip storage (owned by NativeEngine, safe for audio thread access)
     static constexpr int32_t kMaxClips = 64;

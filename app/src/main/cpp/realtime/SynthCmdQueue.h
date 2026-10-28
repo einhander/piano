@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 
 // Lock-free MPSC queue of synth control commands.
 //
@@ -32,6 +33,7 @@
 //   SET_CHORUS:        a=on (0/1)
 //   SET_INTERPS:       a=interp method (0/1/4)
 //   SET_CHANNEL_PROGRAM: a=channel, b=bank, f=program
+//   SET_REVERB_PARAMS: complete room-size/damping/width/level tuple
 enum class SynthCmdType : uint8_t {
     NOTE_ON = 0,
     NOTE_OFF,
@@ -47,6 +49,7 @@ enum class SynthCmdType : uint8_t {
     SET_INTERPS,
     SET_CHANNEL_PROGRAM,
     SET_CHANNEL_VOLUME,
+    SET_REVERB_PARAMS,
 };
 
 struct SynthCmd {
@@ -54,7 +57,13 @@ struct SynthCmd {
     int32_t a;
     int32_t b;
     float f;
+    // Complete reverb value tuple for SET_REVERB_PARAMS.
+    float reverbRoomSize;
+    float reverbDamping;
+    float reverbWidth;
+    float reverbLevel;
 };
+static_assert(std::is_trivially_copyable<SynthCmd>::value, "SynthCmd must remain queue-compatible");
 
 class SynthCmdQueue {
 public:

@@ -114,9 +114,10 @@ bool LadspaEffect::prepare(double sampleRate, int maxFrames) {
     if (mPortCount == 0) {
         return false;
     }
-    if (!mDescriptor->PortDescriptors || !mDescriptor->PortRangeHints || !mDescriptor->connect_port || !mDescriptor->run ||
-        mPortCount <= static_cast<unsigned long>(std::max({mBinding->audioInL,mBinding->audioInR,mBinding->audioOutL,mBinding->audioOutR,mBinding->bypassPort,mBinding->latencyPort}))) return false;
+    if (!mDescriptor->PortDescriptors || !mDescriptor->connect_port || !mDescriptor->run) return false;
     if (mSlot >= lsp::kSlotChorus) {
+        if (!mDescriptor->PortRangeHints ||
+            mPortCount <= static_cast<unsigned long>(std::max({mBinding->audioInL,mBinding->audioInR,mBinding->audioOutL,mBinding->audioOutR,mBinding->bypassPort,mBinding->latencyPort}))) return false;
         for (int p : {mBinding->audioInL,mBinding->audioInR}) if (!LADSPA_IS_PORT_AUDIO(mDescriptor->PortDescriptors[p]) || !LADSPA_IS_PORT_INPUT(mDescriptor->PortDescriptors[p])) return false;
         for (int p : {mBinding->audioOutL,mBinding->audioOutR}) if (!LADSPA_IS_PORT_AUDIO(mDescriptor->PortDescriptors[p]) || !LADSPA_IS_PORT_OUTPUT(mDescriptor->PortDescriptors[p])) return false;
         int parameterCount=0;
@@ -301,6 +302,10 @@ void LadspaEffect::applyParameters() noexcept {
             else p.smoothed=target;
             mPortValues[p.port] = p.smoothed;
         }
+    }
+    if (mSlot == lsp::kSlotChorus) {
+        // The exposed feedback amount also owns its otherwise hidden switch.
+        mPortValues[39] = mPortValues[40] > 0.0f ? 1.0f : 0.0f;
     }
 }
 

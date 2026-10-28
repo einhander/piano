@@ -3,6 +3,18 @@
 #include <algorithm>
 #include <cmath>
 
+void sumSharedDelaySends(const float* const buses[16], const float levels[16],
+                         int frame, float& left, float& right) noexcept {
+    left = right = 0.0f;
+    if (!buses || !levels || frame < 0) return;
+    for (int ch=0; ch<16; ++ch) {
+        if (!buses[ch]) continue;
+        const float gain = std::isfinite(levels[ch]) ? std::max(0.0f, std::min(1.0f, levels[ch])) : 0.0f;
+        left += buses[ch][frame * 2] * gain;
+        right += buses[ch][frame * 2 + 1] * gain;
+    }
+}
+
 float SharedStereoDelay::finiteClamp(float value, float fallback, float lo, float hi) noexcept {
     if (!std::isfinite(value)) value = fallback;
     return std::max(lo, std::min(hi, value));
@@ -15,8 +27,11 @@ bool SharedStereoDelay::prepare(double sampleRate, int maxFrames) {
     const auto capacity = static_cast<std::size_t>(std::ceil(sampleRate * 2.0)) + 2;
     try {
         std::vector<float> left(capacity, 0.0f), right(capacity, 0.0f);
+        std::vector<uint64_t> leftGeneration(capacity, 0), rightGeneration(capacity, 0);
         mLeft.swap(left);
         mRight.swap(right);
+        mLeftGeneration.swap(leftGeneration);
+        mRightGeneration.swap(rightGeneration);
     } catch (...) {
         return false;
     }
@@ -24,6 +39,7 @@ bool SharedStereoDelay::prepare(double sampleRate, int maxFrames) {
     mSampleRate = sampleRate;
     mMaxFrames = maxFrames;
     mWrite = 0;
+    mGeneration = 1;
     mCurrentDelayFrames = mOldDelayFrames = mNewDelayFrames =
         std::max(1.0f, std::min(static_cast<float>(sampleRate * 2.0),
                                timeMs() * static_cast<float>(sampleRate / 1000.0)));
@@ -81,8 +97,9 @@ void SharedStereoDelay::process(const float* sendL, const float* sendR,
         return;
     }
     if (mResetRequested.exchange(false, std::memory_order_acq_rel)) {
-        std::fill(mLeft.begin(), mLeft.end(), 0.0f);
-        std::fill(mRight.begin(), mRight.end(), 0.0f);
+        // Logical clear: stale cells read as zero until rewritten. Reset cost
+        // is O(1), independent of sample rate/ring capacity.
+        if (++mGeneration == 0) mGeneration = 1; // practically unreachable 64-bit wrap
         mWrite = 0;
         mTimeFadeRemaining = 0;
         mTimeFadeProgress = 0.0f;
@@ -107,18 +124,24 @@ void SharedStereoDelay::process(const float* sendL, const float* sendR,
         const float rawR = sendR && std::isfinite(sendR[i]) ? sendR[i] : 0.0f;
         const float inL = finiteClamp(rawL * mInputGain, 0.0f, -kMaxInternalSample, kMaxInternalSample);
         const float inR = finiteClamp(rawR * mInputGain, 0.0f, -kMaxInternalSample, kMaxInternalSample);
-        auto read = [this](const std::vector<float>& ring, float delay) noexcept {
+        auto read = [this](const std::vector<float>& ring,
+                           const std::vector<uint64_t>& generations,
+                           float delay) noexcept {
             float position = static_cast<float>(mWrite) - delay;
             while (position < 0.0f) position += static_cast<float>(mCapacity);
             const auto i0 = static_cast<std::size_t>(position) % mCapacity;
             const auto i1 = (i0 + 1) % mCapacity;
             const float frac = position - std::floor(position);
-            return ring[i0] + (ring[i1] - ring[i0]) * frac;
+            const float v0 = generations[i0] == mGeneration ? ring[i0] : 0.0f;
+            const float v1 = generations[i1] == mGeneration ? ring[i1] : 0.0f;
+            return v0 + (v1 - v0) * frac;
         };
-        float oldL = read(mLeft, mOldDelayFrames), oldR = read(mRight, mOldDelayFrames);
+        float oldL = read(mLeft, mLeftGeneration, mOldDelayFrames);
+        float oldR = read(mRight, mRightGeneration, mOldDelayFrames);
         float delayedL = oldL, delayedR = oldR;
         if (mTimeFadeRemaining > 0) {
-            const float newL = read(mLeft, mNewDelayFrames), newR = read(mRight, mNewDelayFrames);
+            const float newL = read(mLeft, mLeftGeneration, mNewDelayFrames);
+            const float newR = read(mRight, mRightGeneration, mNewDelayFrames);
             const float blend = mTimeFadeProgress;
             delayedL = oldL + (newL - oldL) * blend;
             delayedR = oldR + (newR - oldR) * blend;
@@ -135,6 +158,8 @@ void SharedStereoDelay::process(const float* sendL, const float* sendR,
         const float fb = finiteClamp(mFeedbackState, 0.0f, 0.0f, kMaxFeedback);
         mLeft[mWrite] = finiteClamp(inL + delayedL * fb, 0.0f, -kMaxInternalSample, kMaxInternalSample);
         mRight[mWrite] = finiteClamp(inR + delayedR * fb, 0.0f, -kMaxInternalSample, kMaxInternalSample);
+        mLeftGeneration[mWrite] = mGeneration;
+        mRightGeneration[mWrite] = mGeneration;
         wetL[i] = finiteClamp(delayedL * finiteClamp(mWetState, 0.0f, 0.0f, kMaxWet),
                               0.0f, -kMaxInternalSample, kMaxInternalSample);
         wetR[i] = finiteClamp(delayedR * finiteClamp(mWetState, 0.0f, 0.0f, kMaxWet),

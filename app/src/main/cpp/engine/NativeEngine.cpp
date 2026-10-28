@@ -1,4 +1,5 @@
 #include "NativeEngine.h"
+#include "engine/SharedFxReturn.h"
 #include <android/log.h>
 #include "effects/lsp/LspEffectIds.h"
 #include "effects/ladspa/LadspaRegistry.h"
@@ -113,6 +114,7 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     mMasterBus.init(mMaxSynthFrames);
     mSynthChannelBuffers.assign(static_cast<size_t>(16) * mMaxSynthFrames * 2, 0.0f);
     mSynthReturnBuffer.assign(static_cast<size_t>(mMaxSynthFrames) * 2, 0.0f);
+    mDelayBuffers.assign(static_cast<size_t>(mMaxSynthFrames) * 4, 0.0f);
     for (int ch = 0; ch < 16; ++ch)
         mSynthChannelPtrs[ch] = mSynthChannelBuffers.data() + static_cast<size_t>(ch) * mMaxSynthFrames * 2;
 
@@ -122,7 +124,11 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     // PlaybackService worker thread after the engine is up, once the prebuilt
     // .so path is known). With the bundle absent, process() is a passthrough.
     mMasterEffects.prepare(sampleRate, mMaxSynthFrames);
-    mInstrumentEffects.prepare(sampleRate, mMaxSynthFrames);
+    const bool insertsReady = mInstrumentEffects.prepare(sampleRate, mMaxSynthFrames);
+    const bool delayReady = mSharedDelay.prepare(sampleRate, mMaxSynthFrames);
+    mSharedDelayPrepared.store(delayReady, std::memory_order_release);
+    mRateGraph.initialize(insertsReady && delayReady, insertsReady && delayReady ? 0 : (insertsReady ? 4 : 3));
+    for (auto& send : mDelaySendTargets) send.store(0.0f, std::memory_order_relaxed);
 
     // Route FluidSynth output through Mixer track 0
     mMixer.setVolume(0, 1.0f);
@@ -262,8 +268,31 @@ void NativeEngine::setPolyphony(int polyphony) {
 }
 
 void NativeEngine::setReverb(bool on) {
-    if (mSynth) {
-        mSynth->setReverb(on);
+    if (mSynth) (void)mSynth->setReverbParameter(FluidSynthEngine::kReverbEnabled, on ? 1.0f : 0.0f);
+}
+
+bool NativeEngine::setReverbParameter(int id, float value) {
+    return mSynth && mSynth->setReverbParameter(id, value);
+}
+
+float NativeEngine::getReverbParameter(int id) const {
+    return mSynth ? mSynth->getReverbParameter(id) : 0.0f;
+}
+
+float NativeEngine::getAppliedReverbParameter(int id) const {
+    return mSynth ? mSynth->getAppliedReverbParameter(id) : 0.0f;
+}
+
+bool NativeEngine::getReverbParameterInfo(int id, float& minimum, float& maximum,
+                                          float& defaultValue, bool& toggled) const {
+    toggled = false;
+    switch (id) {
+        case FluidSynthEngine::kReverbEnabled: minimum = 0; maximum = 1; defaultValue = 1; toggled = true; return true;
+        case FluidSynthEngine::kReverbRoomSize: minimum = 0; maximum = 1; defaultValue = mSynth ? mSynth->getReverbParameterDefault(id) : 0; return true;
+        case FluidSynthEngine::kReverbDamping: minimum = 0; maximum = 1; defaultValue = mSynth ? mSynth->getReverbParameterDefault(id) : 0; return true;
+        case FluidSynthEngine::kReverbWidth: minimum = 0; maximum = 100; defaultValue = mSynth ? mSynth->getReverbParameterDefault(id) : 0; return true;
+        case FluidSynthEngine::kReverbLevel: minimum = 0; maximum = 1; defaultValue = mSynth ? mSynth->getReverbParameterDefault(id) : 0; return true;
+        default: return false;
     }
 }
 
@@ -475,26 +504,68 @@ bool NativeEngine::updateSampleRate(int sampleRate) {
 void NativeEngine::handleSampleRateChange(int newRate) {
     if (newRate <= 0) return;
     if (!mInitialized.load()) return;   // init path handles the first rate
-    if (newRate == mPublishedSampleRate.load(std::memory_order_acquire)) return;  // no change
-    mPendingSynthReprepareRate.store(newRate, std::memory_order_release);
+    if (newRate == mPublishedSampleRate.load(std::memory_order_acquire) &&
+        mRateGraph.ready()) return;  // no change
+    mRateGraph.begin(newRate);
     if (mSynth) {
         // Reload ALL currently-loaded SF2s into the new synth (multi-SF2).
         std::vector<std::string> sfPaths;
         for (const auto& sf : mSynth->getLoadedSoundFonts()) {
             sfPaths.push_back(sf.path);
         }
-        const int32_t requested = mPendingSynthReprepareRate.exchange(0, std::memory_order_acq_rel);
-        const bool synthReady = requested > 0 && mSynth->reprepareAtNewRate(requested, sfPaths);
-        if (synthReady) {
-            (void)updateSampleRate(requested);
-            FluidSynthEngine::WorkerAccessGuard callbackQuiescence(*mSynth);
-            if (!mInstrumentEffects.reprepareQuiescent(static_cast<double>(requested), mMaxSynthFrames)) {
-                __android_log_print(ANDROID_LOG_ERROR, "NativeEngine",
-                    "Instrument effects reprepare failed (status=%d); retrying on next sample-rate change",
-                    static_cast<int>(mInstrumentEffects.prepareStatus()));
-            }
+        const int32_t requested = mRateGraph.pendingRate();
+        const bool complete = requested > 0 && mSynth->reprepareAtNewRate(
+            requested, sfPaths, &NativeEngine::finishSampleRateTransition, this);
+        if (!complete && mRateGraph.status() == 1) mRateGraph.fail(2);
+    } else {
+        mRateGraph.fail(2);
+    }
+    const int status = mRateGraph.status();
+    if (status != 0) {
+        int previous = mLastLoggedSampleRateStatus.exchange(status, std::memory_order_acq_rel);
+        if (previous != status) {
+            __android_log_print(ANDROID_LOG_ERROR, "NativeEngine",
+                "Sample-rate transition incomplete (rate=%d status=%d); graph silenced, retry on next worker open",
+                newRate, status);
         }
     }
+}
+
+bool NativeEngine::finishSampleRateTransition(void* context, int sampleRate) {
+    auto* engine = static_cast<NativeEngine*>(context);
+    if (!engine || sampleRate <= 0) return false;
+    // FluidSynth owns gate for entire call, including these ordered stages.
+    const bool complete = finalizeSampleRateGraph(engine->mRateGraph, sampleRate, engine,
+        &NativeEngine::prepareRateInserts, &NativeEngine::prepareRateDelay,
+        &NativeEngine::activateRateTransport);
+    if (complete) {
+        engine->mRequestedSampleRate.store(sampleRate, std::memory_order_release);
+        engine->mPublishedSampleRate.store(sampleRate, std::memory_order_release);
+        engine->mLastLoggedSampleRateStatus.store(0, std::memory_order_release);
+    }
+    return complete;
+}
+
+bool NativeEngine::prepareRateInserts(void* context, int sampleRate) {
+    auto* engine = static_cast<NativeEngine*>(context);
+    return engine && engine->mInstrumentEffects.reprepareQuiescent(
+        static_cast<double>(sampleRate), engine->mMaxSynthFrames);
+}
+
+bool NativeEngine::prepareRateDelay(void* context, int sampleRate) {
+    auto* engine = static_cast<NativeEngine*>(context);
+    if (!engine) return false;
+    engine->mSharedDelayPrepared.store(false, std::memory_order_release);
+    const bool ready = engine->mSharedDelay.prepare(sampleRate, engine->mMaxSynthFrames);
+    engine->mSharedDelayPrepared.store(ready, std::memory_order_release);
+    return ready;
+}
+
+void NativeEngine::activateRateTransport(void* context, int sampleRate) {
+    auto* engine = static_cast<NativeEngine*>(context);
+    const int64_t frame = engine->mTransport.framePosition.load(std::memory_order_acquire);
+    engine->mTransport.applyRate(sampleRate, frame);
+    engine->mSampleRate = sampleRate;
 }
 
 void NativeEngine::enqueueMidiMessage(uint8_t status, uint8_t data1, uint8_t data2, int64_t timestamp) {
@@ -519,6 +590,13 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
         if (mSynth) mSynth->recordGatedCallback();
         // Maintenance gate drops this callback: transport pauses and queued
         // MIDI/events remain untouched for the next admitted callback.
+        std::memset(output, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
+        if (recordingCallback.accepted()) mAudioRecorder.capture(output, numFrames);
+        return;
+    }
+    if (!mRateGraph.ready()) {
+        // Rate transition failed or is pending: never touch a mixed-rate graph.
+        // Worker retries preparation; this callback emits safe silence only.
         std::memset(output, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
         if (recordingCallback.accepted()) mAudioRecorder.capture(output, numFrames);
         return;
@@ -630,6 +708,33 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
         // Immediate queue first; sequencer events render at their frame offsets.
         float* track0 = mMixer.getTrackBuffer(0);
         std::memset(track0, 0, static_cast<size_t>(safeFrames) * 2 * sizeof(float));
+        auto processDelaySegment = [this, track0](int start, int count) noexcept {
+            if (!mSharedDelayPrepared.load(std::memory_order_acquire) || count <= 0) return;
+            float* sendL = mDelayBuffers.data();
+            float* sendR = sendL + mMaxSynthFrames;
+            float* wetL = sendR + mMaxSynthFrames;
+            float* wetR = wetL + mMaxSynthFrames;
+            const float* buses[16];
+            for (int ch=0; ch<16; ++ch) buses[ch] = mSynthChannelPtrs[ch];
+            for (int f = 0; f < count; ++f) {
+                for (int ch = 0; ch < 16; ++ch) {
+                    const float target = mDelaySendTargets[ch].load(std::memory_order_relaxed);
+                    float& level = mDelaySendLevels[ch];
+                    const float delta = target - level;
+                    level += std::max(-1.0f / 128.0f, std::min(1.0f / 128.0f, delta));
+                }
+                float sumL = 0.0f, sumR = 0.0f;
+                sumSharedDelaySends(buses, mDelaySendLevels, start + f, sumL, sumR);
+                sendL[f] = sumL;
+                sendR[f] = sumR;
+            }
+            const double bpm = mTransport.bpmMicros / 1000000.0;
+            mSharedDelay.process(sendL, sendR, wetL, wetR, count, bpm);
+            for (int f = 0; f < count; ++f) {
+                track0[(start + f) * 2] += wetL[f];
+                track0[(start + f) * 2 + 1] += wetR[f];
+            }
+        };
         int offset = 0;
         for (int32_t i = 0; i < sequencerEventCount; ++i) {
             int eventOffset = static_cast<int>(mSequencerStaging[i].targetFrame - framePos);
@@ -645,10 +750,8 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
                         track0[f * 2] += mSynthChannelPtrs[ch][f * 2];
                         track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
                     }
-                for (int f = offset; f < eventOffset; ++f) {
-                    track0[f * 2] += sharedReturn[f * 2];
-                    track0[f * 2 + 1] += sharedReturn[f * 2 + 1];
-                }
+                addSharedFxReturn(track0, sharedReturn, offset, eventOffset - offset);
+                processDelaySegment(offset, eventOffset - offset);
             }
             mSynth->processOneMidi(mSequencerStaging[i].message);
             offset = eventOffset;
@@ -663,10 +766,8 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
                     track0[f * 2] += mSynthChannelPtrs[ch][f * 2];
                     track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
                 }
-            for (int f = offset; f < safeFrames; ++f) {
-                track0[f * 2] += sharedReturn[f * 2];
-                track0[f * 2 + 1] += sharedReturn[f * 2 + 1];
-            }
+            addSharedFxReturn(track0, sharedReturn, offset, safeFrames - offset);
+            processDelaySegment(offset, safeFrames - offset);
         }
 
         mSynth->endSynthAccess();
@@ -675,6 +776,18 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
         float* track0 = mMixer.getTrackBuffer(0);
         for (int i = 0; i < safeFrames * 2; i++) {
             track0[i] = 0.0f;
+        }
+        if (mSharedDelayPrepared.load(std::memory_order_acquire)) {
+            float* sendL = mDelayBuffers.data();
+            float* sendR = sendL + mMaxSynthFrames;
+            float* wetL = sendR + mMaxSynthFrames;
+            float* wetR = wetL + mMaxSynthFrames;
+            std::fill(sendL, sendL + safeFrames, 0.0f);
+            std::fill(sendR, sendR + safeFrames, 0.0f);
+            mSharedDelay.process(sendL, sendR, wetL, wetR, safeFrames, mTransport.bpmMicros / 1000000.0);
+            for (int f=0; f<safeFrames; ++f) {
+                track0[f*2] += wetL[f]; track0[f*2+1] += wetR[f];
+            }
         }
     }
 
@@ -969,6 +1082,57 @@ bool NativeEngine::getMasterEffectParamInfo(int slot, int index,
     return true;
 }
 
+bool NativeEngine::setSharedDelayParameter(int id, float value) {
+    if (!std::isfinite(value)) return false;
+    switch (id) {
+        case 0: if (value != 0.0f && value != 1.0f) return false; mSharedDelay.setEnabled(value != 0.0f); return true;
+        case 1: if (value < 1.0f || value > SharedStereoDelay::kMaxTimeMs) return false; mSharedDelay.setTimeMs(value); return true;
+        case 2: if (value < 0.0f || value > SharedStereoDelay::kMaxFeedback) return false; mSharedDelay.setFeedback(value); return true;
+        case 3: if (value < 0.0f || value > SharedStereoDelay::kMaxWet) return false; mSharedDelay.setWet(value); return true;
+        case 4: if (value != 0.0f && value != 1.0f) return false; mSharedDelay.setSync(value != 0.0f); return true;
+        case 5: if (value < 0.0f || value > 4.0f || std::floor(value) != value) return false; mSharedDelay.setDivision(static_cast<int>(value)); return true;
+        default: return false;
+    }
+}
+
+float NativeEngine::getSharedDelayParameter(int id) const {
+    switch (id) {
+        case 0: return mSharedDelay.isEnabled() ? 1.0f : 0.0f;
+        case 1: return mSharedDelay.timeMs();
+        case 2: return mSharedDelay.feedback();
+        case 3: return mSharedDelay.wet();
+        case 4: return mSharedDelay.sync() ? 1.0f : 0.0f;
+        case 5: return static_cast<float>(mSharedDelay.division());
+        default: return std::numeric_limits<float>::quiet_NaN();
+    }
+}
+
+bool NativeEngine::getSharedDelayParameterInfo(int id, float& minimum, float& maximum,
+                                               float& defaultValue, bool& integer,
+                                               bool& toggled) const {
+    integer = toggled = false;
+    switch (id) {
+        case 0: minimum=0; maximum=1; defaultValue=0; integer=toggled=true; return true;
+        case 1: minimum=1; maximum=SharedStereoDelay::kMaxTimeMs; defaultValue=250; return true;
+        case 2: minimum=0; maximum=SharedStereoDelay::kMaxFeedback; defaultValue=0.35f; return true;
+        case 3: minimum=0; maximum=SharedStereoDelay::kMaxWet; defaultValue=0.30f; return true;
+        case 4: minimum=0; maximum=1; defaultValue=0; integer=toggled=true; return true;
+        case 5: minimum=0; maximum=4; defaultValue=0; integer=true; return true;
+        default: return false;
+    }
+}
+
+bool NativeEngine::setDelaySend(int channel, float level) {
+    if (channel < 0 || channel >= 16 || !std::isfinite(level) || level < 0.0f || level > 1.0f) return false;
+    mDelaySendTargets[channel].store(level, std::memory_order_release);
+    return true;
+}
+
+float NativeEngine::getDelaySend(int channel) const {
+    return channel >= 0 && channel < 16 ? mDelaySendTargets[channel].load(std::memory_order_acquire) :
+                                         std::numeric_limits<float>::quiet_NaN();
+}
+
 const char* NativeEngine::getMasterEffectParamName(int slot, int index) const {
     int count = 0;
     const auto* descriptors = piano::lsp::paramDescriptors(slot, count);
@@ -998,6 +1162,10 @@ float NativeEngine::getInstrumentEffectParameter(int c,const char* id,int p)cons
 int NativeEngine::getInstrumentEffectParamCount(const char* id)const{int s=instrumentSlot(id);return s<0?0:mInstrumentEffects.paramCount(s);}
 bool NativeEngine::getInstrumentEffectParamInfo(const char* id,int i,uint32_t& p,float& lo,float& hi,float& def,bool& log,bool& integer,bool& toggled)const{int s=instrumentSlot(id);return s>=0&&mInstrumentEffects.paramInfo(s,i,p,lo,hi,def,log,integer,toggled);}
 const char* NativeEngine::getInstrumentEffectParamName(const char* id,int i)const{int s=instrumentSlot(id);return s<0?"":mInstrumentEffects.paramName(s,i);}
+int NativeEngine::getInstrumentEffectLatencyFrames(int c,const char* id)const{
+    return id && std::strcmp(id,piano::lsp::kIdClipper)==0
+        ? mInstrumentEffects.effectLatencyFrames(c,piano::lsp::kSlotClipper) : 0;
+}
 
 void NativeEngine::addClip(int32_t clipId, int32_t trackId, int64_t startTick, int64_t lengthTicks,
                            const uint8_t* events, int32_t eventCount) {

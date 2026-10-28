@@ -1,10 +1,12 @@
 #include "FluidSynthEngine.h"
+#include "ReverbParameters.h"
 #include <fluidsynth/synth.h>
 #include <cstring>
 #include <algorithm>
 #include <thread>
 #include <chrono>
 #include <omp.h>
+#include <cmath>
 
 // ── Lock-free design (see FluidSynthEngine.h for the full rationale) ─────────
 // ALL fluid_synth_* calls happen on the audio thread (the only thread that
@@ -22,14 +24,11 @@ FluidSynthEngine::FluidSynthEngine() {
 }
 
 bool FluidSynthEngine::tryEnterAudioCallback() {
-    uint32_t state = mAudioAccess.load(std::memory_order_relaxed);
-    if (state & kAudioGateBit) return false;
-    return mAudioAccess.compare_exchange_strong(state, state + 1,
-        std::memory_order_acquire, std::memory_order_relaxed);
+    return mCallbackGate.tryEnter();
 }
 
 void FluidSynthEngine::leaveAudioCallback() {
-    mAudioAccess.fetch_sub(1, std::memory_order_release);
+    mCallbackGate.leave();
 }
 
 FluidSynthEngine::WorkerAccessGuard::WorkerAccessGuard(FluidSynthEngine& engine)
@@ -37,10 +36,7 @@ FluidSynthEngine::WorkerAccessGuard::WorkerAccessGuard(FluidSynthEngine& engine)
     mGateStart = std::chrono::steady_clock::now();
     engine.mWorkerGateStartNanos.store(std::chrono::duration_cast<std::chrono::nanoseconds>(
         mGateStart.time_since_epoch()).count(), std::memory_order_release);
-    mEngine.mAudioAccess.fetch_or(kAudioGateBit, std::memory_order_acq_rel);
-    while ((mEngine.mAudioAccess.load(std::memory_order_acquire) & kAudioReaderMask) != 0) {
-        std::this_thread::yield();
-    }
+    mEngine.mCallbackGate.closeAndWait();
     // OpenMP team sizing is per-thread. Limit FluidSynth worker-side SF2
     // loading/maintenance without changing OpenMP behavior on Oboe callback.
     omp_set_num_threads(1);
@@ -51,7 +47,7 @@ FluidSynthEngine::WorkerAccessGuard::~WorkerAccessGuard() {
         std::chrono::steady_clock::now() - mGateStart).count();
     mEngine.mWorkerGateHeldMicros.store(elapsed, std::memory_order_relaxed);
     mEngine.mWorkerGateStartNanos.store(0, std::memory_order_release);
-    mEngine.mAudioAccess.fetch_and(kAudioReaderMask, std::memory_order_release);
+    mEngine.mCallbackGate.open();
 }
 
 FluidSynthEngine::~FluidSynthEngine() {
@@ -70,6 +66,7 @@ FluidSynthEngine::~FluidSynthEngine() {
 
 bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
     WorkerAccessGuard workerAccess(*this);
+    std::lock_guard<std::mutex> reverbConfigLock(mReverbConfigMutex);
     // m8: free whatever was created if a later slot fails to allocate
     // (previously slot 0's settings/synth leaked when slot 1's failed).
     auto cleanup = [this]() {
@@ -115,6 +112,20 @@ bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
         fluid_settings_setint(mSettings[i], "synth.cpu-cores", 1);
         fluid_settings_setint(mSettings[i], "audio.periods", 2);
 
+        // Seed controls from FluidSynth's actual bundled defaults, not copied
+        // constants that can drift across FluidSynth versions.
+        if (i == 0) {
+            double v = 0.0;
+            if (fluid_settings_getnum_default(mSettings[i], "synth.reverb.room-size", &v)) { mReverbDesired.roomSize = static_cast<float>(v); mReverbDefaults[0].store(static_cast<float>(v)); }
+            if (fluid_settings_getnum_default(mSettings[i], "synth.reverb.damp", &v)) { mReverbDesired.damping = static_cast<float>(v); mReverbDefaults[1].store(static_cast<float>(v)); }
+            if (fluid_settings_getnum_default(mSettings[i], "synth.reverb.width", &v)) { mReverbDesired.width = static_cast<float>(v); mReverbDefaults[2].store(static_cast<float>(v)); }
+            if (fluid_settings_getnum_default(mSettings[i], "synth.reverb.level", &v)) { mReverbDesired.level = static_cast<float>(v); mReverbDefaults[3].store(static_cast<float>(v)); }
+            mAppliedReverbRoomSize.store(mReverbDesired.roomSize);
+            mAppliedReverbDamping.store(mReverbDesired.damping);
+            mAppliedReverbWidth.store(mReverbDesired.width);
+            mAppliedReverbLevel.store(mReverbDesired.level);
+        }
+
         mSynth[i] = new_fluid_synth(mSettings[i]);
         if (!mSynth[i]) {
             cleanup();
@@ -150,6 +161,10 @@ void FluidSynthEngine::applyDesiredState(fluid_synth_t* synth) {
     fluid_synth_set_polyphony(synth, mPolyphony.load());
     fluid_synth_set_gain(synth, mGain.load() * mDuckGain.load());
     fluid_synth_reverb_on(synth, -1, mReverbOn.load());
+    fluid_synth_set_reverb_group_roomsize(synth, -1, mReverbDesired.roomSize);
+    fluid_synth_set_reverb_group_damp(synth, -1, mReverbDesired.damping);
+    fluid_synth_set_reverb_group_width(synth, -1, mReverbDesired.width);
+    fluid_synth_set_reverb_group_level(synth, -1, mReverbDesired.level);
     fluid_synth_chorus_on(synth, -1, mChorusOn.load());
     fluid_synth_set_interp_method(synth, -1, mInterps.load());
     // Channel programs (packed bank<<8|program; -1 = no explicit program).
@@ -234,6 +249,9 @@ int FluidSynthEngine::prepareInactiveSlot(const std::vector<std::string>& sfPath
         }
     }
 
+    // Serialize desired reverb snapshot through slot activation: a concurrent
+    // producer then enqueues only after the new active slot is no longer skipped.
+    std::unique_lock<std::mutex> reverbConfigLock(mReverbConfigMutex);
     // M2: apply the current desired state to the prepared slot BEFORE the flip
     // (so the new active slot has the correct settings when it becomes active).
     applyDesiredState(synth);
@@ -254,6 +272,7 @@ int FluidSynthEngine::prepareInactiveSlot(const std::vector<std::string>& sfPath
     // M2: clear the preparing flag (after the M3 free, so processCommands
     // skips the target slot for the entire preparation).
     mPreparing[target].store(false, std::memory_order_release);
+    reverbConfigLock.unlock();
 
     return lastSfId;
 }
@@ -265,11 +284,15 @@ int FluidSynthEngine::prepareInactiveSlot(const std::vector<std::string>& sfPath
 // (e.g. BT device switch 44.1k→48k) — the init() path is idempotent, so a
 // reopen at a new rate would otherwise leave the transport tempo + FluidSynth
 // pitch off by the rate ratio.
-bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::string>& sfPaths) {
+bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::string>& sfPaths,
+                                          bool (*finalizer)(void*, int), void* context) try {
     if (!mInitialized.load() || newRate <= 0) return false;
     // M1: serialize worker↔worker SF2 slot prep (covers prepare→flip→free).
     // Worker-thread blocking is allowed; the audio thread never takes this lock.
     WorkerAccessGuard workerAccess(*this);
+    // Synth may already have swapped during a previous partial transition.
+    // Reuse it and retry only the still-unready NativeEngine graph finalizer.
+    if (newRate == mSampleRate) return !finalizer || finalizer(context, newRate);
     int target = 1 - mActiveIndex.load(std::memory_order_acquire);
 
     // M2: mark the target slot as "preparing" so the audio thread's
@@ -306,8 +329,6 @@ bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
                     std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count(),
                     std::memory_order_relaxed);
             }
-            // M2: apply the current desired state to the prepared slot.
-            if (success) applyDesiredState(newSynth);
         }
     }
 
@@ -317,6 +338,10 @@ bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
         mPreparing[target].store(false, std::memory_order_release);
         return false;
     }
+    // Keep reverb producer from slipping a command between desired-state
+    // restore and the slot flip (both slots are skipped while preparing).
+    std::unique_lock<std::mutex> reverbConfigLock(mReverbConfigMutex);
+    applyDesiredState(newSynth);
     if (mSynth[target]) delete_fluid_synth(mSynth[target]);
     if (mSettings[target]) delete_fluid_settings(mSettings[target]);
     mSynth[target] = newSynth;
@@ -334,6 +359,7 @@ bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
 
     // M2: clear the preparing flag.
     mPreparing[target].store(false, std::memory_order_release);
+    reverbConfigLock.unlock();
 
     // Update the sample rate.
     mSampleRate = newRate;
@@ -341,7 +367,10 @@ bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
     // New FluidSynth instance has no voices. Defer clearing audio-owned
     // tracking until next callback rather than mutating it from this worker.
     mResetActiveNotes.store(true, std::memory_order_release);
-    return true;
+    return !finalizer || finalizer(context, newRate);
+} catch (...) {
+    // Worker-side preparation may throw (e.g. allocation); RAII releases gate.
+    return false;
 }
 
 int FluidSynthEngine::loadSoundFont(const char* filePath) {
@@ -564,6 +593,17 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             break;
         case SynthCmdType::SET_REVERB:
             fluid_synth_reverb_on(synth, -1, cmd.a);
+            mAppliedReverbOn.store(cmd.a, std::memory_order_relaxed);
+            break;
+        case SynthCmdType::SET_REVERB_PARAMS:
+            fluid_synth_set_reverb_group_roomsize(synth, -1, cmd.reverbRoomSize);
+            fluid_synth_set_reverb_group_damp(synth, -1, cmd.reverbDamping);
+            fluid_synth_set_reverb_group_width(synth, -1, cmd.reverbWidth);
+            fluid_synth_set_reverb_group_level(synth, -1, cmd.reverbLevel);
+            mAppliedReverbRoomSize.store(cmd.reverbRoomSize, std::memory_order_relaxed);
+            mAppliedReverbDamping.store(cmd.reverbDamping, std::memory_order_relaxed);
+            mAppliedReverbWidth.store(cmd.reverbWidth, std::memory_order_relaxed);
+            mAppliedReverbLevel.store(cmd.reverbLevel, std::memory_order_relaxed);
             break;
         case SynthCmdType::SET_CHORUS:
             fluid_synth_chorus_on(synth, -1, cmd.a);
@@ -784,6 +824,7 @@ void FluidSynthEngine::renderChannels(float* const outputs[16], float* sharedRet
 // ── Worker-thread entry points (JNI/settings) — all enqueue, no locks ────────
 
 static inline void makeCmd(SynthCmd& c, SynthCmdType t, int a = 0, int b = 0, float f = 0.0f) {
+    c = {};
     c.type = t;
     c.a = a;
     c.b = b;
@@ -865,11 +906,83 @@ void FluidSynthEngine::setAudioDuck(bool ducked) {
 }
 
 void FluidSynthEngine::setReverb(bool on) {
-    if (!mInitialized.load()) return;
-    mReverbOn.store(on ? 1 : 0, std::memory_order_relaxed);
-    SynthCmd c;
-    makeCmd(c, SynthCmdType::SET_REVERB, on ? 1 : 0);
-    mCmdQueue.push(c);
+    (void)setReverbEnabledChecked(on);
+}
+
+bool FluidSynthEngine::setReverbEnabledChecked(bool on) {
+    std::lock_guard<std::mutex> lock(mReverbConfigMutex);
+    return setReverbEnabledLocked(on);
+}
+
+bool FluidSynthEngine::setReverbEnabledLocked(bool on) {
+    if (!mInitialized.load(std::memory_order_relaxed)) return false;
+    return piano::reverb::enqueueEnabledLocked(mCmdQueue, mReverbOn, on);
+}
+
+bool FluidSynthEngine::setReverbParameters(float room, float damping, float width, float level) {
+    std::lock_guard<std::mutex> producerLock(mReverbConfigMutex);
+    return setReverbParametersLocked(room, damping, width, level);
+}
+
+bool FluidSynthEngine::setReverbParametersLocked(float room, float damping, float width, float level) {
+    if (!mInitialized.load(std::memory_order_relaxed) ||
+        !piano::reverb::validParameters(room, damping, width, level)) return false;
+    return piano::reverb::enqueueParametersLocked(mCmdQueue, mReverbDesired, {room, damping, width, level});
+}
+
+piano::reverb::Parameters FluidSynthEngine::getDesiredReverbParameters() const {
+    std::lock_guard<std::mutex> lock(mReverbConfigMutex);
+    return mReverbDesired;
+}
+
+piano::reverb::Parameters FluidSynthEngine::getDefaultReverbParameters() const {
+    return {mReverbDefaults[0].load(std::memory_order_relaxed), mReverbDefaults[1].load(std::memory_order_relaxed),
+            mReverbDefaults[2].load(std::memory_order_relaxed), mReverbDefaults[3].load(std::memory_order_relaxed)};
+}
+
+bool FluidSynthEngine::setReverbParameter(int id, float value) {
+    std::lock_guard<std::mutex> producerLock(mReverbConfigMutex);
+    if (id == kReverbEnabled) {
+        bool enabled = false;
+        return piano::reverb::parseEnabledValue(value, enabled) && setReverbEnabledLocked(enabled);
+    }
+    const piano::reverb::Parameters p = mReverbDesired;
+    piano::reverb::Parameters next{};
+    if (!piano::reverb::updateParameter(p, id, value, next)) return false;
+    return piano::reverb::enqueueParametersLocked(mCmdQueue, mReverbDesired, next);
+}
+
+float FluidSynthEngine::getReverbParameter(int id) const {
+    if (id >= kReverbRoomSize && id <= kReverbLevel) {
+        const auto p = getDesiredReverbParameters();
+        switch (id) {
+            case kReverbRoomSize: return p.roomSize;
+            case kReverbDamping: return p.damping;
+            case kReverbWidth: return p.width;
+            case kReverbLevel: return p.level;
+        }
+    }
+    switch (id) {
+        case kReverbEnabled: return static_cast<float>(mReverbOn.load(std::memory_order_relaxed));
+        default: return 0.0f;
+    }
+}
+
+float FluidSynthEngine::getAppliedReverbParameter(int id) const {
+    switch (id) {
+        case kReverbEnabled: return static_cast<float>(mAppliedReverbOn.load(std::memory_order_relaxed));
+        case kReverbRoomSize: return mAppliedReverbRoomSize.load(std::memory_order_relaxed);
+        case kReverbDamping: return mAppliedReverbDamping.load(std::memory_order_relaxed);
+        case kReverbWidth: return mAppliedReverbWidth.load(std::memory_order_relaxed);
+        case kReverbLevel: return mAppliedReverbLevel.load(std::memory_order_relaxed);
+        default: return 0.0f;
+    }
+}
+
+float FluidSynthEngine::getReverbParameterDefault(int id) const {
+    return id >= kReverbRoomSize && id <= kReverbLevel
+        ? mReverbDefaults[id - kReverbRoomSize].load(std::memory_order_relaxed)
+        : (id == kReverbEnabled ? 1.0f : 0.0f);
 }
 
 void FluidSynthEngine::setChorus(bool on) {

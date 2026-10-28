@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <limits>
+#include <cmath>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/wait.h>
@@ -1073,6 +1074,43 @@ JNIEXPORT jfloat JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeGetIn
 JNIEXPORT jint JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeGetInstrumentEffectParamCount(JNIEnv* env,jclass,jstring id){auto* e=NativeEngine::getInstance();std::string s;auto p=instrumentId(env,id,s);return e&&p?e->getInstrumentEffectParamCount(p):0;}
 JNIEXPORT jfloatArray JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeGetInstrumentEffectParamInfo(JNIEnv* env,jclass,jstring id,jint index){auto* e=NativeEngine::getInstance();std::string s;auto p=instrumentId(env,id,s);if(!e||!p)return nullptr;uint32_t pid;float lo,hi,d;bool l,i,t;if(!e->getInstrumentEffectParamInfo(p,index,pid,lo,hi,d,l,i,t))return nullptr;jfloat vals[7]={static_cast<float>(pid),lo,hi,d,l?1.f:0.f,i?1.f:0.f,t?1.f:0.f};auto out=env->NewFloatArray(7);if(out)env->SetFloatArrayRegion(out,0,7,vals);return out;}
 JNIEXPORT jstring JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeGetInstrumentEffectParamName(JNIEnv* env,jclass,jstring id,jint index){auto* e=NativeEngine::getInstance();std::string s;auto p=instrumentId(env,id,s);const char* n=e&&p?e->getInstrumentEffectParamName(p,index):"";return env->NewStringUTF(n?n:"");}
+
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeSetSharedFxParameter(JNIEnv* env,jclass,jstring scope,jint id,jfloat value){
+    auto* e=NativeEngine::getInstance(); if(!e||!std::isfinite(value))return JNI_FALSE;
+    const char* text=scope?env->GetStringUTFChars(scope,nullptr):nullptr; if(!text)return JNI_FALSE;
+    bool ok=false;
+    if(std::strcmp(text,"native.delay")==0) ok=e->setSharedDelayParameter(id,value);
+    else if(std::strcmp(text,"fluidsynth.reverb")==0) ok=e->setReverbParameter(id,value);
+    env->ReleaseStringUTFChars(scope,text); return ok?JNI_TRUE:JNI_FALSE;
+}
+JNIEXPORT jfloat JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeGetSharedFxParameter(JNIEnv* env,jclass,jstring scope,jint id){
+    auto* e=NativeEngine::getInstance(); if(!e)return std::numeric_limits<float>::quiet_NaN();
+    const char* text=scope?env->GetStringUTFChars(scope,nullptr):nullptr; if(!text)return std::numeric_limits<float>::quiet_NaN();
+    float value=std::numeric_limits<float>::quiet_NaN();
+    if(std::strcmp(text,"native.delay")==0)value=e->getSharedDelayParameter(id);
+    else if(std::strcmp(text,"fluidsynth.reverb")==0)value=e->getReverbParameter(id);
+    env->ReleaseStringUTFChars(scope,text); return value;
+}
+JNIEXPORT jfloatArray JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeGetSharedFxParamInfo(JNIEnv* env,jclass,jstring scope,jint id){
+    auto* e=NativeEngine::getInstance(); if(!e)return nullptr;
+    const char* text=scope?env->GetStringUTFChars(scope,nullptr):nullptr; if(!text)return nullptr;
+    float lo=0,hi=0,def=0;bool integer=false,toggled=false,ok=false;
+    if(std::strcmp(text,"native.delay")==0)ok=e->getSharedDelayParameterInfo(id,lo,hi,def,integer,toggled);
+    else if(std::strcmp(text,"fluidsynth.reverb")==0)ok=e->getReverbParameterInfo(id,lo,hi,def,toggled);
+    env->ReleaseStringUTFChars(scope,text); if(!ok)return nullptr;
+    jfloat values[7]={static_cast<float>(id),lo,hi,def,0.0f,integer?1.0f:0.0f,toggled?1.0f:0.0f};
+    auto out=env->NewFloatArray(7);if(out)env->SetFloatArrayRegion(out,0,7,values);return out;
+}
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeIsSharedFxAvailable(JNIEnv* env,jclass,jstring scope){
+    auto* e=NativeEngine::getInstance(); if(!e)return JNI_FALSE;
+    const char* text=scope?env->GetStringUTFChars(scope,nullptr):nullptr;if(!text)return JNI_FALSE;
+    bool ok=std::strcmp(text,"native.delay")==0?e->isSharedDelayPrepared():std::strcmp(text,"fluidsynth.reverb")==0&&e->isEngineInitialized();
+    env->ReleaseStringUTFChars(scope,text);return ok?JNI_TRUE:JNI_FALSE;
+}
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeSetDelaySend(JNIEnv*,jclass,jint c,jfloat v){auto* e=NativeEngine::getInstance();return e&&e->setDelaySend(c,v)?JNI_TRUE:JNI_FALSE;}
+JNIEXPORT jfloat JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeGetDelaySend(JNIEnv*,jclass,jint c){auto* e=NativeEngine::getInstance();return e?e->getDelaySend(c):std::numeric_limits<float>::quiet_NaN();}
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeResetSharedDelay(JNIEnv*,jclass){auto* e=NativeEngine::getInstance();if(!e||!e->isSharedDelayPrepared())return JNI_FALSE;e->resetSharedDelay();return JNI_TRUE;}
+JNIEXPORT jint JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeGetInstrumentEffectLatencyFrames(JNIEnv* env,jclass,jint c,jstring id){auto* e=NativeEngine::getInstance();std::string s;auto p=instrumentId(env,id,s);return e&&p?e->getInstrumentEffectLatencyFrames(c,p):0;}
 
 // Launch quantization
 JNIEXPORT void JNICALL

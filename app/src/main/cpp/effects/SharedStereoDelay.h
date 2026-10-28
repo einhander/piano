@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 // Original, bounded stereo feedback delay for shared-send/return routing.
@@ -47,8 +48,10 @@ private:
     void beginTimeTransition(float delayFrames) noexcept;
 
     std::vector<float> mLeft, mRight;
+    std::vector<uint64_t> mLeftGeneration, mRightGeneration;
     std::size_t mCapacity = 0;
     std::size_t mWrite = 0;
+    uint64_t mGeneration = 1; // callback-owned lazy-clear epoch
     double mSampleRate = 0.0;
     int mMaxFrames = 0;
     std::atomic<bool> mEnabled{false};
@@ -72,3 +75,8 @@ private:
     static constexpr float kSlewPerSample = 1.0f / 128.0f;
     static constexpr float kTimeFadeProgressPerSample = 1.0f / 256.0f;
 };
+
+// Production routing primitive: sum the 16 post-insert stereo buses at frame
+// into one shared send. Channel pointers address interleaved stereo buffers.
+void sumSharedDelaySends(const float* const channelBuses[16], const float levels[16],
+                         int frame, float& left, float& right) noexcept;
