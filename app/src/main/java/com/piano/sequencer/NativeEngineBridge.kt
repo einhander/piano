@@ -125,6 +125,10 @@ object NativeEngineBridge {
     external fun nativeGetUnderrunCount(): Int
     external fun nativeGetAudioStreamError(): Int
     external fun nativeOpenAudio(): Int
+    /** Configure once, before the process's first audio stream open. */
+    external fun nativeConfigureDiagnosticAudioProfile(api: Int, rate: Int): Boolean
+    /** Closes output stream only; preserves native engine and SoundFont state. */
+    external fun nativeCloseAudioForDiagnostics()
     // Pass detached writable fd from SAF. Native owns/closes it only on true.
     // Start/stop may block and must be invoked from a worker thread.
     external fun nativeStartAudioRecording(fd: Int): Boolean

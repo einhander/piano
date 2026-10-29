@@ -169,6 +169,20 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeOpenAudio(JNIEnv* env, jclass)
     return static_cast<jint>(inst->open());
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeConfigureDiagnosticAudioProfile(JNIEnv*, jclass, jint api, jint rate) {
+    OboeOutput* inst = OboeOutput::getInstance();
+    if (!inst || api < 0 || api > 2 || rate < 0 || rate > 2) return JNI_FALSE;
+    return inst->configureDiagnosticProfile(static_cast<piano::audio::ApiChoice>(api),
+                                            static_cast<piano::audio::RateChoice>(rate)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeCloseAudioForDiagnostics(JNIEnv*, jclass) {
+    OboeOutput* inst = OboeOutput::getInstance();
+    if (inst) inst->closeForDiagnostics();
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeGetVersion(JNIEnv* env, jclass) {
     return env->NewStringUTF("0.0.0");

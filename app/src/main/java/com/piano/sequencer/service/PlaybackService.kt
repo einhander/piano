@@ -23,8 +23,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 import com.piano.sequencer.AppLogger
 import com.piano.sequencer.MainActivity
 import com.piano.sequencer.NativeEngineBridge
+import com.piano.sequencer.audio.DiagnosticsProfile
+import com.piano.sequencer.audio.ProfileActivation
+import com.piano.sequencer.audio.ManualStreamCloseState
+import com.piano.sequencer.audio.AudioDiagnosticSnapshot
+import com.piano.sequencer.audio.AudioStreamCloseResult
+import com.piano.sequencer.audio.applyProfileBeforeFirstOpen
+import com.piano.sequencer.audio.allowAudioOpen
+import com.piano.sequencer.audio.markManualCloseBeforeNativeClose
 
 class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
+    private val profileActivation get() = ProcessAudioDiagnosticState.profileActivation
+    private val manualStreamCloseState get() = ProcessAudioDiagnosticState.manualStreamCloseState
     private val audioOperationSequence = AtomicLong(0)
     private val recoveryRequestSequence = AtomicLong(0)
     private val recoveryPending = AtomicBoolean(false)
@@ -216,6 +226,10 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     fun startAudio() {
         val result = onAudioWorkerSync<Int?> {
+            if (manualStreamCloseState.isClosedByUser()) {
+                AppLogger.warn("PlaybackService", "Audio start refused: stream manually closed; restart app to apply next-start diagnostics profile")
+                return@onAudioWorkerSync null
+            }
             if (!audioFocusGranted) {
                 startWhenFocusGained = true
                 requestAudioFocus()
@@ -369,7 +383,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
                         AppLogger.info("PlaybackService", "Audio non-playing snapshot $nonPlaying")
                         lastNonPlayingSnapshot = nonPlaying
                     }
-                    if (!intentionalStop && audioFocusGranted && terminalStream) {
+                    if (com.piano.sequencer.audio.allowRecovery(manualStreamCloseState, terminalStream) && !intentionalStop && audioFocusGranted) {
                         val requestId = recoveryRequestSequence.incrementAndGet()
                         if (recoveryPending.compareAndSet(false, true)) {
                             AppLogger.warn("PlaybackService", "audio_recovery request=$requestId phase=queued cached_state=$state actual_state=$actualState error=$error cb=${NativeEngineBridge.nativeGetCallbackCount()} processed=${NativeEngineBridge.nativeGetProcessedFrames()} midi_q=${NativeEngineBridge.nativeGetMidiQueueDepth()}")
@@ -382,7 +396,11 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
                                             outcome = "cancelled focus_or_intentional_stop"
                                             return@execute
                                         }
-                                        val open = traceAudioOperation("open:recovery") { NativeEngineBridge.nativeOpenAudio() }
+                                        if (manualStreamCloseState.isClosedByUser()) {
+                                            outcome = "suppressed manual stream close"
+                                            return@execute
+                                        }
+                                        val open = openAudioOnWorker("open:recovery")
                                         if (open == 0) {
                                             val start = traceAudioOperation("start:recovery") { NativeEngineBridge.nativeStartAudio() }
                                             outcome = "open=0 start=$start"
@@ -444,7 +462,65 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     fun isEngineInitialized(): Boolean = NativeEngineBridge.nativeIsEngineInitialized()
 
-    fun openAudio(): Int = onAudioWorkerSync { traceAudioOperation("open:activity") { NativeEngineBridge.nativeOpenAudio() } }
+    private fun configureFirstOpenProfile(): Boolean {
+        val requested = DiagnosticsProfile.load(getSharedPreferences("piano_prefs", MODE_PRIVATE))
+        val result = applyProfileBeforeFirstOpen(profileActivation, requested) { api, rate ->
+            NativeEngineBridge.nativeConfigureDiagnosticAudioProfile(api, rate)
+        }
+        val active = profileActivation.activeProfile()
+        val decision = com.piano.sequencer.audio.profileLogSnapshot(requested, active, result)
+        val activeProfileText = decision.active?.let { "${it.api.storedValue}/${it.sampleRate.storedValue}" } ?: "unknown"
+        AppLogger.info("PlaybackService", "Audio diagnostic profile requested_api=${decision.requested.api.storedValue} requested_rate=${decision.requested.sampleRate.storedValue} decision=${decision.decision} active_profile=$activeProfileText active_now=${com.piano.sequencer.audio.isProfileActuallyActive(decision.decision)}")
+        return com.piano.sequencer.audio.isProfileConfigurationAccepted(result)
+    }
+
+    fun openAudio(): Int = onAudioWorkerSync {
+        if (!allowAudioOpen(manualStreamCloseState)) return@onAudioWorkerSync -1001
+        if (!configureFirstOpenProfile()) {
+            AppLogger.error("PlaybackService", "Audio open refused: diagnostic profile was not accepted by native stream")
+            return@onAudioWorkerSync -1002
+        }
+        traceAudioOperation("open:activity") { NativeEngineBridge.nativeOpenAudio() }
+    }
+
+    private fun openAudioOnWorker(operation: String): Int {
+        if (!configureFirstOpenProfile()) return -1002
+        return traceAudioOperation(operation) { NativeEngineBridge.nativeOpenAudio() }
+    }
+
+    /** Menu-facing backend operation. Closes Oboe only; engine/SF2/preferences remain alive. */
+    fun closeAudioStreamForDiagnostics(): AudioStreamCloseResult = onAudioWorkerSync {
+        if (NativeEngineBridge.nativeIsAudioRecording()) {
+            return@onAudioWorkerSync AudioStreamCloseResult(false, "Stop audio recording before closing stream", diagnosticSnapshot())
+        }
+        intentionalStop = true
+        startWhenFocusGained = false
+        recoveryPending.set(false)
+        var stop = -1
+        var closeFailure: Throwable? = null
+        try {
+            markManualCloseBeforeNativeClose(manualStreamCloseState,
+                { stop = traceAudioOperation("stop:diagnostic-close") { NativeEngineBridge.nativeStopAudio() } },
+                { NativeEngineBridge.nativeCloseAudioForDiagnostics() })
+        } catch (failure: Throwable) {
+            closeFailure = failure
+            AppLogger.error("PlaybackService", "Audio diagnostic close threw ${failure.javaClass.simpleName}")
+        }
+        val actual = NativeEngineBridge.nativeGetActualAudioState()
+        val diagnostics = NativeEngineBridge.nativeGetStreamDiagnostics()
+        val closed = closeFailure == null && actual == 12
+        AppLogger.info("PlaybackService", "Audio diagnostic close complete stop=$stop actual_state=$actual close_failure=${closeFailure?.javaClass?.simpleName ?: "none"} focus_retained=$audioFocusGranted $diagnostics")
+        AudioStreamCloseResult(closed, if (closed) "Audio stream closed; app state retained" else "Audio stream close failed: state=$actual", diagnosticSnapshot())
+    }
+
+    private fun diagnosticSnapshot(): AudioDiagnosticSnapshot = AudioDiagnosticSnapshot(
+        NativeEngineBridge.nativeGetActualAudioState(), audioFocusGranted,
+        manualStreamCloseState.isClosedByUser(), NativeEngineBridge.nativeGetStreamDiagnostics(),
+    )
+
+    fun getAudioDiagnosticStreamSnapshot(): AudioDiagnosticSnapshot = onAudioWorkerSync {
+        diagnosticSnapshot()
+    }
 
     fun stopAudioForMaintenance() {
         onAudioWorkerSync {
@@ -467,9 +543,10 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     fun restartAfterMaintenance() {
         onAudioWorkerSync {
+            if (manualStreamCloseState.isClosedByUser()) return@onAudioWorkerSync
             if (!audioFocusGranted) return@onAudioWorkerSync
             intentionalStop = false
-            val open = traceAudioOperation("open:maintenance-resume") { NativeEngineBridge.nativeOpenAudio() }
+            val open = openAudioOnWorker("open:maintenance-resume")
             if (open != 0) { AppLogger.warn("PlaybackService", "Audio reopen failed: $open"); return@onAudioWorkerSync }
             val result = traceAudioOperation("start:maintenance-resume") { NativeEngineBridge.nativeStartAudio() }
             AppLogger.info("PlaybackService", "Audio restart result=$result")
@@ -851,7 +928,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
                         duckedForFocus = false
                         NativeEngineBridge.nativeSetAudioDuck(false)
                     }
-                    if (resumeAfterFocus || startWhenFocusGained) {
+                    if (!manualStreamCloseState.isClosedByUser() && (resumeAfterFocus || startWhenFocusGained)) {
                         resumeAfterFocus = false
                         startWhenFocusGained = false
                         intentionalStop = false
@@ -918,4 +995,9 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "com.piano.sequencer.action.STOP"
     }
+}
+
+private object ProcessAudioDiagnosticState {
+    val profileActivation = ProfileActivation()
+    val manualStreamCloseState = ManualStreamCloseState()
 }

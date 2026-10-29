@@ -1,6 +1,7 @@
 #pragma once
 
 #include <oboe/Oboe.h>
+#include "StreamRecoveryPolicy.h"
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -17,6 +18,8 @@ public:
     OboeOutput& operator=(const OboeOutput&) = delete;
 
     oboe::Result open();
+    bool configureDiagnosticProfile(piano::audio::ApiChoice api, piano::audio::RateChoice rate);
+    void closeForDiagnostics();
     void close();
     oboe::Result start();
     oboe::Result stop();
@@ -93,6 +96,9 @@ private:
     static std::atomic<OnOpenCallback> sOnOpenCallback;
 
     oboe::AudioStream* mStream = nullptr;
+    piano::audio::ApiChoice mRequestedApi = piano::audio::ApiChoice::OboeDefault;
+    piano::audio::RateChoice mRequestedRate = piano::audio::RateChoice::Hz48000;
+    bool mProfileConfigured = false;
     // Serializes every non-callback stream dereference with close/open. Callback
     // accesses only callback-owned tuner state and never takes this lock.
     mutable std::mutex mStreamMutex;
@@ -104,6 +110,7 @@ private:
     std::atomic<bool> mLastErrorMatchesCurrent{false};
     int32_t mSampleRate = 0;
     int32_t mFramesPerBurst = 0;
+    std::atomic<int32_t> mActualApi{-1}, mActualFormat{-1}, mActualCallbackFrames{0};
     std::atomic<int32_t> mUnderrunCount{0};
 
     // Diagnostics (audio thread writes, worker thread reads).

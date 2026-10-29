@@ -152,6 +152,17 @@ Master volume, soft clipper/limiter, peak meter.
 ### OboeOutput
 Low-latency audio output. Exclusive mode with shared fallback.
 
+Diagnostic profile (current backend API, selected sample-rate request) is persisted
+in `piano_prefs` and latched once before the first stream open in each process.
+Changing it does not mutate a running stream; it takes effect after next app
+process start. API choices are Oboe default, AAudio, OpenSL ES. Rate choices are
+48 kHz, 44.1 kHz, or system rate (`0`, no explicit rate request). Explicit 48/44.1
+requests retain device-rate fallback; system rate is one no-explicit-rate attempt.
+Logs distinguish requested from negotiated rate and actual API/format/callback
+quantum. The diagnostic menu's stream-close action stops/closes only Oboe output and
+keeps NativeEngine/SF2 alive. It blocks automatic start/recovery for remainder of
+process; restart app to reopen. Audio recording must be stopped first.
+
 - The **actual Oboe sample rate is authoritative** — queried after `open()` and
   passed to `initEngine` (was hardcoded 48000; a 44.1k device would otherwise
   desync the transport tick math from the synth render rate).

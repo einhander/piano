@@ -57,6 +57,17 @@ oboe::StreamState OboeOutput::getActualState() {
     return actual;
 }
 
+bool OboeOutput::configureDiagnosticProfile(piano::audio::ApiChoice api, piano::audio::RateChoice rate) {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
+    if (mStream != nullptr || mProfileConfigured) return false;
+    mRequestedApi = api;
+    mRequestedRate = rate;
+    mProfileConfigured = true;
+    return true;
+}
+
+void OboeOutput::closeForDiagnostics() { close(); }
+
 oboe::Result OboeOutput::open() {
     std::lock_guard<std::mutex> streamLock(mStreamMutex);
     // Idempotent: the engine is a process-level singleton that survives activity
@@ -83,8 +94,7 @@ oboe::Result OboeOutput::open() {
         mStream = nullptr;
     }
 
-    // Controlled diagnostic A/B: request Shared only, without attempting
-    // Exclusive. All other stream requests and rate fallback remain unchanged.
+    // Diagnostics profile is fixed for process lifetime, set before first open.
     oboe::SharingMode modes[] = {oboe::SharingMode::Shared};
 
     // Sample rate: request 48000 first (the engine's design rate); if the
@@ -92,13 +102,18 @@ oboe::Result OboeOutput::open() {
     // set). The ACTUAL rate the stream ends up at is authoritative — it is
     // passed to the engine + FluidSynth (Fix #3: fixes the ~8.7% pitch/tempo
     // error on 44.1k devices).
-    int32_t sampleRates[] = { kRequestedSampleRate, 0 };  // 0 = device default
+    const int32_t requested = piano::audio::requestedRate(mRequestedRate);
+    int32_t sampleRates[] = { requested, 0 }; // explicit rates retain existing device-rate fallback; SYSTEM starts at 0
 
-    for (int32_t rate : sampleRates) {
+    const int rateCount = piano::audio::rateAttemptCount(mRequestedRate);
+    for (int rateIndex = 0; rateIndex < rateCount; ++rateIndex) {
+        const int32_t rate = sampleRates[rateIndex];
         for (auto mode : modes) {
             oboe::AudioStreamBuilder builder;
             builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
             builder.setSharingMode(mode);
+            if (mRequestedApi != piano::audio::ApiChoice::OboeDefault)
+                builder.setAudioApi(piano::audio::toOboeApi(mRequestedApi));
             builder.setFormat(oboe::AudioFormat::Float);
             builder.setChannelCount(oboe::ChannelCount::Stereo);
             builder.setUsage(oboe::Usage::Media);
@@ -117,6 +132,9 @@ oboe::Result OboeOutput::open() {
                 // requested — the actual rate is authoritative.
                 mSampleRate = mStream->getSampleRate();
                 mFramesPerBurst = mStream->getFramesPerBurst();
+                mActualApi.store(static_cast<int32_t>(mStream->getAudioApi()), std::memory_order_relaxed);
+                mActualFormat.store(static_cast<int32_t>(mStream->getFormat()), std::memory_order_relaxed);
+                mActualCallbackFrames.store(mStream->getFramesPerDataCallback(), std::memory_order_relaxed);
                 mStreamGeneration.fetch_add(1, std::memory_order_acq_rel);
                 mActiveStreamIdentity.store(reinterpret_cast<uintptr_t>(mStream), std::memory_order_release);
                 mPhaseIncrement = kTestFrequency / mSampleRate;
@@ -170,6 +188,8 @@ void OboeOutput::createLatencyTuner() {
 void OboeOutput::close() {
     std::lock_guard<std::mutex> streamLock(mStreamMutex);
     if (mStream != nullptr) {
+        // Oboe close joins callback processing. Callback never takes
+        // mStreamMutex; LatencyTuner state is destroyed only after close.
         const uint32_t generation = mStreamGeneration.load(std::memory_order_relaxed);
         const oboe::Result closeResult = mStream->close();
         mLastClosedGeneration.store(generation, std::memory_order_relaxed);
@@ -178,8 +198,8 @@ void OboeOutput::close() {
         mActiveStreamIdentity.store(0, std::memory_order_release);
         mStream = nullptr;
         mState.store(oboe::StreamState::Uninitialized);
+        mLatencyTuner.reset();
     }
-    mLatencyTuner.reset();
 }
 
 oboe::Result OboeOutput::start() {
@@ -440,6 +460,11 @@ std::string OboeOutput::getStreamDiagnostics() const {
     std::ostringstream out;
     out << "callback_policy=fixed64,callback_requested=64"
         << ",generation=" << mStreamGeneration.load(std::memory_order_relaxed)
+        << ",requested_api=" << static_cast<int>(mRequestedApi)
+        << ",requested_rate=" << piano::audio::requestedRate(mRequestedRate)
+        << ",actual_api=" << mActualApi.load(std::memory_order_relaxed)
+        << ",actual_format=" << mActualFormat.load(std::memory_order_relaxed)
+        << ",actual_callback_frames=" << mActualCallbackFrames.load(std::memory_order_relaxed)
         << ",last_closed_generation=" << mLastClosedGeneration.load(std::memory_order_relaxed)
         << ",last_close_result=" << mLastCloseResult.load(std::memory_order_relaxed)
         << ",last_close_reason=" << mLastCloseReason.load(std::memory_order_relaxed)
