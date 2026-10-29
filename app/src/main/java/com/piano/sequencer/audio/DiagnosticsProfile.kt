@@ -57,6 +57,7 @@ data class AudioDiagnosticSnapshot(
     val focusRetained: Boolean,
     val manuallyClosed: Boolean,
     val streamDiagnostics: String,
+    val manuallyStopped: Boolean = false,
 )
 
 data class AudioStreamCloseResult(val closed: Boolean, val message: String, val snapshot: AudioDiagnosticSnapshot)
@@ -83,8 +84,12 @@ class ProfileActivation {
 /** Manual stream close blocks all opens/starts in this process; process restart clears this state. */
 class ManualStreamCloseState {
     @Volatile private var closedByUser = false
+    @Volatile private var stoppedByUser = false
     fun isClosedByUser(): Boolean = closedByUser
-    fun close() { closedByUser = true }
+    fun isStoppedByUser(): Boolean = stoppedByUser
+    fun isSuspendedByUser(): Boolean = closedByUser || stoppedByUser
+    fun stop() { stoppedByUser = true }
+    fun close() { closedByUser = true; stoppedByUser = true }
 }
 
 enum class ProfileApplyResult { APPLIED, ALREADY_LATCHED, STREAM_ALREADY_OPEN, NATIVE_REJECTED }
@@ -131,5 +136,14 @@ fun profilePersistenceMessage(saved: Boolean): String =
 
 fun allowAudioOpen(manualClose: ManualStreamCloseState): Boolean = !manualClose.isClosedByUser()
 
+fun canStopOrCloseForDiagnostics(audioRecordingActive: Boolean): Boolean = !audioRecordingActive
+
+fun allowAudioStart(manualState: ManualStreamCloseState): Boolean = !manualState.isSuspendedByUser()
+
 fun allowRecovery(manualClose: ManualStreamCloseState, terminalBackendState: Boolean): Boolean =
-    !manualClose.isClosedByUser() && terminalBackendState
+    !manualClose.isSuspendedByUser() && terminalBackendState
+
+fun markManualStopBeforeNativeStop(state: ManualStreamCloseState, stopOutput: () -> Unit) {
+    state.stop()
+    stopOutput()
+}

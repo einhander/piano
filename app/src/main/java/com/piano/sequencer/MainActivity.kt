@@ -801,12 +801,6 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(this@MainActivity, SequencerActivity::class.java))
             }
         }
-        val audioDiagnosticsButton = Button(this).apply {
-            text = "Audio diagnostics"
-            setOnClickListener {
-                startActivity(Intent(this@MainActivity, AudioDiagnosticsActivity::class.java))
-            }
-        }
         val exitButton = Button(this).apply {
             text = getString(R.string.ui_exit)
             setOnClickListener {
@@ -903,7 +897,7 @@ class MainActivity : AppCompatActivity() {
         }
         listOf(c4Button, d4Button, e4Button, panicButton, projectsButton,
             aboutButton, settingsButton, instrumentsButton, effectsButton,
-            sequencerButton, audioDiagnosticsButton, exitButton, midiDeviceButton, multiChannelButton,
+            sequencerButton, exitButton, midiDeviceButton, multiChannelButton,
             recordButton).forEach {
             it.isAllCaps = false
             it.textSize = 14f
@@ -916,7 +910,7 @@ class MainActivity : AppCompatActivity() {
         listOf(instrumentsButton, effectsButton, sequencerButton, multiChannelButton).forEach {
             com.piano.sequencer.ui.UiControlStyle.apply(it, tonal = true)
         }
-        listOf(projectsButton, settingsButton, audioDiagnosticsButton, aboutButton, midiDeviceButton,
+        listOf(projectsButton, settingsButton, aboutButton, midiDeviceButton,
             c4Button, d4Button, e4Button).forEach {
             com.piano.sequencer.ui.UiControlStyle.apply(it)
         }
@@ -947,7 +941,6 @@ class MainActivity : AppCompatActivity() {
         layout.addView(View(this).apply { setBackgroundColor(getColor(R.color.ui_outline)) },
             LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(8); bottomMargin = dp(4) })
         layout.addView(row(projectsButton, settingsButton))
-        layout.addView(row(audioDiagnosticsButton))
         layout.addView(row(aboutButton, exitButton))
         panicButton.background = getDrawable(R.drawable.ui_action_frame)
         panicButton.backgroundTintList = android.content.res.ColorStateList.valueOf(getColor(R.color.ui_danger))

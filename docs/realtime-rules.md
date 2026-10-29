@@ -61,11 +61,11 @@ Worker `audio_lifecycle` lines bracket open/start/stop operations with operation
 
 Service recovery requests are single-flight: repeated 1 Hz requests coalesce while one open/start attempt is queued or running. Worker health polling queries actual backend state. Actual `Closed`/`Disconnected` routes through existing serialized open/close path to a fresh stream; `open()` uses backend state rather than stale cache to decide reuse. `start()` returns a terminal-state error rather than calling start on an ended stream. Cached `Started` alone never triggers forced close or watchdog recovery. A late Oboe error callback only marks the stream closed when its supplied stream identity still matches the active stream. After keyboard reconnect, expected evidence is a recovery request, old-generation close, new generation increment, successful start, then callback/frame progress for new stream. Device test required.
 
-Diagnostic backend API/rate profile is fixed before first process open. Native
-stream close is serialized on audio worker and only targets output; it does not
-shut down NativeEngine or unload SoundFonts. Manual close suppresses focus/recovery
-reopen until process restart. Audio recording is refused while active. No close
-based on callback stall or healthy `Started` state.
+Diagnostic backend API/rate profile is fixed before first process open. Manual
+STOP or CLOSE is serialized on audio worker and only targets output; neither
+shuts down NativeEngine nor unloads SoundFonts. Both suppress start/recovery until
+process restart. STOP retains stream; CLOSE releases it. Audio recording is
+refused while active. No close based on callback stall or healthy `Started` state.
 
 ## MIDI Handling
 

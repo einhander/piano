@@ -117,16 +117,32 @@ class DiagnosticsProfileTest {
         val close = ManualStreamCloseState()
         assertFalse(close.isClosedByUser())
         assertTrue(allowAudioOpen(close))
+        assertTrue(allowAudioStart(close))
         assertTrue(allowRecovery(close, terminalBackendState = true))
         assertFalse(allowRecovery(close, terminalBackendState = false))
         close.close()
         assertTrue(close.isClosedByUser())
         assertFalse(allowAudioOpen(close))
+        assertFalse(allowAudioStart(close))
         assertFalse(allowRecovery(close, terminalBackendState = true))
         val closeOrder = mutableListOf<String>()
         val closeState = ManualStreamCloseState()
         markManualCloseBeforeNativeClose(closeState, { assertTrue(closeState.isClosedByUser()); closeOrder += "stop" }, { assertTrue(closeState.isClosedByUser()); closeOrder += "close" })
         assertEquals(listOf("stop", "close"), closeOrder)
+        val stoppedState = ManualStreamCloseState()
+        var nativeStopCalled = false
+        markManualStopBeforeNativeStop(stoppedState) {
+            assertTrue(stoppedState.isStoppedByUser())
+            nativeStopCalled = true
+        }
+        assertTrue(nativeStopCalled)
+        assertTrue(stoppedState.isStoppedByUser())
+        assertFalse(stoppedState.isClosedByUser())
+        assertFalse(allowAudioStart(stoppedState))
+        assertTrue(allowAudioOpen(stoppedState)) // STOP retains open stream; CLOSE remains available
+        assertFalse(allowRecovery(stoppedState, terminalBackendState = true))
+        assertTrue(canStopOrCloseForDiagnostics(audioRecordingActive = false))
+        assertFalse(canStopOrCloseForDiagnostics(audioRecordingActive = true))
         assertEquals(ProfileApplyResult.APPLIED, applyProfileBeforeFirstOpen(ProfileActivation(), DiagnosticsProfile()) { _, _ -> true }) // new process state
     }
 }

@@ -31,6 +31,9 @@ import com.piano.sequencer.audio.AudioStreamCloseResult
 import com.piano.sequencer.audio.applyProfileBeforeFirstOpen
 import com.piano.sequencer.audio.allowAudioOpen
 import com.piano.sequencer.audio.markManualCloseBeforeNativeClose
+import com.piano.sequencer.audio.markManualStopBeforeNativeStop
+import com.piano.sequencer.audio.allowAudioStart
+import com.piano.sequencer.audio.canStopOrCloseForDiagnostics
 
 class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     private val profileActivation get() = ProcessAudioDiagnosticState.profileActivation
@@ -226,8 +229,8 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     fun startAudio() {
         val result = onAudioWorkerSync<Int?> {
-            if (manualStreamCloseState.isClosedByUser()) {
-                AppLogger.warn("PlaybackService", "Audio start refused: stream manually closed; restart app to apply next-start diagnostics profile")
+            if (!allowAudioStart(manualStreamCloseState)) {
+                AppLogger.warn("PlaybackService", "Audio start refused: manually stopped or closed; restart app to resume playback")
                 return@onAudioWorkerSync null
             }
             if (!audioFocusGranted) {
@@ -396,8 +399,8 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
                                             outcome = "cancelled focus_or_intentional_stop"
                                             return@execute
                                         }
-                                        if (manualStreamCloseState.isClosedByUser()) {
-                                            outcome = "suppressed manual stream close"
+                                        if (manualStreamCloseState.isSuspendedByUser()) {
+                                            outcome = "suppressed manual stream stop/close"
                                             return@execute
                                         }
                                         val open = openAudioOnWorker("open:recovery")
@@ -490,7 +493,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     /** Menu-facing backend operation. Closes Oboe only; engine/SF2/preferences remain alive. */
     fun closeAudioStreamForDiagnostics(): AudioStreamCloseResult = onAudioWorkerSync {
-        if (NativeEngineBridge.nativeIsAudioRecording()) {
+        if (!canStopOrCloseForDiagnostics(NativeEngineBridge.nativeIsAudioRecording())) {
             return@onAudioWorkerSync AudioStreamCloseResult(false, "Stop audio recording before closing stream", diagnosticSnapshot())
         }
         intentionalStop = true
@@ -513,14 +516,43 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         AudioStreamCloseResult(closed, if (closed) "Audio stream closed; app state retained" else "Audio stream close failed: state=$actual", diagnosticSnapshot())
     }
 
+    /** Stop output but retain open stream, NativeEngine, SoundFont, and focus. */
+    fun stopAudioStreamForDiagnostics(): AudioStreamCloseResult = onAudioWorkerSync {
+        if (!canStopOrCloseForDiagnostics(NativeEngineBridge.nativeIsAudioRecording())) {
+            return@onAudioWorkerSync AudioStreamCloseResult(false, "Stop audio recording before stopping stream", diagnosticSnapshot())
+        }
+        intentionalStop = true
+        startWhenFocusGained = false
+        resumeAfterFocus = false
+        recoveryPending.set(false)
+        var stop = -1
+        var failure: Throwable? = null
+        try {
+            markManualStopBeforeNativeStop(manualStreamCloseState) {
+                stop = traceAudioOperation("stop:diagnostic-stop") { NativeEngineBridge.nativeStopAudio() }
+            }
+        } catch (error: Throwable) {
+            failure = error
+            AppLogger.error("PlaybackService", "Audio diagnostic stop threw ${error.javaClass.simpleName}")
+        }
+        val actual = NativeEngineBridge.nativeGetActualAudioState()
+        val stopped = failure == null && stop == 0
+        val snapshot = diagnosticSnapshot()
+        AppLogger.info("PlaybackService", "Audio diagnostic stop complete stop=$stop actual_state=$actual focus_retained=$audioFocusGranted failure=${failure?.javaClass?.simpleName ?: "none"} ${snapshot.streamDiagnostics}")
+        AudioStreamCloseResult(stopped, if (stopped) "Audio stopped; stream and app state retained" else "Audio stop failed: result=$stop state=$actual", snapshot)
+    }
+
     private fun diagnosticSnapshot(): AudioDiagnosticSnapshot = AudioDiagnosticSnapshot(
         NativeEngineBridge.nativeGetActualAudioState(), audioFocusGranted,
         manualStreamCloseState.isClosedByUser(), NativeEngineBridge.nativeGetStreamDiagnostics(),
+        manualStreamCloseState.isStoppedByUser(),
     )
 
     fun getAudioDiagnosticStreamSnapshot(): AudioDiagnosticSnapshot = onAudioWorkerSync {
         diagnosticSnapshot()
     }
+
+    fun isAudioManuallySuspendedForDiagnostics(): Boolean = manualStreamCloseState.isSuspendedByUser()
 
     fun stopAudioForMaintenance() {
         onAudioWorkerSync {
@@ -543,7 +575,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     fun restartAfterMaintenance() {
         onAudioWorkerSync {
-            if (manualStreamCloseState.isClosedByUser()) return@onAudioWorkerSync
+            if (manualStreamCloseState.isSuspendedByUser()) return@onAudioWorkerSync
             if (!audioFocusGranted) return@onAudioWorkerSync
             intentionalStop = false
             val open = openAudioOnWorker("open:maintenance-resume")
@@ -928,7 +960,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
                         duckedForFocus = false
                         NativeEngineBridge.nativeSetAudioDuck(false)
                     }
-                    if (!manualStreamCloseState.isClosedByUser() && (resumeAfterFocus || startWhenFocusGained)) {
+                    if (allowAudioStart(manualStreamCloseState) && (resumeAfterFocus || startWhenFocusGained)) {
                         resumeAfterFocus = false
                         startWhenFocusGained = false
                         intentionalStop = false

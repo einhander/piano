@@ -20,6 +20,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import com.piano.sequencer.service.PlaybackService
+import com.piano.sequencer.audio.AudioApiChoice
+import com.piano.sequencer.audio.DiagnosticsProfile
+import com.piano.sequencer.audio.SampleRateChoice
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -142,6 +145,7 @@ class SettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
+        addAudioOutputSection()
 
         setSupportActionBar(findViewById(R.id.toolbar))
         supportActionBar?.apply {
@@ -415,6 +419,115 @@ class SettingsActivity : AppCompatActivity() {
             unbindService(serviceConnection)
         } catch (_: Exception) {
             // ignore if not bound
+        }
+    }
+
+    private fun addAudioOutputSection() {
+        val section = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = getDrawable(R.drawable.card_frame)
+            val padding = (12 * resources.displayMetrics.density).toInt()
+            setPadding(padding, padding, padding, padding)
+        }
+        fun label(value: String) = TextView(this).apply {
+            text = value
+            setPadding(0, 8, 0, 8)
+            section.addView(this)
+        }
+        label("Audio output").apply {
+            textSize = 18f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        label("Next full process start only. Saving does not change the current stream. Requests may fall back; Audio diagnostics shows the current requested and actual configuration.")
+        val saved = label("Loading saved audio output…")
+        label("Desired sample rate")
+        val rate = Spinner(this).apply {
+            adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item,
+                SampleRateChoice.entries.map { it.displayName })
+            isEnabled = false
+            section.addView(this)
+        }
+        label("Requested audio API")
+        val api = Spinner(this).apply {
+            adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item,
+                AudioApiChoice.entries.map { it.displayName })
+            isEnabled = false
+            section.addView(this)
+        }
+        val status = label("").apply {
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        var savedProfile: DiagnosticsProfile? = null
+        fun showSaved(profile: DiagnosticsProfile) {
+            savedProfile = profile
+            saved.text = "Saved for next full process start:\n${profile.api.displayName}\n${profile.sampleRate.displayName}"
+        }
+        val selectionListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val previous = savedProfile ?: return
+                val selected = DiagnosticsProfile(AudioApiChoice.entries[api.selectedItemPosition],
+                    SampleRateChoice.entries[rate.selectedItemPosition])
+                if (selected != previous) status.text = "Unsaved selection. Press Save to use it at the next full process start."
+            }
+        }
+        api.onItemSelectedListener = selectionListener
+        rate.onItemSelectedListener = selectionListener
+        val save = Button(this).apply {
+            text = "Save for next process start"
+            isAllCaps = false
+            isEnabled = false
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
+            section.addView(this, LinearLayout.LayoutParams(-1, -2))
+        }
+        save.setOnClickListener {
+            val profile = DiagnosticsProfile(AudioApiChoice.entries[api.selectedItemPosition],
+                SampleRateChoice.entries[rate.selectedItemPosition])
+            save.isEnabled = false
+            api.isEnabled = false
+            rate.isEnabled = false
+            status.text = "Saving…"
+            mainExecutor.execute {
+                val error = runCatching {
+                    check(profile.persist(getSharedPreferences("piano_prefs", MODE_PRIVATE))) {
+                        "Preference write failed"
+                    }
+                }.exceptionOrNull()
+                runOnUiThread {
+                    if (isDestroyed || isFinishing) return@runOnUiThread
+                    if (error == null) {
+                        showSaved(profile)
+                        status.text = "Saved for next process start. Current stream unchanged."
+                    } else {
+                        status.text = "Could not save audio output: ${error.message}. Retry before restarting."
+                    }
+                    save.isEnabled = true
+                    api.isEnabled = true
+                    rate.isEnabled = true
+                }
+            }
+        }
+        label("Use Exit on the main screen, then relaunch, or Android Settings → Force stop, then relaunch. Back or reopening Settings is not a full process restart.")
+        section.addView(Button(this).apply {
+            text = "Audio diagnostics"
+            isAllCaps = false
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
+            setOnClickListener { startActivity(Intent(this@SettingsActivity, AudioDiagnosticsActivity::class.java)) }
+        }, LinearLayout.LayoutParams(-1, -2))
+        findViewById<LinearLayout>(R.id.settingsSections).addView(section, 0)
+        mainExecutor.execute {
+            val result = runCatching { DiagnosticsProfile.load(getSharedPreferences("piano_prefs", MODE_PRIVATE)) }
+            runOnUiThread {
+                if (isDestroyed || isFinishing) return@runOnUiThread
+                result.onSuccess { profile ->
+                    api.setSelection(profile.api.ordinal)
+                    rate.setSelection(profile.sampleRate.ordinal)
+                    showSaved(profile)
+                    api.isEnabled = true
+                    rate.isEnabled = true
+                    save.isEnabled = true
+                }.onFailure { status.text = "Could not load saved audio output: ${it.message}" }
+            }
         }
     }
 
