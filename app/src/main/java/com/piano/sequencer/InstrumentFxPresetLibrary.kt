@@ -20,17 +20,30 @@ object InstrumentFxPresetCodec {
     private val json=Json { ignoreUnknownKeys=false; encodeDefaults=true }
     val insertIds = listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper", "lsp.filter", "lsp.phaser", "lsp.flanger")
 
-    @Serializable private data class Library(val version:Int,val presets:List<Entry>)
+    data class LibraryData(val presets: List<InstrumentFxPreset>, val factoryRevision: Int)
+
+    @Serializable private data class Library(val version:Int,val presets:List<Entry>,val factoryRevision:Int=0)
     @Serializable private data class Entry(val name:String,val rackEnabled:Boolean,val effects:List<InsertEntry>,val delay:DelayEntry)
     @Serializable private data class InsertEntry(val id:String,val enabled:Boolean,val params:Map<String,Float>)
     @Serializable private data class DelayEntry(val enabled:Boolean,val params:Map<String,Float>)
-    fun encode(presets: List<InstrumentFxPreset>): String = json.encodeToString(Library(VERSION,presets.map { p -> Entry(p.name,p.rackEnabled,p.effects.map { InsertEntry(it.effectId,it.enabled,it.parameters.mapKeys { e->e.key.toString() }) },DelayEntry(p.delay.enabled,p.delay.parameters.mapKeys { e->e.key.toString() })) }))
+    fun encode(presets: List<InstrumentFxPreset>, factoryRevision: Int = 0): String =
+        json.encodeToString(Library(VERSION, presets.map { p ->
+            Entry(
+                p.name,
+                p.rackEnabled,
+                p.effects.map { InsertEntry(it.effectId, it.enabled, it.parameters.mapKeys { e -> e.key.toString() }) },
+                DelayEntry(p.delay.enabled, p.delay.parameters.mapKeys { e -> e.key.toString() })
+            )
+        }, factoryRevision))
 
-    fun decode(payload: String): List<InstrumentFxPreset> {
+    fun decode(payload: String): List<InstrumentFxPreset> = decodeLibrary(payload).presets
+
+    fun decodeLibrary(payload: String): LibraryData {
         val root=json.decodeFromString<Library>(payload)
         require(root.version==VERSION) { "Unsupported preset library version" }
+        require(root.factoryRevision >= 0) { "Invalid factory revision" }
         val names=mutableSetOf<String>()
-        return root.presets.map { p ->
+        val decoded = root.presets.map { p ->
             InstrumentFxPresetLibrary.validateName(p.name)
             require(names.add(p.name.lowercase())) { "Duplicate preset name" }
             require(p.effects.size==insertIds.size) { "Invalid insert count" }
@@ -39,6 +52,7 @@ object InstrumentFxPresetCodec {
             require(delay.isEmpty() || delay.keys==(0..5).toSet()) { "Delay parameters must be complete" }
             InstrumentFxPreset(p.name,p.rackEnabled,inserts,InstrumentFxPreset.Delay(p.delay.enabled,delay))
         }
+        return LibraryData(decoded, root.factoryRevision)
     }
     private fun readParams(o: Map<String, Float>, allowed: IntRange?): Map<Int, Float> = buildMap {
         o.forEach { (key, value) ->
@@ -55,7 +69,7 @@ interface InstrumentFxPresetStorage {
     fun commit(value: String): Boolean
 }
 class InstrumentFxPresetLibrary(private val storage: InstrumentFxPresetStorage) {
-    fun list(): List<InstrumentFxPreset> = load()
+    fun list(): List<InstrumentFxPreset> = load().presets
 
     /** Seed only genuinely uninitialized storage. Encoded empty libraries stay empty forever. */
     @Synchronized
@@ -65,13 +79,32 @@ class InstrumentFxPresetLibrary(private val storage: InstrumentFxPresetStorage) 
         require(validated.map { it.name.lowercase() }.toSet().size == validated.size) {
             "Default preset names must be unique"
         }
-        check(storage.commit(InstrumentFxPresetCodec.encode(validated))) { "Preset library seed failed" }
+        commitSeed(validated, CURRENT_FACTORY_REVISION)
     }
 
     /** First-read entry point: invoke native factory only when storage has never been initialized. */
     @Synchronized
     fun listOrSeed(defaults: () -> List<InstrumentFxPreset>): List<InstrumentFxPreset> {
-        readExisting()?.let { return it }
+        val existing = readExisting()
+        if (existing == null) {
+            val validated = captureDefaults(defaults)
+            commitSeed(validated, CURRENT_FACTORY_REVISION)
+            return validated
+        }
+        if (existing.factoryRevision >= CURRENT_FACTORY_REVISION) return existing.presets
+
+        // Add only this revision's new factory rows. Existing built-ins and user rows remain untouched.
+        val additions = captureDefaults(defaults).filter { it.name in FACTORY_ADDITION_NAMES }
+        require(additions.map { it.name }.toSet() == FACTORY_ADDITION_NAMES) {
+            "Factory upgrade did not provide all revision $CURRENT_FACTORY_REVISION presets"
+        }
+        val existingNames = existing.presets.map { it.name.lowercase() }.toSet()
+        val merged = existing.presets + additions.filter { it.name.lowercase() !in existingNames }
+        commitSeed(merged, CURRENT_FACTORY_REVISION)
+        return merged
+    }
+
+    private fun captureDefaults(defaults: () -> List<InstrumentFxPreset>): List<InstrumentFxPreset> {
         val initial = try {
             defaults()
         } catch (error: Exception) {
@@ -85,38 +118,38 @@ class InstrumentFxPresetLibrary(private val storage: InstrumentFxPresetStorage) 
         require(validated.map { it.name.lowercase() }.toSet().size == validated.size) {
             "Default preset names must be unique"
         }
-        commitSeed(validated)
         return validated
     }
+
     @Synchronized
     fun save(preset: InstrumentFxPreset, overwrite: Boolean = false) {
         validatePreset(preset)
         val old = load()
-        val idx = old.indexOfFirst { it.name.equals(preset.name, true) }
+        val idx = old.presets.indexOfFirst { it.name.equals(preset.name, true) }
         require(idx < 0 || overwrite) { "Preset name already exists" }
-        val next = old.toMutableList()
+        val next = old.presets.toMutableList()
         if (idx < 0) next.add(preset) else next[idx] = preset
-        check(storage.commit(InstrumentFxPresetCodec.encode(next))) { "Preset library write failed" }
+        check(storage.commit(InstrumentFxPresetCodec.encode(next, old.factoryRevision))) { "Preset library write failed" }
     }
 
     @Synchronized
     fun delete(name: String) {
         val old = load()
-        val next = old.filterNot { it.name.equals(name, true) }
-        require(next.size != old.size) { "Preset not found" }
-        check(storage.commit(InstrumentFxPresetCodec.encode(next))) { "Preset library write failed" }
+        val next = old.presets.filterNot { it.name.equals(name, true) }
+        require(next.size != old.presets.size) { "Preset not found" }
+        check(storage.commit(InstrumentFxPresetCodec.encode(next, old.factoryRevision))) { "Preset library write failed" }
     }
 
-    private fun load() = readExisting() ?: emptyList()
+    private fun load() = readExisting() ?: InstrumentFxPresetCodec.LibraryData(emptyList(), CURRENT_FACTORY_REVISION)
 
-    private fun readExisting(): List<InstrumentFxPreset>? = try {
-        storage.read()?.let(InstrumentFxPresetCodec::decode)
+    private fun readExisting(): InstrumentFxPresetCodec.LibraryData? = try {
+        storage.read()?.let(InstrumentFxPresetCodec::decodeLibrary)
     } catch (error: Exception) {
         throw IllegalStateException("Cannot read preset library: ${error.message ?: error.javaClass.simpleName}", error)
     }
 
-    private fun commitSeed(presets: List<InstrumentFxPreset>) {
-        val encoded = InstrumentFxPresetCodec.encode(presets)
+    private fun commitSeed(presets: List<InstrumentFxPreset>, revision: Int) {
+        val encoded = InstrumentFxPresetCodec.encode(presets, revision)
         val committed = try {
             storage.commit(encoded)
         } catch (error: Exception) {
@@ -126,6 +159,12 @@ class InstrumentFxPresetLibrary(private val storage: InstrumentFxPresetStorage) 
     }
 
     companion object {
+        private const val CURRENT_FACTORY_REVISION = 1
+        private val FACTORY_ADDITION_NAMES = setOf(
+            "Guitar · Distortion",
+            "Organ · Classic",
+            "Strings · Distortion"
+        )
         fun validateName(name: String) {
             require(name.trim() == name && name.length in 1..40 && name.none { it.isISOControl() }) {
                 "Name must be 1–40 printable characters"
@@ -244,6 +283,9 @@ class InstrumentFxPresetAdapter(private val port: InstrumentFxChannelPort) {
         val chorus = clean + "lsp.chorus"
         val crunch = clean + setOf("lsp.compressor", "lsp.clipper")
         val lead = clean + setOf("lsp.compressor", "lsp.chorus")
+        val guitarDistortion = clean + setOf("lsp.compressor", "lsp.clipper")
+        val organRotary = setOf("lsp.chorus", "lsp.phaser", "lsp.clipper")
+        val stringsDistortion = setOf("lsp.compressor", "lsp.clipper", "lsp.chorus")
         return listOf(
             build("Guitar · Clean Chorus", chorus, overrides = mapOf("lsp.chorus" to mapOf(304 to 20f))),
             build("Guitar · Crunch", crunch, overrides = mapOf("lsp.clipper" to mapOf(320 to 1.5f))),
@@ -273,6 +315,28 @@ class InstrumentFxPresetAdapter(private val port: InstrumentFxChannelPort) {
                 "Piano · Wide",
                 chorus + "lsp.flanger",
                 overrides = mapOf("lsp.chorus" to mapOf(304 to 18f), "lsp.flanger" to mapOf(403 to 20f))
+            ),
+            build(
+                "Guitar · Distortion",
+                guitarDistortion,
+                overrides = mapOf("lsp.clipper" to mapOf(320 to 2f, 322 to -4f))
+            ),
+            build(
+                "Organ · Classic",
+                organRotary,
+                overrides = mapOf(
+                    "lsp.chorus" to mapOf(304 to 15f),
+                    "lsp.phaser" to mapOf(380 to .25f, 384 to 18f),
+                    "lsp.clipper" to mapOf(320 to 1.15f)
+                )
+            ),
+            build(
+                "Strings · Distortion",
+                stringsDistortion,
+                overrides = mapOf(
+                    "lsp.chorus" to mapOf(304 to 10f),
+                    "lsp.clipper" to mapOf(320 to 1.35f, 322 to -2f)
+                )
             )
         ).onEach(InstrumentFxPresetLibrary::validatePreset)
     }

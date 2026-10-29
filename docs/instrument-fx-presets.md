@@ -11,8 +11,12 @@ programs, MIDI mappings, master effects, and global FluidSynth Reverb.
 
 Save current creates a named snapshot; replacing an existing name requires
 confirmation. Delete removes the shared snapshot without changing current sound.
-The first library initialization adds eight editable guitar, violin, and piano
-starting points. Deleting them does not cause them to reappear on restart.
+The first library initialization adds eleven editable starting points for guitar,
+violin, piano, organ, and strings. Existing libraries receive Guitar · Distortion,
+Organ · Classic, and Strings · Distortion once, without replacing name collisions
+or restoring deleted older presets. Deleting migrated additions does not cause
+them to reappear on restart. Organ · Classic approximates modulation with existing
+Chorus/Phaser and mild drive; it is not a dedicated Leslie simulation.
 Actual sound depends on the selected SoundFont; these presets do not select an
 instrument program.
 

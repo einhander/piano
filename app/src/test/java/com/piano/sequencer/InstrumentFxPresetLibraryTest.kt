@@ -144,7 +144,7 @@ class InstrumentFxPresetLibraryTest {
         override fun rackEnabled(s: String, c: Int) = true
     }
 
-    @Test fun firstRunSeedsEightNativeDefaultBasedPresetsOnceOnly() {
+    @Test fun firstRunSeedsElevenNativeDefaultBasedPresetsOnceOnly() {
         var raw: String? = null
         var commits = 0
         val storage = object : InstrumentFxPresetStorage {
@@ -154,9 +154,13 @@ class InstrumentFxPresetLibraryTest {
         val library = InstrumentFxPresetLibrary(storage)
         val port = Port()
         val defaults = InstrumentFxPresetAdapter(port).factoryDefaults("set-b", 4)
-        assertEquals(8, defaults.size)
+        assertEquals(11, defaults.size)
         assertEquals(
-            listOf("Guitar · Clean Chorus", "Guitar · Crunch", "Guitar · Lead", "Violin · Warm Solo", "Violin · Spacious", "Piano · Clean", "Piano · Warm", "Piano · Wide"),
+            listOf(
+                "Guitar · Clean Chorus", "Guitar · Crunch", "Guitar · Lead", "Violin · Warm Solo",
+                "Violin · Spacious", "Piano · Clean", "Piano · Warm", "Piano · Wide",
+                "Guitar · Distortion", "Organ · Classic", "Strings · Distortion"
+            ),
             defaults.map { it.name }
         )
         defaults.forEach { preset ->
@@ -165,6 +169,10 @@ class InstrumentFxPresetLibraryTest {
                 preset.effects.associate { it.effectId to it.parameters.keys })
             assertEquals((0..5).toSet(), preset.delay.parameters.keys)
             assertTrue(preset.effects.flatMap { it.parameters.values }.all(Float::isFinite))
+            preset.effects.forEach { effect -> effect.parameters.forEach { (id, value) ->
+                val descriptor = NativeCatalog.parameter(effect.effectId, id)
+                assertTrue("${effect.effectId}.$id=$value", value in descriptor.minimum..descriptor.maximum)
+            } }
         }
         val byName = defaults.associateBy { it.name }
         val cleanChorus = byName.getValue("Guitar · Clean Chorus")
@@ -188,6 +196,16 @@ class InstrumentFxPresetLibraryTest {
         assertEquals("mix", NativeCatalog.parameter("lsp.chorus", 304).stableName)
         assertEquals("drive", NativeCatalog.parameter("lsp.clipper", 320).stableName)
         assertEquals("mix", NativeCatalog.parameter("lsp.flanger", 403).stableName)
+        assertEquals(2f, byName.getValue("Guitar · Distortion").effects.first { it.effectId == "lsp.clipper" }.parameters[320])
+        assertEquals(-4f, byName.getValue("Guitar · Distortion").effects.first { it.effectId == "lsp.clipper" }.parameters[322])
+        val organ = byName.getValue("Organ · Classic")
+        assertTrue(organ.effects.first { it.effectId == "lsp.chorus" }.enabled)
+        assertTrue(organ.effects.first { it.effectId == "lsp.phaser" }.enabled)
+        assertEquals(18f, organ.effects.first { it.effectId == "lsp.phaser" }.parameters[384])
+        assertEquals(1.15f, organ.effects.first { it.effectId == "lsp.clipper" }.parameters[320])
+        val strings = byName.getValue("Strings · Distortion")
+        assertEquals(1.35f, strings.effects.first { it.effectId == "lsp.clipper" }.parameters[320])
+        assertEquals(-2f, strings.effects.first { it.effectId == "lsp.clipper" }.parameters[322])
         var generated = 0
         val firstRead = library.listOrSeed { generated++; defaults }
         assertEquals(1, generated)
@@ -198,7 +216,59 @@ class InstrumentFxPresetLibraryTest {
         val afterDelete = library.list()
         library.listOrSeed { error("persisted empty library must not reseed") }
         assertEquals(afterDelete, library.list())
-        assertEquals(9, commits)
+        assertEquals(12, commits)
+    }
+
+    @Test fun legacyLibraryGetsOnlyNewFactoryRowsOnceWithoutReplacingUserRows() {
+        val defaults = InstrumentFxPresetAdapter(Port()).factoryDefaults("set-b", 4)
+        val legacy = defaults.take(8) + preset("My Own Preset")
+        val legacyJson = InstrumentFxPresetCodec.encode(legacy).replace(",\"factoryRevision\":0", "")
+        assertEquals(0, InstrumentFxPresetCodec.decodeLibrary(legacyJson).factoryRevision)
+        var raw: String? = legacyJson
+        var commits = 0
+        val library = InstrumentFxPresetLibrary(object : InstrumentFxPresetStorage {
+            override fun read() = raw
+            override fun commit(value: String): Boolean { commits++; raw = value; return true }
+        })
+        var factoryCalls = 0
+        val migrated = library.listOrSeed { factoryCalls++; defaults }
+        assertEquals(1, factoryCalls)
+        assertEquals(legacy, migrated.take(legacy.size))
+        assertEquals(12, migrated.size)
+        assertEquals(1, InstrumentFxPresetCodec.decodeLibrary(raw!!).factoryRevision)
+        val addedNames = migrated.drop(legacy.size).map { it.name }.toSet()
+        assertEquals(setOf("Guitar · Distortion", "Organ · Classic", "Strings · Distortion"), addedNames)
+        migrated.filter { it.name in addedNames }.forEach { library.delete(it.name) }
+        val deleted = library.list()
+        library.listOrSeed { error("completed factory migration must not re-add deleted presets") }
+        assertEquals(deleted, library.list())
+        assertEquals(4, commits)
+    }
+
+    @Test fun migrationPreservesCaseInsensitiveNameCollisionAndOriginalBytesOnCommitFailure() {
+        val defaults = InstrumentFxPresetAdapter(Port()).factoryDefaults("set-b", 4)
+        val userCollision = preset("gUiTaR · dIsToRtIoN")
+        val legacy = defaults.take(8) + userCollision
+        val legacyJson = InstrumentFxPresetCodec.encode(legacy).replace(",\"factoryRevision\":0", "")
+        var raw: String? = legacyJson
+        var allowCommit = false
+        val library = InstrumentFxPresetLibrary(object : InstrumentFxPresetStorage {
+            override fun read() = raw
+            override fun commit(value: String): Boolean {
+                if (!allowCommit) return false
+                raw = value
+                return true
+            }
+        })
+        assertThrows(IllegalStateException::class.java) { library.listOrSeed { defaults } }
+        assertEquals(legacyJson, raw)
+        allowCommit = true
+        val migrated = library.listOrSeed { defaults }
+        assertEquals(1, migrated.count { it.name.equals(userCollision.name, true) })
+        assertEquals(userCollision, migrated.first { it.name.equals(userCollision.name, true) })
+        assertEquals(1, migrated.count { it.name == "Organ · Classic" })
+        assertEquals(1, migrated.count { it.name == "Strings · Distortion" })
+        assertEquals(legacy.size + 2, migrated.size)
     }
     @Test fun targetIsolationAndPartialNativeFailure() {
         val port = Port()
