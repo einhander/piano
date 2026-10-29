@@ -92,7 +92,15 @@ android {
     }
 
     buildTypes {
+        debug {
+            externalNativeBuild {
+                cmake { arguments += "-DPIANO_CALLBACK_DIAGNOSTICS=ON" }
+            }
+        }
         release {
+            externalNativeBuild {
+                cmake { arguments += "-DPIANO_CALLBACK_DIAGNOSTICS=OFF" }
+            }
             // Only apply the signing config when credentials are available;
             // otherwise fall back to the default (unsigned) release so builds
             // without secrets don't fail.

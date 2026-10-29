@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("live-sequencer")
 
+# Diagnostic clock sampling is explicitly selected by Gradle build type;
+# do not infer it from NDEBUG, which varies with native build configuration.
+option(PIANO_CALLBACK_DIAGNOSTICS "Enable callback timing instrumentation" OFF)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -84,6 +88,11 @@ target_include_directories(native-lib PRIVATE
     midi
     effects
 )
+if(PIANO_CALLBACK_DIAGNOSTICS)
+    target_compile_definitions(native-lib PRIVATE PIANO_CALLBACK_DIAGNOSTICS=1)
+else()
+    target_compile_definitions(native-lib PRIVATE PIANO_CALLBACK_DIAGNOSTICS=0)
+endif()
 
 # Link libraries
 target_link_libraries(native-lib

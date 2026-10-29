@@ -1,7 +1,7 @@
 #include "OboeOutput.h"
 #include <cmath>
 #include <sstream>
-#ifndef NDEBUG
+#if PIANO_CALLBACK_DIAGNOSTICS
 #include <time.h>
 #endif
 
@@ -194,7 +194,7 @@ oboe::Result OboeOutput::stop() {
 }
 
 oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, void* data, int32_t numFrames) {
-#ifndef NDEBUG
+#if PIANO_CALLBACK_DIAGNOSTICS
     timespec diagnosticNow{};
     clock_gettime(CLOCK_MONOTONIC, &diagnosticNow);
     const uint64_t entryNs = static_cast<uint64_t>(diagnosticNow.tv_sec) * 1000000000ULL + diagnosticNow.tv_nsec;
@@ -234,7 +234,7 @@ oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, voi
         mLatencyTuner->tune();
     }
 
-#ifndef NDEBUG
+#if PIANO_CALLBACK_DIAGNOSTICS
     clock_gettime(CLOCK_MONOTONIC, &diagnosticNow);
     const uint64_t exitNs = static_cast<uint64_t>(diagnosticNow.tv_sec) * 1000000000ULL + diagnosticNow.tv_nsec;
     mCallbackTiming.finish(CallbackTiming::micros(exitNs - entryNs),
@@ -245,7 +245,7 @@ oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, voi
 }
 
 void OboeOutput::takeCallbackTiming(uint32_t* out) noexcept {
-#ifndef NDEBUG
+#if PIANO_CALLBACK_DIAGNOSTICS
     out[5] = 1;
     out[0] = mCallbackTiming.take(mCallbackTiming.count);
     out[1] = mCallbackTiming.take(mCallbackTiming.frames);

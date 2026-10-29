@@ -1,5 +1,11 @@
 # Callback diagnostics
 
+Gradle selects native instrumentation explicitly: Debug passes
+`-DPIANO_CALLBACK_DIAGNOSTICS=ON`; Release passes `OFF`. CMake exports the
+matching `PIANO_CALLBACK_DIAGNOSTICS=1/0` compiler definition. This avoids
+assuming that C/C++ `NDEBUG` tracks Android Gradle build types (the earlier
+`NDEBUG` gate caused diagnostic builds to report `diag=off`).
+
 Debug builds log `diag=on` with each 1 Hz `[perf]` snapshot. `cb_wall_max_us`
 and `cb_gap_max_us` are maxima since prior snapshot; `cb_over_budget` counts
 callbacks whose measured wall duration exceeded `numFrames / sampleRate`;
