@@ -295,6 +295,7 @@ public:
     int getActiveClipCount() const;
     // [perf]: duration (ms) of the most recent SF2 load (one-time dump).
     int64_t getSf2LoadMs() const;
+    void takeCallbackTiming(uint32_t* out) noexcept;
 
     // Oboe stream diagnostics (worker-thread reads).
     int getBufferSizeInFrames();

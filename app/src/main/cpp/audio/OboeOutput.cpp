@@ -1,6 +1,9 @@
 #include "OboeOutput.h"
 #include <cmath>
 #include <sstream>
+#ifndef NDEBUG
+#include <time.h>
+#endif
 
 // Out-of-line definitions for inline static data members
 std::atomic<OboeOutput*> OboeOutput::sInstance{nullptr};
@@ -191,6 +194,12 @@ oboe::Result OboeOutput::stop() {
 }
 
 oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, void* data, int32_t numFrames) {
+#ifndef NDEBUG
+    timespec diagnosticNow{};
+    clock_gettime(CLOCK_MONOTONIC, &diagnosticNow);
+    const uint64_t entryNs = static_cast<uint64_t>(diagnosticNow.tv_sec) * 1000000000ULL + diagnosticNow.tv_nsec;
+    mCallbackTiming.enter(entryNs);
+#endif
     // NOTE: no ADPF reportWorkload here — Oboe wraps every data callback with
     // begin/endPerformanceHintInCallback (mutex + dlopen + binder + log on the
     // first call, mutex + HAL call on every call). See the comment in open().
@@ -225,7 +234,28 @@ oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, voi
         mLatencyTuner->tune();
     }
 
+#ifndef NDEBUG
+    clock_gettime(CLOCK_MONOTONIC, &diagnosticNow);
+    const uint64_t exitNs = static_cast<uint64_t>(diagnosticNow.tv_sec) * 1000000000ULL + diagnosticNow.tv_nsec;
+    mCallbackTiming.finish(CallbackTiming::micros(exitNs - entryNs),
+                           static_cast<uint32_t>(numFrames), static_cast<uint32_t>(mSampleRate));
+#endif
+
     return oboe::DataCallbackResult::Continue;
+}
+
+void OboeOutput::takeCallbackTiming(uint32_t* out) noexcept {
+#ifndef NDEBUG
+    out[5] = 1;
+    out[0] = mCallbackTiming.take(mCallbackTiming.count);
+    out[1] = mCallbackTiming.take(mCallbackTiming.frames);
+    out[2] = mCallbackTiming.take(mCallbackTiming.maxWallUs);
+    out[3] = mCallbackTiming.take(mCallbackTiming.maxGapUs);
+    out[4] = mCallbackTiming.take(mCallbackTiming.overBudget);
+#else
+    for (int i = 0; i < 5; ++i) out[i] = 0;
+    out[5] = 0;
+#endif
 }
 
 void OboeOutput::onErrorAfterClose(oboe::AudioStream* stream, oboe::Result error) {

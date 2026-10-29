@@ -172,6 +172,8 @@ object NativeEngineBridge {
     external fun nativeGetMidiQueueDepth(): Int
     external fun nativeGetWorkerGateHeldMicros(): Long
     external fun nativeGetGatedCallbackCount(): Long
+    /** Window fields: callback count, frames, max callback wall us, max entry gap us, over-budget callbacks, enabled marker. */
+    external fun nativeTakeCallbackTiming(): LongArray
     external fun nativeGetLiveMidiQueueDepth(): Int
     // [perf]: number of clips currently in the clip scheduler (1 Hz line).
     external fun nativeGetActiveClipCount(): Int

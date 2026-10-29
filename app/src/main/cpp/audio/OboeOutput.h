@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include "CallbackTiming.h"
 
 class OboeOutput : public oboe::AudioStreamCallback {
 public:
@@ -32,6 +33,7 @@ public:
     // ── Diagnostics (worker-thread reads; benign races are acceptable) ──
     int64_t getProcessedFrames() const { return mProcessedFrames.load(); }
     int64_t getCallbackCount() const { return mCallbackCount.load(); }
+    void takeCallbackTiming(uint32_t* out) noexcept;
     // Effective buffer size in frames (may change if the LatencyTuner is active).
     // Non-const: Oboe's getBufferSizeInFrames() is a non-const virtual.
     int32_t getBufferSizeInFrames();
@@ -96,6 +98,7 @@ private:
     // Diagnostics (audio thread writes, worker thread reads).
     std::atomic<int64_t> mProcessedFrames{0};
     std::atomic<int64_t> mCallbackCount{0};
+    CallbackTiming mCallbackTiming;
 
     // LatencyTuner (created on the worker thread after open; tune() is called
     // in the audio callback — no allocation there).

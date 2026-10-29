@@ -433,6 +433,12 @@ int64_t NativeEngine::getSf2LoadMs() const {
     return mSynth ? mSynth->getSf2LoadMs() : 0;
 }
 
+void NativeEngine::takeCallbackTiming(uint32_t* out) noexcept {
+    OboeOutput* output = OboeOutput::getInstance();
+    if (output) output->takeCallbackTiming(out);
+    else for (int i = 0; i < 6; ++i) out[i] = 0;
+}
+
 // ── Oboe stream diagnostics (worker-thread reads) ──
 
 int NativeEngine::getBufferSizeInFrames() {

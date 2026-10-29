@@ -251,13 +251,17 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         val midiQ = NativeEngineBridge.nativeGetMidiQueueDepth()
         val gateHeldUs = NativeEngineBridge.nativeGetWorkerGateHeldMicros()
         val gatedCallbacks = NativeEngineBridge.nativeGetGatedCallbackCount()
+        val timing = NativeEngineBridge.nativeTakeCallbackTiming()
 
         var line = "[perf] rate=${rate}Hz buf=${bufSize}/${bufCap}F lat=${latency}ms " +
             "share=${if (sharing == 0) "Excl" else "Shared"} audio_policy=shared-only perf=$perf stream={$stream} " +
             "autoTune=$autoTune underruns=$underruns cb=$callbacks processed=$processed " +
             "midiDrops=$midiDrops cmdDrops=$cmdDrops voices=$voices poly=$poly " +
             "gain=${gain} reverb=$reverb chorus=$chorus interps=$interps " +
-            "clips=$clips midi_q=$midiQ gate_us=$gateHeldUs gated_cb=$gatedCallbacks"
+            "clips=$clips midi_q=$midiQ gate_us=$gateHeldUs gated_cb=$gatedCallbacks " +
+            "diag=${if (timing.getOrElse(5) { 0L } != 0L) "on" else "off"} cb_wall_max_us=${timing.getOrElse(2) { 0L }} " +
+            "cb_gap_max_us=${timing.getOrElse(3) { 0L }} cb_over_budget=${timing.getOrElse(4) { 0L }} " +
+            "cb_frames=${timing.getOrElse(1) { 0L }} cb_diag_count=${timing.getOrElse(0) { 0L }}"
 
         // One-time init dump: append burst + device info + SF2 load time.
         if (initDump) {
