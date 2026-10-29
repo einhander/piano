@@ -23,3 +23,17 @@ time, not specifically USB/audio-device starvation. Correlate with Oboe's
 underrun count. These metrics do not identify per-underrun callback timings.
 
 Run host aggregation check: `sh app/src/test/cpp/run_callback_timing_test.sh`.
+
+The first engine callback and every 64th thereafter sample thread CPU time
+(`engine_cpu_max_us`) and accumulated FluidSynth `renderChannels` wall time
+(`synth_wall_max_us`), with `engine_sample_count` samples per approximate window.
+These maxima are not paired observations. Thread CPU excludes time spent
+descheduled, but clock reads have diagnostic overhead; the engine metric excludes
+Oboe's XRun query and latency tuner, and callback guard destructors.
+
+`cb_enter_total` and `cb_exit_total` are cumulative callback progress counters.
+`cb_stage` indicates IDLE, ENTER, ENGINE, XRUN, TUNER or EXIT. Repeated unchanged
+counters with ENGINE/XRUN/TUNER suggest an in-flight callback stuck in that
+section; unchanged counters with IDLE suggest callbacks are not entering.
+Snapshots are independent atomic reads, so interpret repeated windows rather
+than one mismatched count. Stream lifecycle gaps are not DSP measurements.

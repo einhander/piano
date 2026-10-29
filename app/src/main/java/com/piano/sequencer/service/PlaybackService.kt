@@ -261,7 +261,13 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
             "clips=$clips midi_q=$midiQ gate_us=$gateHeldUs gated_cb=$gatedCallbacks " +
             "diag=${if (timing.getOrElse(5) { 0L } != 0L) "on" else "off"} cb_wall_max_us=${timing.getOrElse(2) { 0L }} " +
             "cb_gap_max_us=${timing.getOrElse(3) { 0L }} cb_over_budget=${timing.getOrElse(4) { 0L }} " +
-            "cb_frames=${timing.getOrElse(1) { 0L }} cb_diag_count=${timing.getOrElse(0) { 0L }}"
+            "cb_frames=${timing.getOrElse(1) { 0L }} cb_diag_count=${timing.getOrElse(0) { 0L }} " +
+            // First callback and every 64 thereafter: synth wall covers renderChannels;
+            // engine CPU covers NativeEngine callback body. Stage marker/counts are cumulative progress.
+            "engine_sample_count=${timing.getOrElse(6) { 0L }} synth_wall_max_us=${timing.getOrElse(7) { 0L }} " +
+            "engine_cpu_max_us=${timing.getOrElse(8) { 0L }} " +
+            "cb_enter_total=${timing.getOrElse(9) { 0L }} cb_exit_total=${timing.getOrElse(10) { 0L }} " +
+            "cb_stage=${callbackStageName(timing.getOrElse(11) { 0L })}"
 
         // One-time init dump: append burst + device info + SF2 load time.
         if (initDump) {
@@ -278,6 +284,15 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         }
 
         AppLogger.info("PlaybackService", line)
+    }
+
+    private fun callbackStageName(stage: Long): String = when (stage) {
+        1L -> "ENTER"
+        2L -> "ENGINE"
+        3L -> "XRUN"
+        4L -> "TUNER"
+        5L -> "EXIT"
+        else -> "IDLE"
     }
 
     // Periodic 1Hz [perf] logger (daemon thread, worker — NOT the audio

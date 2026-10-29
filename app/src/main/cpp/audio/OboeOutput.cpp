@@ -1,6 +1,9 @@
 #include "OboeOutput.h"
 #include <cmath>
 #include <sstream>
+#ifndef PIANO_CALLBACK_DIAGNOSTICS
+#define PIANO_CALLBACK_DIAGNOSTICS 0
+#endif
 #if PIANO_CALLBACK_DIAGNOSTICS
 #include <time.h>
 #endif
@@ -195,6 +198,8 @@ oboe::Result OboeOutput::stop() {
 
 oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, void* data, int32_t numFrames) {
 #if PIANO_CALLBACK_DIAGNOSTICS
+    mCallbackTiming.callbackEnterTotal.fetch_add(1, std::memory_order_relaxed);
+    mCallbackTiming.publishStage(1); // ENTER: callback admitted; before engine call
     timespec diagnosticNow{};
     clock_gettime(CLOCK_MONOTONIC, &diagnosticNow);
     const uint64_t entryNs = static_cast<uint64_t>(diagnosticNow.tv_sec) * 1000000000ULL + diagnosticNow.tv_nsec;
@@ -209,12 +214,18 @@ oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, voi
 
     float* floatData = static_cast<float*>(data);
     AudioFrameCallback cb = sAudioFrameCallback.load(std::memory_order_acquire);
+#if PIANO_CALLBACK_DIAGNOSTICS
+    mCallbackTiming.publishStage(2); // ENGINE: frame callback running
+#endif
     if (cb) {
         cb(floatData, numFrames);
     } else {
         generateSineWave(floatData, numFrames);
     }
 
+#if PIANO_CALLBACK_DIAGNOSTICS
+    mCallbackTiming.publishStage(3); // XRUN: querying stream underrun counter
+#endif
     auto xrunResult = stream->getXRunCount();
     int32_t current = xrunResult.value();
     int32_t previous = mUnderrunCount.load();
@@ -228,17 +239,26 @@ oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, voi
     // Only when auto-tune is on (a user-set fixed buffer size is respected).
     // Designed to be called right before returning from the data callback.
     if (mLatencyTunerResetRequested.exchange(false, std::memory_order_acq_rel) && mLatencyTuner) {
+#if PIANO_CALLBACK_DIAGNOSTICS
+        mCallbackTiming.publishStage(4); // TUNER: reset/tune work
+#endif
         mLatencyTuner->requestReset();
     }
     if (mAutoTune.load(std::memory_order_relaxed) && mLatencyTuner) {
+#if PIANO_CALLBACK_DIAGNOSTICS
+        mCallbackTiming.publishStage(4);
+#endif
         mLatencyTuner->tune();
     }
 
 #if PIANO_CALLBACK_DIAGNOSTICS
+    mCallbackTiming.publishStage(5); // EXIT: callback work complete
+    mCallbackTiming.callbackExitTotal.fetch_add(1, std::memory_order_relaxed);
     clock_gettime(CLOCK_MONOTONIC, &diagnosticNow);
     const uint64_t exitNs = static_cast<uint64_t>(diagnosticNow.tv_sec) * 1000000000ULL + diagnosticNow.tv_nsec;
     mCallbackTiming.finish(CallbackTiming::micros(exitNs - entryNs),
                            static_cast<uint32_t>(numFrames), static_cast<uint32_t>(mSampleRate));
+    mCallbackTiming.publishStage(0); // IDLE; no callback currently executing
 #endif
 
     return oboe::DataCallbackResult::Continue;
@@ -252,9 +272,52 @@ void OboeOutput::takeCallbackTiming(uint32_t* out) noexcept {
     out[2] = mCallbackTiming.take(mCallbackTiming.maxWallUs);
     out[3] = mCallbackTiming.take(mCallbackTiming.maxGapUs);
     out[4] = mCallbackTiming.take(mCallbackTiming.overBudget);
+    // Append sampled engine timing to preserve established indices 0..5.
+    out[6] = mCallbackTiming.take(mCallbackTiming.stageCount);
+    out[7] = mCallbackTiming.take(mCallbackTiming.synthWallUs);
+    out[8] = mCallbackTiming.take(mCallbackTiming.engineCpuUs);
+    out[9] = mCallbackTiming.callbackEnterTotal.load(std::memory_order_relaxed);
+    out[10] = mCallbackTiming.callbackExitTotal.load(std::memory_order_relaxed);
+    out[11] = mCallbackTiming.callbackStage.load(std::memory_order_relaxed);
 #else
     for (int i = 0; i < 5; ++i) out[i] = 0;
     out[5] = 0;
+    for (int i = 6; i < 12; ++i) out[i] = 0;
+#endif
+}
+
+bool OboeOutput::diagnosticsEnabled() noexcept {
+#if PIANO_CALLBACK_DIAGNOSTICS
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool OboeOutput::takeEngineDiagnosticSample() noexcept {
+#if PIANO_CALLBACK_DIAGNOSTICS
+    static uint32_t callbackIndex = 0; // sole callback-thread writer
+    return (callbackIndex++ & 63u) == 0;
+#else
+    return false;
+#endif
+}
+
+void OboeOutput::recordEngineDiagnostic(uint32_t synthWallUs, uint32_t engineCpuUs) noexcept {
+#if PIANO_CALLBACK_DIAGNOSTICS
+    if (OboeOutput* output = getInstance())
+        output->mCallbackTiming.finishStage(synthWallUs, engineCpuUs);
+#else
+    (void)synthWallUs;
+    (void)engineCpuUs;
+#endif
+}
+
+void OboeOutput::publishCallbackStage(uint32_t stage) noexcept {
+#if PIANO_CALLBACK_DIAGNOSTICS
+    if (OboeOutput* output = getInstance()) output->mCallbackTiming.publishStage(stage);
+#else
+    (void)stage;
 #endif
 }
 

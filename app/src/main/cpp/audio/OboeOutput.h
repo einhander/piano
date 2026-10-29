@@ -34,6 +34,10 @@ public:
     int64_t getProcessedFrames() const { return mProcessedFrames.load(); }
     int64_t getCallbackCount() const { return mCallbackCount.load(); }
     void takeCallbackTiming(uint32_t* out) noexcept;
+    static bool diagnosticsEnabled() noexcept;
+    static bool takeEngineDiagnosticSample() noexcept;
+    static void recordEngineDiagnostic(uint32_t synthWallUs, uint32_t engineCpuUs) noexcept;
+    static void publishCallbackStage(uint32_t stage) noexcept;
     // Effective buffer size in frames (may change if the LatencyTuner is active).
     // Non-const: Oboe's getBufferSizeInFrames() is a non-const virtual.
     int32_t getBufferSizeInFrames();

@@ -9,6 +9,12 @@ struct CallbackTiming {
     static_assert(std::atomic<uint32_t>::is_always_lock_free,
                   "Callback diagnostic counters must remain lock-free");
     std::atomic<uint32_t> count{0}, frames{0}, maxWallUs{0}, maxGapUs{0}, overBudget{0};
+    // Sampled NativeEngine region: synthesized-channel render wall time and
+    // callback-thread CPU time. Slot values are window maxes (microseconds).
+    std::atomic<uint32_t> stageCount{0}, synthWallUs{0}, engineCpuUs{0};
+    // Cumulative callback progress + last published stage. Never exchanged:
+    // diagnostic snapshots must expose a callback stuck between two stages.
+    std::atomic<uint32_t> callbackEnterTotal{0}, callbackExitTotal{0}, callbackStage{0};
     uint64_t previousEntryNs = 0; // producer-owned; no atomic64 required
 
     static uint32_t micros(uint64_t ns) noexcept { return static_cast<uint32_t>(ns / 1000); }
@@ -29,4 +35,10 @@ struct CallbackTiming {
             overBudget.fetch_add(1, std::memory_order_relaxed);
     }
     uint32_t take(std::atomic<uint32_t>& value) noexcept { return value.exchange(0, std::memory_order_acq_rel); }
+    void finishStage(uint32_t synthUs, uint32_t cpuUs) noexcept {
+        stageCount.fetch_add(1, std::memory_order_relaxed);
+        updateMax(synthWallUs, synthUs);
+        updateMax(engineCpuUs, cpuUs);
+    }
+    void publishStage(uint32_t stage) noexcept { callbackStage.store(stage, std::memory_order_relaxed); }
 };

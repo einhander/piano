@@ -21,6 +21,12 @@
 
 #include <atomic>
 #include <cmath>
+#ifndef PIANO_CALLBACK_DIAGNOSTICS
+#define PIANO_CALLBACK_DIAGNOSTICS 0
+#endif
+#if PIANO_CALLBACK_DIAGNOSTICS
+#include <time.h>
+#endif
 
 namespace {
 class AudioCallbackGuard {
@@ -436,7 +442,7 @@ int64_t NativeEngine::getSf2LoadMs() const {
 void NativeEngine::takeCallbackTiming(uint32_t* out) noexcept {
     OboeOutput* output = OboeOutput::getInstance();
     if (output) output->takeCallbackTiming(out);
-    else for (int i = 0; i < 6; ++i) out[i] = 0;
+    else for (int i = 0; i < 12; ++i) out[i] = 0;
 }
 
 // ── Oboe stream diagnostics (worker-thread reads) ──
@@ -598,6 +604,39 @@ void NativeEngine::enqueueMidiMessage(uint8_t status, uint8_t data1, uint8_t dat
 // thread polls mLiveMidiQueue for recording only.
 
 void NativeEngine::onAudioFrame(float* output, int numFrames) {
+#if PIANO_CALLBACK_DIAGNOSTICS
+    const bool diagnosticSample = OboeOutput::takeEngineDiagnosticSample();
+    timespec stageClock{};
+    uint64_t engineCpuStart = 0;
+    uint64_t synthWallNs = 0;
+    if (diagnosticSample && clock_gettime(CLOCK_THREAD_CPUTIME_ID, &stageClock) == 0)
+        engineCpuStart = static_cast<uint64_t>(stageClock.tv_sec) * 1000000000ULL + stageClock.tv_nsec;
+#else
+    constexpr bool diagnosticSample = false;
+#endif
+    auto finishEngineDiagnostic = [&]() {
+#if PIANO_CALLBACK_DIAGNOSTICS
+        if (diagnosticSample && engineCpuStart && clock_gettime(CLOCK_THREAD_CPUTIME_ID, &stageClock) == 0) {
+            const uint64_t endCpu = static_cast<uint64_t>(stageClock.tv_sec) * 1000000000ULL + stageClock.tv_nsec;
+            OboeOutput::recordEngineDiagnostic(CallbackTiming::micros(synthWallNs),
+                                               CallbackTiming::micros(endCpu - engineCpuStart));
+        }
+#endif
+    };
+    auto renderSynthSegment = [&](float* const* outputs, float* shared, int frames) {
+#if PIANO_CALLBACK_DIAGNOSTICS
+        uint64_t startNs = 0;
+        if (diagnosticSample && clock_gettime(CLOCK_MONOTONIC, &stageClock) == 0)
+            startNs = static_cast<uint64_t>(stageClock.tv_sec) * 1000000000ULL + stageClock.tv_nsec;
+        mSynth->renderChannels(outputs, shared, frames);
+        if (startNs && clock_gettime(CLOCK_MONOTONIC, &stageClock) == 0) {
+            const uint64_t endNs = static_cast<uint64_t>(stageClock.tv_sec) * 1000000000ULL + stageClock.tv_nsec;
+            synthWallNs += endNs - startNs;
+        }
+#else
+        mSynth->renderChannels(outputs, shared, frames);
+#endif
+    };
     Mp3AudioRecorder::CallbackToken recordingCallback(mAudioRecorder);
     AudioCallbackGuard callbackGuard(mSynth);
     if (!callbackGuard.enter()) {
@@ -606,6 +645,7 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
         // MIDI/events remain untouched for the next admitted callback.
         std::memset(output, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
         if (recordingCallback.accepted()) mAudioRecorder.capture(output, numFrames);
+        finishEngineDiagnostic();
         return;
     }
     if (!mRateGraph.ready()) {
@@ -613,6 +653,7 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
         // Worker retries preparation; this callback emits safe silence only.
         std::memset(output, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
         if (recordingCallback.accepted()) mAudioRecorder.capture(output, numFrames);
+        finishEngineDiagnostic();
         return;
     }
     // M2: clamp to mMaxSynthFrames (max(kMaxSynthFrames, Oboe capacity), set in
@@ -730,7 +771,7 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
             if (eventOffset > offset) {
                 for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
                 float* sharedReturn = mSynthReturnBuffer.data() + offset * 2;
-                mSynth->renderChannels(mSynthSegmentPtrs, sharedReturn, eventOffset - offset);
+                renderSynthSegment(mSynthSegmentPtrs, sharedReturn, eventOffset - offset);
                 mInstrumentEffects.process(mSynthSegmentPtrs,eventOffset-offset);
                 float* delayBuses[piano::kInstrumentChannelCount];
                 for (int ch=0; ch<piano::kInstrumentChannelCount; ++ch) delayBuses[ch]=mSynthSegmentPtrs[ch];
@@ -748,7 +789,7 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
         if (offset < safeFrames) {
             for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
             float* sharedReturn = mSynthReturnBuffer.data() + offset * 2;
-            mSynth->renderChannels(mSynthSegmentPtrs, sharedReturn, safeFrames - offset);
+            renderSynthSegment(mSynthSegmentPtrs, sharedReturn, safeFrames - offset);
             mInstrumentEffects.process(mSynthSegmentPtrs,safeFrames-offset);
             float* delayBuses[piano::kInstrumentChannelCount];
             for (int ch=0; ch<piano::kInstrumentChannelCount; ++ch) delayBuses[ch]=mSynthSegmentPtrs[ch];
@@ -817,6 +858,7 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     // Final Oboe format: float, interleaved stereo, after master effects and
     // MasterBus. Device sample rate is queried from the negotiated Oboe stream.
     if (recordingCallback.accepted()) mAudioRecorder.capture(output, numFrames);
+    finishEngineDiagnostic();
 }
 
 bool NativeEngine::startAudioRecording(int fd) {
