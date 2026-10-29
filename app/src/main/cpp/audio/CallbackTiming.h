@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <array>
 
 // Single audio-thread producer, single diagnostic worker consumer. Window
 // maxima are independently exchanged, so snapshot fields are approximate.
@@ -15,6 +16,10 @@ struct CallbackTiming {
     // Cumulative callback progress + last published stage. Never exchanged:
     // diagnostic snapshots must expose a callback stuck between two stages.
     std::atomic<uint32_t> callbackEnterTotal{0}, callbackExitTotal{0}, callbackStage{0};
+    // Last completed sample's coherent stage breakdown; distinct from max metrics.
+    std::atomic<uint32_t> detailSequence{0}, detailEngineCpuUs{0}, detailSynthWallUs{0}, detailSynthCpuUs{0}, detailInstFxCpuUs{0},
+        detailDelayCpuUs{0}, detailBusCpuUs{0}, detailMixerCpuUs{0}, detailMasterCpuUs{0},
+        detailOtherCpuUs{0};
     uint64_t previousEntryNs = 0; // producer-owned; no atomic64 required
 
     static uint32_t micros(uint64_t ns) noexcept { return static_cast<uint32_t>(ns / 1000); }
@@ -39,6 +44,20 @@ struct CallbackTiming {
         stageCount.fetch_add(1, std::memory_order_relaxed);
         updateMax(synthWallUs, synthUs);
         updateMax(engineCpuUs, cpuUs);
+    }
+    void finishDetailedStage(uint32_t synthWallUsValue, uint32_t cpuUs, const std::array<uint32_t, 7>& stages) noexcept {
+        finishStage(synthWallUsValue, cpuUs);
+        detailSequence.fetch_add(1, std::memory_order_acq_rel); // odd: writer active
+        detailEngineCpuUs.store(cpuUs, std::memory_order_relaxed);
+        detailSynthWallUs.store(synthWallUsValue, std::memory_order_relaxed);
+        detailSynthCpuUs.store(stages[0], std::memory_order_relaxed);
+        detailInstFxCpuUs.store(stages[1], std::memory_order_relaxed);
+        detailDelayCpuUs.store(stages[2], std::memory_order_relaxed);
+        detailBusCpuUs.store(stages[3], std::memory_order_relaxed);
+        detailMixerCpuUs.store(stages[4], std::memory_order_relaxed);
+        detailMasterCpuUs.store(stages[5], std::memory_order_relaxed);
+        detailOtherCpuUs.store(stages[6], std::memory_order_relaxed);
+        detailSequence.fetch_add(1, std::memory_order_release); // even: published
     }
     void publishStage(uint32_t stage) noexcept { callbackStage.store(stage, std::memory_order_relaxed); }
 };

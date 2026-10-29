@@ -279,10 +279,31 @@ void OboeOutput::takeCallbackTiming(uint32_t* out) noexcept {
     out[9] = mCallbackTiming.callbackEnterTotal.load(std::memory_order_relaxed);
     out[10] = mCallbackTiming.callbackExitTotal.load(std::memory_order_relaxed);
     out[11] = mCallbackTiming.callbackStage.load(std::memory_order_relaxed);
+    // Bounded seqlock read: last complete sampled callback's paired stage CPUs.
+    out[12] = out[13] = out[14] = out[15] = out[16] = out[17] = out[18] = out[19] = out[20] = 0;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const uint32_t before = mCallbackTiming.detailSequence.load(std::memory_order_acquire);
+        if (before & 1u) continue;
+        const uint32_t values[] = {
+            mCallbackTiming.detailEngineCpuUs.load(std::memory_order_relaxed),
+            mCallbackTiming.detailSynthCpuUs.load(std::memory_order_relaxed),
+            mCallbackTiming.detailInstFxCpuUs.load(std::memory_order_relaxed),
+            mCallbackTiming.detailDelayCpuUs.load(std::memory_order_relaxed),
+            mCallbackTiming.detailBusCpuUs.load(std::memory_order_relaxed),
+            mCallbackTiming.detailMixerCpuUs.load(std::memory_order_relaxed),
+            mCallbackTiming.detailMasterCpuUs.load(std::memory_order_relaxed),
+            mCallbackTiming.detailOtherCpuUs.load(std::memory_order_relaxed),
+            mCallbackTiming.detailSynthWallUs.load(std::memory_order_relaxed),
+        };
+        if (before == mCallbackTiming.detailSequence.load(std::memory_order_acquire)) {
+            for (int i = 0; i < 9; ++i) out[12 + i] = values[i];
+            break;
+        }
+    }
 #else
     for (int i = 0; i < 5; ++i) out[i] = 0;
     out[5] = 0;
-    for (int i = 6; i < 12; ++i) out[i] = 0;
+    for (int i = 6; i < 21; ++i) out[i] = 0;
 #endif
 }
 
@@ -303,13 +324,15 @@ bool OboeOutput::takeEngineDiagnosticSample() noexcept {
 #endif
 }
 
-void OboeOutput::recordEngineDiagnostic(uint32_t synthWallUs, uint32_t engineCpuUs) noexcept {
+void OboeOutput::recordEngineDiagnostic(uint32_t synthWallUs, uint32_t engineCpuUs,
+                                        const std::array<uint32_t, 7>& stageCpuUs) noexcept {
 #if PIANO_CALLBACK_DIAGNOSTICS
     if (OboeOutput* output = getInstance())
-        output->mCallbackTiming.finishStage(synthWallUs, engineCpuUs);
+        output->mCallbackTiming.finishDetailedStage(synthWallUs, engineCpuUs, stageCpuUs);
 #else
     (void)synthWallUs;
     (void)engineCpuUs;
+    (void)stageCpuUs;
 #endif
 }
 

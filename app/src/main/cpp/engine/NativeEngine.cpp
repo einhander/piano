@@ -21,6 +21,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <array>
 #ifndef PIANO_CALLBACK_DIAGNOSTICS
 #define PIANO_CALLBACK_DIAGNOSTICS 0
 #endif
@@ -442,7 +443,7 @@ int64_t NativeEngine::getSf2LoadMs() const {
 void NativeEngine::takeCallbackTiming(uint32_t* out) noexcept {
     OboeOutput* output = OboeOutput::getInstance();
     if (output) output->takeCallbackTiming(out);
-    else for (int i = 0; i < 12; ++i) out[i] = 0;
+    else for (int i = 0; i < 21; ++i) out[i] = 0;
 }
 
 // ── Oboe stream diagnostics (worker-thread reads) ──
@@ -604,6 +605,7 @@ void NativeEngine::enqueueMidiMessage(uint8_t status, uint8_t data1, uint8_t dat
 // thread polls mLiveMidiQueue for recording only.
 
 void NativeEngine::onAudioFrame(float* output, int numFrames) {
+    std::array<uint64_t, 7> stageCpuNs{};
 #if PIANO_CALLBACK_DIAGNOSTICS
     const bool diagnosticSample = OboeOutput::takeEngineDiagnosticSample();
     timespec stageClock{};
@@ -614,12 +616,34 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
 #else
     constexpr bool diagnosticSample = false;
 #endif
+    auto measureStageCpu = [&](uint64_t& accumulated, auto&& work) {
+#if PIANO_CALLBACK_DIAGNOSTICS
+        if (diagnosticSample && clock_gettime(CLOCK_THREAD_CPUTIME_ID, &stageClock) == 0) {
+            const uint64_t start = static_cast<uint64_t>(stageClock.tv_sec) * 1000000000ULL + stageClock.tv_nsec;
+            work();
+            if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &stageClock) == 0) {
+                const uint64_t end = static_cast<uint64_t>(stageClock.tv_sec) * 1000000000ULL + stageClock.tv_nsec;
+                accumulated += end - start;
+            }
+            return;
+        }
+#endif
+        work();
+    };
     auto finishEngineDiagnostic = [&]() {
 #if PIANO_CALLBACK_DIAGNOSTICS
         if (diagnosticSample && engineCpuStart && clock_gettime(CLOCK_THREAD_CPUTIME_ID, &stageClock) == 0) {
             const uint64_t endCpu = static_cast<uint64_t>(stageClock.tv_sec) * 1000000000ULL + stageClock.tv_nsec;
+            const uint64_t engineNs = endCpu - engineCpuStart;
+            std::array<uint32_t, 7> stages{};
+            uint64_t accountedNs = 0;
+            for (size_t i = 0; i < 6; ++i) {
+                stages[i] = CallbackTiming::micros(stageCpuNs[i]);
+                accountedNs += stageCpuNs[i];
+            }
+            stages[6] = CallbackTiming::micros(engineNs > accountedNs ? engineNs - accountedNs : 0);
             OboeOutput::recordEngineDiagnostic(CallbackTiming::micros(synthWallNs),
-                                               CallbackTiming::micros(endCpu - engineCpuStart));
+                                               CallbackTiming::micros(engineNs), stages);
         }
 #endif
     };
@@ -628,7 +652,7 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
         uint64_t startNs = 0;
         if (diagnosticSample && clock_gettime(CLOCK_MONOTONIC, &stageClock) == 0)
             startNs = static_cast<uint64_t>(stageClock.tv_sec) * 1000000000ULL + stageClock.tv_nsec;
-        mSynth->renderChannels(outputs, shared, frames);
+        measureStageCpu(stageCpuNs[0], [&] { mSynth->renderChannels(outputs, shared, frames); });
         if (startNs && clock_gettime(CLOCK_MONOTONIC, &stageClock) == 0) {
             const uint64_t endNs = static_cast<uint64_t>(stageClock.tv_sec) * 1000000000ULL + stageClock.tv_nsec;
             synthWallNs += endNs - startNs;
@@ -772,16 +796,20 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
                 for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
                 float* sharedReturn = mSynthReturnBuffer.data() + offset * 2;
                 renderSynthSegment(mSynthSegmentPtrs, sharedReturn, eventOffset - offset);
-                mInstrumentEffects.process(mSynthSegmentPtrs,eventOffset-offset);
+                measureStageCpu(stageCpuNs[1], [&] { mInstrumentEffects.process(mSynthSegmentPtrs,eventOffset-offset); });
                 float* delayBuses[piano::kInstrumentChannelCount];
                 for (int ch=0; ch<piano::kInstrumentChannelCount; ++ch) delayBuses[ch]=mSynthSegmentPtrs[ch];
-                mInstrumentDelays.process(delayBuses, eventOffset - offset, mTransport.bpmMicros / 1000000.0);
-                for (int f = offset; f < eventOffset; ++f)
-                    for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) {
-                        track0[f * 2] += mSynthChannelPtrs[ch][f * 2];
-                        track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
-                    }
-                addSharedFxReturn(track0, sharedReturn, offset, eventOffset - offset);
+                measureStageCpu(stageCpuNs[2], [&] {
+                    mInstrumentDelays.process(delayBuses, eventOffset - offset, mTransport.bpmMicros / 1000000.0);
+                });
+                measureStageCpu(stageCpuNs[3], [&] {
+                    for (int f = offset; f < eventOffset; ++f)
+                        for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) {
+                            track0[f * 2] += mSynthChannelPtrs[ch][f * 2];
+                            track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
+                        }
+                    addSharedFxReturn(track0, sharedReturn, offset, eventOffset - offset);
+                });
             }
             mSynth->processOneMidi(mSequencerStaging[i].message);
             offset = eventOffset;
@@ -790,16 +818,20 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
             for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
             float* sharedReturn = mSynthReturnBuffer.data() + offset * 2;
             renderSynthSegment(mSynthSegmentPtrs, sharedReturn, safeFrames - offset);
-            mInstrumentEffects.process(mSynthSegmentPtrs,safeFrames-offset);
+            measureStageCpu(stageCpuNs[1], [&] { mInstrumentEffects.process(mSynthSegmentPtrs,safeFrames-offset); });
             float* delayBuses[piano::kInstrumentChannelCount];
             for (int ch=0; ch<piano::kInstrumentChannelCount; ++ch) delayBuses[ch]=mSynthSegmentPtrs[ch];
-            mInstrumentDelays.process(delayBuses, safeFrames - offset, mTransport.bpmMicros / 1000000.0);
-            for (int f = offset; f < safeFrames; ++f)
-                for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) {
-                    track0[f * 2] += mSynthChannelPtrs[ch][f * 2];
-                    track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
-                }
-            addSharedFxReturn(track0, sharedReturn, offset, safeFrames - offset);
+            measureStageCpu(stageCpuNs[2], [&] {
+                mInstrumentDelays.process(delayBuses, safeFrames - offset, mTransport.bpmMicros / 1000000.0);
+            });
+            measureStageCpu(stageCpuNs[3], [&] {
+                for (int f = offset; f < safeFrames; ++f)
+                    for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) {
+                        track0[f * 2] += mSynthChannelPtrs[ch][f * 2];
+                        track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
+                    }
+                addSharedFxReturn(track0, sharedReturn, offset, safeFrames - offset);
+            });
         }
 
         mSynth->endSynthAccess();
@@ -828,7 +860,7 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     mMasterBus.resetMeter();
 
     // Mix all tracks through Mixer into stereo output
-    mMixer.mix(output, safeFrames);
+    measureStageCpu(stageCpuNs[4], [&] { mMixer.mix(output, safeFrames); });
 
     // ── LSP master effect chain (EQ → Compressor → Limiter) ──
     // Inserted AFTER the Mixer and BEFORE the MasterBus, per plan Phase 6/17:
@@ -838,10 +870,12 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     // when the bundle is not loaded or every effect is bypassed — so the
     // baseline audio path is unchanged. Realtime-safe: deinterleave once into
     // pre-allocated planar scratch, run fixed effect array, interleave once.
-    mMasterEffects.process(output, safeFrames);
+    measureStageCpu(stageCpuNs[5], [&] {
+        mMasterEffects.process(output, safeFrames);
+        mMasterBus.process(output, safeFrames);
+    });
 
     // Process through MasterBus (volume + soft clipper)
-    mMasterBus.process(output, safeFrames);
 
     // M4/M2: safety net. Normally safeFrames == numFrames (mMaxSynthFrames is sized
     // to the Oboe capacity in init()), so this branch is not taken. It only

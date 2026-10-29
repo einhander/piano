@@ -22,4 +22,9 @@ int main() {
     assert(t.callbackEnterTotal.load(std::memory_order_relaxed) == 1);
     assert(t.callbackExitTotal.load(std::memory_order_relaxed) == 0);
     assert(t.callbackStage.load(std::memory_order_relaxed) == 3);
+    const std::array<uint32_t, 7> details{11, 12, 13, 14, 15, 16, 17};
+    t.finishDetailedStage(10, 60, details);
+    assert(t.engineCpuUs.load(std::memory_order_relaxed) == 60);
+    assert(t.detailSynthCpuUs.load(std::memory_order_relaxed) == 11);
+    assert(t.detailOtherCpuUs.load(std::memory_order_relaxed) == 17);
 }

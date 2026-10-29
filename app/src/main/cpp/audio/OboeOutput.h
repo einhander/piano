@@ -36,7 +36,8 @@ public:
     void takeCallbackTiming(uint32_t* out) noexcept;
     static bool diagnosticsEnabled() noexcept;
     static bool takeEngineDiagnosticSample() noexcept;
-    static void recordEngineDiagnostic(uint32_t synthWallUs, uint32_t engineCpuUs) noexcept;
+    static void recordEngineDiagnostic(uint32_t synthWallUs, uint32_t engineCpuUs,
+                                       const std::array<uint32_t, 7>& stageCpuUs) noexcept;
     static void publishCallbackStage(uint32_t stage) noexcept;
     // Effective buffer size in frames (may change if the LatencyTuner is active).
     // Non-const: Oboe's getBufferSizeInFrames() is a non-const virtual.

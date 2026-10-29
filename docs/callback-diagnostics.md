@@ -37,3 +37,12 @@ counters with ENGINE/XRUN/TUNER suggest an in-flight callback stuck in that
 section; unchanged counters with IDLE suggest callbacks are not entering.
 Snapshots are independent atomic reads, so interpret repeated windows rather
 than one mismatched count. Stream lifecycle gaps are not DSP measurements.
+
+Paired `sample_*` fields describe the last completed sampled engine callback,
+not window maxima: total engine CPU, synth CPU, instrument FX CPU, Delay CPU,
+bus summation CPU, mixer CPU, master CPU, unaccounted CPU, and synth wall time.
+They permit stage comparisons within one sample. They do not necessarily
+describe the callback with the largest duration in the window, and remain
+unchanged if no new sample completes. A bounded reader returns zeros if it
+cannot obtain a stable sample. Instrumentation overhead is included, especially
+in unaccounted CPU; integer-microsecond rounding can affect stage sums.

@@ -8,6 +8,9 @@
 #include <thread>
 #include <atomic>
 #include <iostream>
+#include <algorithm>
+#include <chrono>
+#include <vector>
 
 using namespace piano;
 
@@ -238,6 +241,32 @@ int main() {
     auto invalidStorage = std::make_unique<InstrumentEffectManager>(factory); auto& invalid = *invalidStorage; assert(invalid.prepare(48000,frames));
     assert(!invalid.instantiate(0,lsp::kSlotClipper));
     fakeClipperLatency=2;
+
+    // Bounded 128-channel clipper-rack benchmark. Disabled-but-published case
+    // mirrors the callback's warm/latency-alignment path; host numbers are not
+    // representative of device callback budgets.
+    constexpr int benchFrames=256, benchIterations=500;
+    auto benchStorage=std::make_unique<InstrumentEffectManager>(factory); auto& bench=*benchStorage;
+    assert(bench.prepare(48000,benchFrames));
+    std::array<std::array<float,benchFrames*2>,kInstrumentChannelCount> benchData{};
+    std::array<float*,kInstrumentChannelCount> benchBuses{};
+    for(int c=0;c<kInstrumentChannelCount;++c) {
+        benchBuses[c]=benchData[c].data();
+        assert(bench.instantiate(c,lsp::kSlotClipper)); // published; bypassed and disabled
+    }
+    auto measure=[&](const char* label) {
+        for(int i=0;i<100;++i) bench.process(benchBuses.data(),benchFrames);
+        std::vector<double> us; us.reserve(benchIterations);
+        for(int i=0;i<benchIterations;++i) {
+            auto start=std::chrono::steady_clock::now();
+            bench.process(benchBuses.data(),benchFrames);
+            us.push_back(std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count());
+        }
+        std::sort(us.begin(),us.end());
+        std::cerr << "InstrumentEffectManager 128 channels, " << label << ", 256 frames: median "
+                  << us[benchIterations/2] << " us, p95 " << us[benchIterations*95/100] << " us\n";
+    };
+    measure("published clipper disabled");
 
     auto stressStorage = std::make_unique<InstrumentEffectManager>(factory); auto& stress = *stressStorage; assert(stress.prepare(48000,frames));
     assert(stress.instantiate(0,0));
