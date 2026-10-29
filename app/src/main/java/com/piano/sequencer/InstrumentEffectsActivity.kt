@@ -60,6 +60,13 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     private val learnedSources = mutableMapOf<Pair<String, String>, String>()
     private var parameters = emptyMap<Pair<String, String>, EffectParameter>()
     private var failureDetail: String? = null
+    private val presetLibrary by lazy { InstrumentFxPresetLibrary(PreferenceInstrumentFxPresetStorage(applicationContext)) }
+    private var presets = emptyList<InstrumentFxPreset>()
+    private var selectedPresetName: String? = null
+    private var presetLibraryError: String? = null
+    private var presetMessage: String? = null
+    @Volatile private var presetBusy = false
+    private var presetDialog: AlertDialog? = null
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder) {
             if (isFinishing || isDestroyed) return
@@ -83,6 +90,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         setName = if (setId == MAIN_INSTRUMENT_SET_ID) "Main" else intent.getStringExtra(EXTRA_SET_NAME)?.takeIf { it.isNotBlank() } ?: "File set"
         if (channel !in 0..15) { finish(); return }
         expanded.addAll((savedInstanceState?.getStringArrayList("expanded") ?: intent.getStringArrayListExtra("expanded")).orEmpty())
+        selectedPresetName = savedInstanceState?.getString("fx_preset_name")
         setContentView(R.layout.activity_effects)
         setSupportActionBar(findViewById(R.id.toolbar))
         supportActionBar?.apply {
@@ -97,6 +105,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putStringArrayList("expanded", ArrayList(expanded))
+        outState.putString("fx_preset_name", selectedPresetName)
         super.onSaveInstanceState(outState)
     }
     override fun onSupportNavigateUp(): Boolean { finish(); return true }
@@ -105,6 +114,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         // explicitly rather than leave an invisible capture after recreation.
         if (ownsLearn) ccController.cancelLearn()
         learnDialog?.dismiss()
+        presetDialog?.dismiss()
         service?.let { ccController.detach(this@InstrumentEffectsActivity, it) }
         service = null
         if (bound) unbindService(connection)
@@ -120,7 +130,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         worker.execute {
             try {
                 if (absoluteChannel() < 0) {
-                    ui { container.removeAllViews(); status.text = "$targetLabel: set deleted or unsupported (Main + 7 file sets supported). Controls disabled."; container.addView(status) }
+                    ui { presetBusy = false; container.removeAllViews(); status.text = "$targetLabel: set deleted or unsupported (Main + 7 file sets supported). Controls disabled."; container.addView(status) }
                 } else action(svc)
             }
             catch (e: Exception) {
@@ -135,12 +145,17 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     }
 
     // All service methods below are direct JNI calls, confined to worker.
-    private fun renderSnapshot(svc: PlaybackService, failed: Boolean = false) {
+    private fun renderSnapshot(svc: PlaybackService, failed: Boolean = false, presetResult: String? = null) {
         if (setId != MAIN_INSTRUMENT_SET_ID) {
             FileInstrumentSetStore.get(this).all().firstOrNull { it.id == setId }?.let { setName = it.name }
         }
         if (!svc.isEngineInitialized()) {
-            ui { status.text = getString(R.string.master_effects_engine_not_ready) }
+            ui {
+                if (presetResult != null) { presetBusy = false; presetMessage = presetResult }
+                container.removeAllViews()
+                status.text = listOfNotNull(presetResult, getString(R.string.master_effects_engine_not_ready)).joinToString("\n")
+                container.addView(status)
+            }
             return
         }
         val absolute = absoluteChannel()
@@ -165,7 +180,19 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         }
         val latency = instances.filter { it.available }.associate { it.descriptor.stableId to
             "${svc.getInstrumentEffectLatencyFrames(absolute, it.descriptor.stableId)} frames · ${String.format(java.util.Locale.getDefault(), "%.2f", svc.getInstrumentEffectLatencyMillis(absolute, it.descriptor.stableId))} ms" }
-        ui { supportActionBar?.title = "$targetLabel · Effects"; render(rack, instances, failed); renderShared(shared, latency) }
+        val libraryResult = runCatching {
+            presetLibrary.listOrSeed {
+                InstrumentFxPresetAdapter(PlaybackServiceInstrumentFxPort(svc)).factoryDefaults(setId, channel)
+            }.sortedBy { it.name.lowercase() }
+        }
+        ui {
+            presets = libraryResult.getOrDefault(emptyList())
+            presetLibraryError = libraryResult.exceptionOrNull()?.let { "Cannot read preset library: ${it.message}. Existing library was not changed." }
+            if (presets.none { it.name == selectedPresetName }) selectedPresetName = null
+            if (presetResult != null) { presetMessage = presetResult; presetBusy = false }
+            supportActionBar?.title = "$targetLabel · Effects"; render(rack, instances, failed); renderShared(shared, latency)
+            if (presetBusy) setPresetControlsEnabled(container, false)
+        }
     }
 
     private fun change(action: (PlaybackService) -> Boolean) = submit { svc ->
@@ -194,6 +221,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                     }.setNegativeButton("Cancel", null).show()
             }
         })
+        renderPresets()
         container.addView(Button(this).apply {
             com.piano.sequencer.ui.UiControlStyle.apply(this)
             text = "MIDI CC mappings"
@@ -263,6 +291,114 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             })
             card.addView(controls)
             container.addView(card)
+        }
+    }
+
+    private fun setPresetControlsEnabled(view: View, enabled: Boolean) {
+        view.isEnabled = enabled
+        if (view is android.view.ViewGroup) for (i in 0 until view.childCount) setPresetControlsEnabled(view.getChildAt(i), enabled)
+    }
+
+    private fun renderPresets() {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = ContextCompat.getDrawable(this@InstrumentEffectsActivity, R.drawable.card_frame)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        card.addView(label("Shared FX presets · $targetLabel"))
+        card.addView(label("8 inserts, rack and Delay only. No program, MIDI mappings, master FX or reverb."))
+        card.addView(label(listOfNotNull(presetMessage, presetLibraryError).joinToString("\n").ifEmpty {
+            if (presets.isEmpty()) "No presets yet. Save this channel to create one." else "Choose a preset, then Apply to this channel."
+        }).apply {
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        })
+        fun button(text: String, enabled: Boolean = true, action: () -> Unit) {
+            card.addView(Button(this).apply {
+                com.piano.sequencer.ui.UiControlStyle.apply(this)
+                this.text = text
+                isEnabled = enabled && !presetBusy
+                setOnClickListener { if (!presetBusy) action() }
+            })
+        }
+        button(selectedPresetName?.let { "Preset: $it ▾" } ?: "Choose preset ▾", presets.isNotEmpty()) {
+            val choices = presets.toList()
+            presetDialog = AlertDialog.Builder(this).setTitle("Choose shared FX preset")
+                .setSingleChoiceItems(choices.map { it.name }.toTypedArray(), choices.indexOfFirst { it.name == selectedPresetName }) { dialog, index ->
+                    selectedPresetName = choices[index].name
+                    dialog.dismiss()
+                    refresh() // Selection never applies a preset.
+                }.setNegativeButton("Cancel", null).show()
+        }
+        val selected = presets.firstOrNull { it.name == selectedPresetName }
+        button("Apply to $targetLabel", selected != null && presetLibraryError == null) {
+            selected?.let { preset -> presetOperation(refreshCc = true) { svc ->
+                val result = InstrumentFxPresetAdapter(PlaybackServiceInstrumentFxPort(svc)).apply(setId, channel, preset)
+                "${result.message} · $targetLabel · ${result.applied} changes" +
+                    if (result.skipped.isEmpty()) "" else "\nSkipped unavailable effects: ${result.skipped.joinToString()}"
+            } }
+        }
+        button("Save current…", presetLibraryError == null) { showSavePreset() }
+        button("Delete preset…", selected != null && presetLibraryError == null) {
+            selected?.let { preset ->
+                presetDialog = AlertDialog.Builder(this).setTitle("Delete preset?")
+                    .setMessage("Delete “${preset.name}” from the shared library for all channels and sets? Current effects stay unchanged.")
+                    .setNegativeButton("Cancel", null).setPositiveButton("Delete") { _, _ ->
+                        presetOperation { presetLibrary.delete(preset.name); "Deleted “${preset.name}”. Current effects unchanged." }
+                    }.show()
+            }
+        }
+        if (presetLibraryError != null) button("Retry library") { refresh() }
+        container.addView(card)
+    }
+
+    private fun showSavePreset() {
+        val name = EditText(this).apply {
+            hint = "Preset name (1–40 characters)"
+            contentDescription = "Preset name"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            setText(selectedPresetName.orEmpty())
+            selectAll()
+        }
+        val dialog = AlertDialog.Builder(this).setTitle("Save FX · $targetLabel")
+            .setView(name).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
+        presetDialog = dialog
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val value = name.text.toString().trim()
+                val error = runCatching { InstrumentFxPresetLibrary.validateName(value) }.exceptionOrNull()
+                if (error != null) { name.error = error.message; return@setOnClickListener }
+                dialog.dismiss()
+                fun save(overwrite: Boolean) = presetOperation { svc ->
+                    val preset = InstrumentFxPresetAdapter(PlaybackServiceInstrumentFxPort(svc)).capture(setId, channel, value)
+                    presetLibrary.save(preset, overwrite)
+                    ui { selectedPresetName = value }
+                    "Saved “$value” from $targetLabel. Available to all channels and sets."
+                }
+                if (presets.any { it.name.equals(value, true) }) {
+                    presetDialog = AlertDialog.Builder(this).setTitle("Overwrite preset?")
+                        .setMessage("Replace “$value” in the shared library with FX from $targetLabel? This affects the saved preset for all channels and sets, not their current effects.")
+                        .setNegativeButton("Cancel", null).setPositiveButton("Overwrite") { _, _ -> save(true) }.show()
+                } else save(false)
+            }
+        }
+        dialog.show()
+    }
+
+    private fun presetOperation(refreshCc: Boolean = false, action: (PlaybackService) -> String) {
+        if (presetBusy || service == null || isFinishing || isDestroyed) return
+        presetBusy = true
+        setPresetControlsEnabled(container, false)
+        submit { svc ->
+            var message = try { action(svc) } catch (e: Exception) {
+                AppLogger.error("InstrumentEffects", "Preset: ${e.message}")
+                "Preset operation failed: ${e.message ?: "Unknown error"}"
+            }
+            if (refreshCc) try { ccController.refreshCache() } catch (e: Exception) {
+                message += "\nMIDI CC cache refresh failed: ${e.message}"
+            }
+            try { renderSnapshot(svc, presetResult = message) } catch (e: Exception) {
+                ui { presetBusy = false; status.text = "$message\nCould not refresh controls: ${e.message}"; refresh() }
+            }
         }
     }
 
