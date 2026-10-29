@@ -43,6 +43,10 @@ Existing `setReverb(on)` remains supported. Reverb is global, not per-channel se
 
 For instrument insert enable Learn, construct `EffectCcMapping(..., effectId = "lsp.chorus" /* or lsp.clipper, lsp.filter, lsp.phaser, lsp.flanger */, parameterId = "-1", minRaw = 0f, maxRaw = 1f)` (default scope INSTRUMENT). Virtual ID `-1` dispatches `setInstrumentEffectEnabled` and persists only after success. It is distinct from all real parameter IDs, including existing parameter 0. Existing regular mappings retain their INSTRUMENT default scope. `manualParameterChanged(target,effect,parameter,value,scope = INSTRUMENT)` accepts GLOBAL for shared controls.
 
+### Disabled instrument clipper callback cost
+
+Published clipper DSP runs through the final 5 ms dry/wet fade, then pauses while disabled with wet mix at zero. Per-channel dry-history capture and active timeline latency alignment continue. Re-enable resumes DSP processing, with the existing reported-latency warm-up gate holding output dry before the normal 5 ms crossfade. This avoids processing 128 published-but-disabled clipper instances every callback without changing dry-history advancement or pre-activation bit-exact passthrough. Host regression covers pause/resume and latency alignment; device CPU impact remains device-measurement work.
+
 ### Filter, Phaser, Flanger mapped controls
 
 Native descriptor metadata owns parameter bounds, defaults, enum flags and

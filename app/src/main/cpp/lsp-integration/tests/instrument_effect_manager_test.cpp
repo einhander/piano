@@ -38,13 +38,15 @@ public:
  explicit LatencyEffect(int latency):latency(latency){}
  bool prepare(double,int) override { return available=true; }
  void process(float* l,float* r,int n) noexcept override {
+  ++processCalls;
   for(int i=0;i<n;++i){float a=left[(cursor-latency+128)%128],b=right[(cursor-latency+128)%128];left[cursor]=l[i];right[cursor]=r[i];l[i]=a+.25f;r[i]=b+.25f;cursor=(cursor+1)%128;}
  }
  void setParameter(uint32_t,float) noexcept override {} float getParameter(uint32_t)const noexcept override{return 0;}
  void setBypassed(bool b) noexcept override{bypassed=b;} bool isBypassed()const noexcept override{return bypassed;}
  const char* stableId()const noexcept override{return lsp::kIdClipper;} bool isAvailable()const noexcept override{return available;}
  int getLatencyFrames()const noexcept override{return latency;}
- int latency,cursor=0; float left[128]{},right[128]{}; bool available=false,bypassed=true;
+  inline static int processCalls=0;
+  int latency,cursor=0; float left[128]{},right[128]{}; bool available=false,bypassed=true;
 };
 std::unique_ptr<AudioEffect> factory(int slot) {
     if (slot == 0) { if(failSlotZero) return nullptr; return std::make_unique<FakeEffect>(); }
@@ -198,12 +200,26 @@ int main() {
     assert(aligned.setEffectEnabledChecked(0,lsp::kSlotClipper,true));
     for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(9*frames+i+1);
     aligned.process(oneBus,frames);
-    assert(std::fabs(one[0]-(float(9*frames-1)+.25f/240.0f))<.002f); // DSP pipeline stayed current while bypassed
+    assert(one[0]==float(9*frames-1) && one[2]==float(9*frames)); // latency-aligned dry during rewarm
+    assert(std::fabs(one[4]-(float(9*frames+1)+.25f/240.0f))<.002f); // wet fade starts after 2-frame rewarm
     for(int i=frames-8;i<frames;++i) assert(std::fabs(one[i*2]-(float(9*frames+i-1)+.25f))<.001f);
     aligned.setRackEnabled(0,false);
     for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(10*frames+i+1);
     aligned.process(oneBus,frames);
     for(int i=frames-8;i<frames;++i) assert(std::fabs(one[i*2]-float(10*frames+i-1))<.001f);
+    const int processCallsAfterFade=LatencyEffect::processCalls;
+    for(int block=11;block<14;++block) {
+        for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(block*frames+i+1);
+        aligned.process(oneBus,frames);
+        for(float sample:one) assert(std::isfinite(sample));
+    }
+    assert(LatencyEffect::processCalls==processCallsAfterFade); // paused once 5 ms dry fade completed
+    aligned.setRackEnabled(0,true);
+    assert(aligned.setEffectEnabledChecked(0,lsp::kSlotClipper,true));
+    for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(14*frames+i+1);
+    aligned.process(oneBus,frames);
+    assert(one[0]==float(14*frames-1) && one[2]==float(14*frames));
+    assert(std::fabs(one[4]-(float(14*frames+1)+.25f/240.0f))<.002f);
 
     auto firstUseStorage = std::make_unique<InstrumentEffectManager>(factory); auto& firstUse = *firstUseStorage; assert(firstUse.prepare(48000,frames));
     assert(firstUse.instantiate(0,lsp::kSlotClipper));
@@ -254,6 +270,7 @@ int main() {
         benchBuses[c]=benchData[c].data();
         assert(bench.instantiate(c,lsp::kSlotClipper)); // published; bypassed and disabled
     }
+    const int benchCallsBefore=LatencyEffect::processCalls;
     auto measure=[&](const char* label) {
         for(int i=0;i<100;++i) bench.process(benchBuses.data(),benchFrames);
         std::vector<double> us; us.reserve(benchIterations);
@@ -267,6 +284,7 @@ int main() {
                   << us[benchIterations/2] << " us, p95 " << us[benchIterations*95/100] << " us\n";
     };
     measure("published clipper disabled");
+    assert(LatencyEffect::processCalls==benchCallsBefore); // benchmark confirms no disabled DSP runs
 
     auto stressStorage = std::make_unique<InstrumentEffectManager>(factory); auto& stress = *stressStorage; assert(stress.prepare(48000,frames));
     assert(stress.instantiate(0,0));

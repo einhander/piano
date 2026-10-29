@@ -66,6 +66,8 @@ private:
     std::array<int, kChannels> mClipperLatency{};
     std::array<AudioEffect*, kChannels> mClipperWarmEffect{};
     std::array<int, kChannels> mClipperWarmFrames{};
+    // Reset whenever bypassed clipper DSP is paused; on re-enable its reported
+    // latency must be rendered before dry/wet crossfade resumes.
     // Callback-owned latch: starts on first effective Clip enable and remains
     // set across bypass. Reprepare is quiescent and may preserve/reset it.
     std::array<bool, kChannels> mClipperTimelineActive{};

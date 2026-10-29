@@ -262,12 +262,15 @@ void InstrumentEffectManager::process(float* const buses[kChannels], int frames)
                     mClipperWarmEffect[channel]=effect;
                     mClipperWarmFrames[channel]=0;
                 }
-                const int warmFramesBefore=mClipperWarmFrames[channel];
-                if (published) {
+                const bool processClipper = published && (effectiveEnable || mix > 0.0f);
+                // Let the 5 ms wet fade finish, then stop running disabled DSP.
+                // Dry delay history and timeline alignment below remain live.
+                const int warmFramesBefore = mClipperWarmFrames[channel];
+                if (processClipper) {
                     for(int f=0;f<frames;++f){mLeft[channel][f]=bus[f*2];mRight[channel][f]=bus[f*2+1];}
                     effect->process(mLeft[channel],mRight[channel],frames);
                     mClipperWarmFrames[channel]=std::min(kClipperDelayCapacity,warmFramesBefore+frames);
-                }
+                } else if (published) mClipperWarmFrames[channel]=0;
                 if(effectiveEnable) mClipperTimelineActive[channel]=true;
                 const float alignStep=static_cast<float>(1.0/(mSampleRate*0.005));
                 const float wetTarget=(mClipperTimelineActive[channel] && effectiveEnable)?1.0f:0.0f;
@@ -282,15 +285,15 @@ void InstrumentEffectManager::process(float* const buses[kChannels], int frames)
                     mClipperDryL[channel][cursor]=inL; mClipperDryR[channel][cursor]=inR;
                     if(mClipperHistoryCount[channel]<kClipperDelayCapacity) ++mClipperHistoryCount[channel];
                     float& align=mClipperAlignMix[channel];
-                    const bool pluginWarm=published && warmFramesBefore+f>=latency;
+                    const bool pluginWarm=processClipper && warmFramesBefore+f>=latency;
                     const bool alignReady=mClipperTimelineActive[channel] && historyReady && pluginWarm;
                     if(alignReady && align<1.0f) align=std::min(1.0f,align+alignStep);
                     const float dryL=inL+(delayedL-inL)*align, dryR=inR+(delayedR-inR)*align;
                     const float frameWetTarget=alignReady?wetTarget:0.0f;
                     if(mix<frameWetTarget) mix=std::min(frameWetTarget,mix+wetStep);
                     else if(mix>frameWetTarget) mix=std::max(frameWetTarget,mix-wetStep);
-                    const float wetL=published?mLeft[channel][f]:dryL;
-                    const float wetR=published?mRight[channel][f]:dryR;
+                    const float wetL=processClipper?mLeft[channel][f]:dryL;
+                    const float wetR=processClipper?mRight[channel][f]:dryR;
                     bus[f*2]=dryL+(wetL-dryL)*mix;
                     bus[f*2+1]=dryR+(wetR-dryR)*mix;
                     if(++cursor==kClipperDelayCapacity)cursor=0;
