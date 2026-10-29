@@ -589,12 +589,12 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetGatedCallbackCount(JNIEnv*,
 
 JNIEXPORT jlongArray JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeTakeCallbackTiming(JNIEnv* env, jclass) {
-    uint32_t values[21]{};
+    uint32_t values[23]{};
     if (NativeEngine* inst = NativeEngine::getInstance()) inst->takeCallbackTiming(values);
-    jlong packed[21];
-    for (int i = 0; i < 21; ++i) packed[i] = values[i];
-    jlongArray result = env->NewLongArray(21);
-    if (result) env->SetLongArrayRegion(result, 0, 21, packed);
+    jlong packed[23];
+    for (int i = 0; i < 23; ++i) packed[i] = values[i];
+    jlongArray result = env->NewLongArray(23);
+    if (result) env->SetLongArrayRegion(result, 0, 23, packed);
     return result;
 }
 

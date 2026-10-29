@@ -10,6 +10,7 @@ struct CallbackTiming {
     static_assert(std::atomic<uint32_t>::is_always_lock_free,
                   "Callback diagnostic counters must remain lock-free");
     std::atomic<uint32_t> count{0}, frames{0}, maxWallUs{0}, maxGapUs{0}, overBudget{0};
+    std::atomic<uint32_t> minFrames{~uint32_t{0}}, maxFrames{0};
     // Sampled NativeEngine region: synthesized-channel render wall time and
     // callback-thread CPU time. Slot values are window maxes (microseconds).
     std::atomic<uint32_t> stageCount{0}, synthWallUs{0}, engineCpuUs{0};
@@ -36,6 +37,10 @@ struct CallbackTiming {
         count.fetch_add(1, std::memory_order_relaxed);
         frames.fetch_add(numFrames, std::memory_order_relaxed);
         updateMax(maxWallUs, durationUs);
+        uint32_t oldMin = minFrames.load(std::memory_order_relaxed);
+        while (numFrames < oldMin && !minFrames.compare_exchange_weak(oldMin, numFrames,
+                   std::memory_order_relaxed, std::memory_order_relaxed)) {}
+        updateMax(maxFrames, numFrames);
         if (rate && static_cast<uint64_t>(durationUs) * rate > static_cast<uint64_t>(numFrames) * 1000000u)
             overBudget.fetch_add(1, std::memory_order_relaxed);
     }

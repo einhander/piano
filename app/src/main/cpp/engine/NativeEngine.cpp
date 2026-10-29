@@ -443,7 +443,7 @@ int64_t NativeEngine::getSf2LoadMs() const {
 void NativeEngine::takeCallbackTiming(uint32_t* out) noexcept {
     OboeOutput* output = OboeOutput::getInstance();
     if (output) output->takeCallbackTiming(out);
-    else for (int i = 0; i < 21; ++i) out[i] = 0;
+    else for (int i = 0; i < 23; ++i) out[i] = 0;
 }
 
 // ── Oboe stream diagnostics (worker-thread reads) ──

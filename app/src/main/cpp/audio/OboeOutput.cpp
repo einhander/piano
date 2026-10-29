@@ -4,9 +4,7 @@
 #ifndef PIANO_CALLBACK_DIAGNOSTICS
 #define PIANO_CALLBACK_DIAGNOSTICS 0
 #endif
-#if PIANO_CALLBACK_DIAGNOSTICS
 #include <time.h>
-#endif
 
 // Out-of-line definitions for inline static data members
 std::atomic<OboeOutput*> OboeOutput::sInstance{nullptr};
@@ -90,7 +88,6 @@ oboe::Result OboeOutput::open() {
             builder.setContentType(oboe::ContentType::Music);
             builder.setAllowedCapturePolicy(oboe::AllowedCapturePolicy::All);
             builder.setCallback(this);
-            builder.setFramesPerCallback(64);
             builder.setErrorCallback(this);
             if (rate > 0) {
                 builder.setSampleRate(rate);
@@ -272,6 +269,9 @@ void OboeOutput::takeCallbackTiming(uint32_t* out) noexcept {
     out[2] = mCallbackTiming.take(mCallbackTiming.maxWallUs);
     out[3] = mCallbackTiming.take(mCallbackTiming.maxGapUs);
     out[4] = mCallbackTiming.take(mCallbackTiming.overBudget);
+    const uint32_t minFrames = mCallbackTiming.take(mCallbackTiming.minFrames);
+    out[21] = minFrames == ~uint32_t{0} ? 0 : minFrames;
+    out[22] = mCallbackTiming.take(mCallbackTiming.maxFrames);
     // Append sampled engine timing to preserve established indices 0..5.
     out[6] = mCallbackTiming.take(mCallbackTiming.stageCount);
     out[7] = mCallbackTiming.take(mCallbackTiming.synthWallUs);
@@ -304,6 +304,7 @@ void OboeOutput::takeCallbackTiming(uint32_t* out) noexcept {
     for (int i = 0; i < 5; ++i) out[i] = 0;
     out[5] = 0;
     for (int i = 6; i < 21; ++i) out[i] = 0;
+    out[21] = out[22] = 0;
 #endif
 }
 
@@ -408,7 +409,18 @@ std::string OboeOutput::getStreamDiagnostics() const {
         << ",sharing=" << oboe::convertToText(mStream->getSharingMode())
         << ",performance=" << oboe::convertToText(mStream->getPerformanceMode())
         << ",state=" << oboe::convertToText(mStream->getState())
-        << ",device=" << mStream->getDeviceId();
+        << ",device=" << mStream->getDeviceId()
+        << ",callback_policy=native,callback_negotiated=" << mStream->getFramesPerDataCallback()
+        << ",frames_written=" << mStream->getFramesWritten()
+        << ",frames_read=" << mStream->getFramesRead();
+    const auto timestamp = mStream->getTimestamp(CLOCK_MONOTONIC);
+    if (timestamp) {
+        const auto& value = timestamp.value();
+        out << ",timestamp_status=ok,timestamp_position=" << value.position
+            << ",timestamp_ns=" << value.timestamp;
+    } else {
+        out << ",timestamp_status=" << oboe::convertToText(timestamp.error());
+    }
     return out.str();
 }
 

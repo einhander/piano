@@ -273,14 +273,21 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
             "sample_instfx_cpu_us=${timing.getOrElse(14) { 0L }} sample_delay_cpu_us=${timing.getOrElse(15) { 0L }} " +
             "sample_bus_cpu_us=${timing.getOrElse(16) { 0L }} sample_mix_cpu_us=${timing.getOrElse(17) { 0L }} " +
             "sample_master_cpu_us=${timing.getOrElse(18) { 0L }} sample_other_cpu_us=${timing.getOrElse(19) { 0L }} " +
-            "sample_synth_wall_us=${timing.getOrElse(20) { 0L }}"
+            "sample_synth_wall_us=${timing.getOrElse(20) { 0L }} " +
+            "cb_frames_min=${timing.getOrElse(21) { 0L }} cb_frames_max=${timing.getOrElse(22) { 0L }}"
 
         // One-time init dump: append burst + device info + SF2 load time.
         if (initDump) {
             val burst = NativeEngineBridge.nativeGetFramesPerBurst()
+            val buildId = try {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(packageName, 0).versionName ?: "unknown"
+            } catch (_: Exception) {
+                "unknown"
+            }
             // Build.SOC_MODEL requires API 31; minSdk is 26.
             val soc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Build.SOC_MODEL else "unknown"
-            line += " burst=$burst model=${Build.MODEL} sdk=${Build.VERSION.SDK_INT} " +
+            line += " build=$buildId burst=$burst model=${Build.MODEL} sdk=${Build.VERSION.SDK_INT} " +
                 "soc=$soc cores=${Runtime.getRuntime().availableProcessors()}"
             val sf2Path = NativeEngineBridge.nativeGetSoundFontPath()
             if (sf2Path.isNotEmpty()) {

@@ -53,6 +53,10 @@ Each Oboe callback:
 
 Events sorted by `targetFrame` within each callback.
 
+### Oboe callback frame sizes
+
+Stream opens without a requested callback quantum (`callback_policy=native`); Oboe/Android chooses delivered `numFrames`. Engine scheduling and audio stages must use that actual frame count, not assume 64. Worker perf diagnostics record negotiated callback quantum, callback min/max observed frames, written/read frame positions, and timestamp status/position when supported. These are diagnostic snapshots only; no timestamp queries occur in the callback.
+
 ## MIDI Handling
 
 Live MIDI: message → lock-free queue → audio callback → FluidSynth

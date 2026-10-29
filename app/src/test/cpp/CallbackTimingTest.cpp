@@ -11,6 +11,7 @@ int main() {
     count=t.take(t.count); frames=t.take(t.frames); wall=t.take(t.maxWallUs);
     gap=t.take(t.maxGapUs); over=t.take(t.overBudget);
     assert(count == 2 && frames == 128 && wall == 1400 && gap == 1000 && over == 1);
+    assert(t.take(t.minFrames) == 64 && t.take(t.maxFrames) == 64);
     assert(t.take(t.count) == 0);
     t.finishStage(23, 47);
     t.finishStage(31, 41);
