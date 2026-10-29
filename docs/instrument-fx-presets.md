@@ -17,6 +17,12 @@ Organ · Classic, and Strings · Distortion once, without replacing name collisi
 or restoring deleted older presets. Deleting migrated additions does not cause
 them to reappear on restart. Organ · Classic approximates modulation with existing
 Chorus/Phaser and mild drive; it is not a dedicated Leslie simulation.
+Factory revision 2 strengthens the two Distortion recipes with compensated
+output gain. Only exact, unchanged revision-1 factory snapshots are replaced;
+edited or deleted presets remain untouched. Reapply the updated preset to change
+the channel sound. Compiled-clipper tests show nonlinear processing at -18/-12
+dBFS; very quiet signals (-30 dBFS in the probe) can still remain clean. Actual
+distortion depends on SoundFont and upstream signal level.
 Actual sound depends on the selected SoundFont; these presets do not select an
 instrument program.
 

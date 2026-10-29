@@ -168,6 +168,63 @@ static int checkClipperNonlinearity(DescriptorFn get, double rate) {
   d->cleanup(h);
   return lag;
 }
+struct DistortionMetrics { double harmonicResidual; double rmsGain; double peak; };
+static DistortionMetrics measureDistortionPreset(DescriptorFn get, double rate, float drive, float thresholdDb, float outputGain, float levelDb) {
+ const auto* b=lsp::instrumentBindingForSlot(lsp::kSlotClipper); const LADSPA_Descriptor* d=nullptr;
+ for(unsigned long i=0;get(i);++i) if(std::strcmp(get(i)->Label,b->label)==0)d=get(i);
+ assert(d);
+ ladspa::LadspaEffect fx(lsp::kSlotClipper,b,d); assert(fx.prepare(rate,256)); fx.setBypassed(false);
+ fx.setParameter(lsp::kParamClipperDrive,drive);
+ fx.setParameter(lsp::kParamClipperThreshold,thresholdDb);
+ fx.setParameter(lsp::kParamClipperOutputGain,outputGain);
+ const int blocks=240, frames=blocks*256, lag=fx.getLatencyFrames();
+ std::vector<float> history(frames), left(256),right(256);
+ const double amplitude=std::pow(10.0,levelDb/20.0);
+ for(int block=0;block<blocks;++block) {
+  for(int i=0;i<256;++i) {
+   const int n=block*256+i; const double t=2.0*3.14159265358979323846*n/rate;
+   const float x=static_cast<float>(amplitude*(std::sin(220*t)+std::sin(277*t)+std::sin(330*t))/3.0);
+   history[n]=x; left[i]=right[i]=x;
+  }
+  fx.process(left.data(),right.data(),256);
+  assert(finite(left)&&finite(right));
+ }
+ double xx=0,xy=0,inputEnergy=0,outputEnergy=0; float peak=0;
+ for(int i=64;i<256;++i) {
+  const int n=(blocks-1)*256+i; const double x=history[n-lag], y=left[i];
+  xx+=x*x; xy+=x*y; inputEnergy+=x*x; outputEnergy+=y*y; peak=std::max(peak,std::abs(static_cast<float>(y)));
+ }
+ const double gain=xy/xx; double residual=0;
+ for(int i=64;i<256;++i) { const int n=(blocks-1)*256+i; const double e=left[i]-gain*history[n-lag]; residual+=e*e; }
+ return {std::sqrt(residual/outputEnergy),std::sqrt(outputEnergy/inputEnergy),peak};
+}
+static void checkDistortionRecipes(DescriptorFn get) {
+ for(float level:{-30.f,-18.f,-12.f}) {
+  const auto guitarOld=measureDistortionPreset(get,48000.,2.f,-4.f,.5f,level);
+  const auto stringsOld=measureDistortionPreset(get,48000.,1.35f,-2.f,.5f,level);
+  const auto guitarCandidate=measureDistortionPreset(get,48000.,8.f,-6.f,.125f,level);
+  const auto stringsCandidate=measureDistortionPreset(get,48000.,9.f,-6.f,.111111f,level);
+  std::printf("clipper recipe level=%g dBFS old guitar residual=%.5f rmsGain=%.4f peak=%.5f candidate residual=%.5f rmsGain=%.4f peak=%.5f; old strings residual=%.5f rmsGain=%.4f peak=%.5f candidate residual=%.5f rmsGain=%.4f peak=%.5f\n",
+      level,guitarOld.harmonicResidual,guitarOld.rmsGain,guitarOld.peak,guitarCandidate.harmonicResidual,guitarCandidate.rmsGain,guitarCandidate.peak,
+      stringsOld.harmonicResidual,stringsOld.rmsGain,stringsOld.peak,stringsCandidate.harmonicResidual,stringsCandidate.rmsGain,stringsCandidate.peak);
+  assert(guitarCandidate.peak < .2 && stringsCandidate.peak < .2);
+  if (level == -30.f) {
+   assert(guitarCandidate.harmonicResidual < .001 && stringsCandidate.harmonicResidual < .001);
+   assert(std::abs(guitarCandidate.rmsGain - 1.0) < .02);
+   assert(std::abs(stringsCandidate.rmsGain - 1.0) < .02);
+  }
+  if (level == -18.f) {
+   assert(guitarOld.harmonicResidual < .001 && stringsOld.harmonicResidual < .001);
+   assert(guitarCandidate.harmonicResidual > .10 && stringsCandidate.harmonicResidual > .10);
+   assert(guitarCandidate.rmsGain >= .7 && guitarCandidate.rmsGain <= 1.1);
+   assert(stringsCandidate.rmsGain >= .7 && stringsCandidate.rmsGain <= 1.1);
+  }
+  if (level == -12.f) {
+   assert(guitarCandidate.harmonicResidual > .30 && stringsCandidate.harmonicResidual > .30);
+   assert(guitarCandidate.rmsGain < .7 && stringsCandidate.rmsGain < .7);
+  }
+ }
+}
 static void checkClipperImpulse(DescriptorFn get,double rate,int expectedLatency) {
  const auto* b=lsp::instrumentBindingForSlot(lsp::kSlotClipper); const LADSPA_Descriptor* d=nullptr;
  for(unsigned long i=0;get(i);++i) if(std::strcmp(get(i)->Label,b->label)==0)d=get(i);
@@ -212,9 +269,10 @@ int main(int argc,char**argv) {
  assert(argc==2); void* so=dlopen(argv[1],RTLD_NOW|RTLD_LOCAL); assert(so);
  auto get=reinterpret_cast<DescriptorFn>(dlsym(so,"ladspa_descriptor")); assert(get);
   for(int slot=3;slot<lsp::kInstrumentEffectCount;++slot) { runPlugin(get,slot,44100.); runPlugin(get,slot,48000.); }
- const int latency441=checkClipperNonlinearity(get,44100.);
- const int latency480=checkClipperNonlinearity(get,48000.);
- assert(latency441==22 && latency480==24);
+  const int latency441=checkClipperNonlinearity(get,44100.);
+  const int latency480=checkClipperNonlinearity(get,48000.);
+  assert(latency441==22 && latency480==24);
+  checkDistortionRecipes(get);
  checkClipperImpulse(get,44100.,latency441); checkClipperImpulse(get,48000.,latency480);
   checkChorusFeedback(get);
    for(double rate:{44100.,48000.}) {

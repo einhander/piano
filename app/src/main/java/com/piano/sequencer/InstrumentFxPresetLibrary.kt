@@ -93,16 +93,49 @@ class InstrumentFxPresetLibrary(private val storage: InstrumentFxPresetStorage) 
         }
         if (existing.factoryRevision >= CURRENT_FACTORY_REVISION) return existing.presets
 
-        // Add only this revision's new factory rows. Existing built-ins and user rows remain untouched.
-        val additions = captureDefaults(defaults).filter { it.name in FACTORY_ADDITION_NAMES }
-        require(additions.map { it.name }.toSet() == FACTORY_ADDITION_NAMES) {
-            "Factory upgrade did not provide all revision $CURRENT_FACTORY_REVISION presets"
+        val factories = captureDefaults(defaults)
+        val merged = existing.presets.toMutableList()
+        when (existing.factoryRevision) {
+            0 -> {
+                // Early libraries had eight defaults. Add only these three new rows;
+                // case-insensitive user-name collisions win without replacement.
+                val additions = factories.filter { it.name in FACTORY_ADDITION_NAMES }
+                require(additions.map { it.name }.toSet() == FACTORY_ADDITION_NAMES) {
+                    "Factory upgrade did not provide all revision 1 presets"
+                }
+                val existingNames = merged.map { it.name.lowercase() }.toSet()
+                merged += additions.filter { it.name.lowercase() !in existingNames }
+            }
+            1 -> {
+                // Replace only exact, unchanged revision-1 factory snapshots. Missing rows
+                // stay deleted; edited rows and case-insensitive collisions stay user-owned.
+                for (name in RECIPE_UPGRADE_NAMES) {
+                    val index = merged.indexOfFirst { it.name.equals(name, ignoreCase = true) }
+                    if (index < 0) continue
+                    val latest = factories.firstOrNull { it.name == name } ?: error("Missing factory recipe $name")
+                    if (merged[index] == previousRevisionOneRecipe(latest)) merged[index] = latest
+                }
+            }
+            else -> error("Unsupported factory revision ${existing.factoryRevision}")
         }
-        val existingNames = existing.presets.map { it.name.lowercase() }.toSet()
-        val merged = existing.presets + additions.filter { it.name.lowercase() !in existingNames }
         commitSeed(merged, CURRENT_FACTORY_REVISION)
         return merged
     }
+
+    private fun previousRevisionOneRecipe(latest: InstrumentFxPreset): InstrumentFxPreset =
+        when (latest.name) {
+            "Guitar · Distortion" -> latest.withClipperParameters(320 to 2f, 322 to -4f, 323 to .5f)
+            "Strings · Distortion" -> latest.withClipperParameters(320 to 1.35f, 322 to -2f, 323 to .5f)
+            else -> latest
+        }
+
+    private fun InstrumentFxPreset.withClipperParameters(vararg values: Pair<Int, Float>) = copy(
+        effects = effects.map { effect ->
+            if (effect.effectId != "lsp.clipper") effect else effect.copy(
+                parameters = effect.parameters.toMutableMap().apply { values.forEach { (id, value) -> put(id, value) } }
+            )
+        }
+    )
 
     private fun captureDefaults(defaults: () -> List<InstrumentFxPreset>): List<InstrumentFxPreset> {
         val initial = try {
@@ -159,7 +192,8 @@ class InstrumentFxPresetLibrary(private val storage: InstrumentFxPresetStorage) 
     }
 
     companion object {
-        private const val CURRENT_FACTORY_REVISION = 1
+        private const val CURRENT_FACTORY_REVISION = 2
+        private val RECIPE_UPGRADE_NAMES = setOf("Guitar · Distortion", "Strings · Distortion")
         private val FACTORY_ADDITION_NAMES = setOf(
             "Guitar · Distortion",
             "Organ · Classic",
@@ -319,7 +353,7 @@ class InstrumentFxPresetAdapter(private val port: InstrumentFxChannelPort) {
             build(
                 "Guitar · Distortion",
                 guitarDistortion,
-                overrides = mapOf("lsp.clipper" to mapOf(320 to 2f, 322 to -4f))
+                overrides = mapOf("lsp.clipper" to mapOf(320 to 8f, 322 to -6f, 323 to .125f))
             ),
             build(
                 "Organ · Classic",
@@ -335,7 +369,7 @@ class InstrumentFxPresetAdapter(private val port: InstrumentFxChannelPort) {
                 stringsDistortion,
                 overrides = mapOf(
                     "lsp.chorus" to mapOf(304 to 10f),
-                    "lsp.clipper" to mapOf(320 to 1.35f, 322 to -2f)
+                    "lsp.clipper" to mapOf(320 to 9f, 322 to -6f, 323 to .111111f)
                 )
             )
         ).onEach(InstrumentFxPresetLibrary::validatePreset)
