@@ -67,6 +67,9 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     private var presetMessage: String? = null
     @Volatile private var presetBusy = false
     private var presetDialog: AlertDialog? = null
+    private var presetMenu: AlertDialog? = null
+    private var presetMenuContent: LinearLayout? = null
+    private val presetDisabledViews = java.util.IdentityHashMap<View, Boolean>()
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder) {
             if (isFinishing || isDestroyed) return
@@ -77,6 +80,10 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         override fun onServiceDisconnected(name: ComponentName?) {
             service?.let { ccController.detach(this@InstrumentEffectsActivity, it) }
             service = null
+            presetDialog?.dismiss()
+            presetMenu?.dismiss()
+            presetBusy = false
+            restorePresetControls()
             container.removeAllViews()
             status.text = getString(R.string.instrument_effects_disconnected)
             container.addView(status)
@@ -115,6 +122,8 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         if (ownsLearn) ccController.cancelLearn()
         learnDialog?.dismiss()
         presetDialog?.dismiss()
+        presetMenu?.dismiss()
+        presetDisabledViews.clear()
         service?.let { ccController.detach(this@InstrumentEffectsActivity, it) }
         service = null
         if (bound) unbindService(connection)
@@ -130,12 +139,18 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         worker.execute {
             try {
                 if (absoluteChannel() < 0) {
-                    ui { presetBusy = false; container.removeAllViews(); status.text = "$targetLabel: set deleted or unsupported (Main + 7 file sets supported). Controls disabled."; container.addView(status) }
+                    ui { presetBusy = false; restorePresetControls(); presetDialog?.dismiss(); presetMenu?.dismiss(); container.removeAllViews(); status.text = "$targetLabel: set deleted or unsupported (Main + 7 file sets supported). Controls disabled."; container.addView(status) }
                 } else action(svc)
             }
             catch (e: Exception) {
                 AppLogger.error("InstrumentEffects", "Channel ${channel + 1}: ${e.message}")
-                ui { status.text = getString(R.string.instrument_effects_error) }
+                ui {
+                    presetBusy = false
+                    restorePresetControls()
+                    status.text = "${getString(R.string.instrument_effects_error)}: ${e.message}"
+                    presetMessage = status.text.toString()
+                    renderPresetMenu()
+                }
             }
         }
     }
@@ -151,7 +166,9 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         }
         if (!svc.isEngineInitialized()) {
             ui {
-                if (presetResult != null) { presetBusy = false; presetMessage = presetResult }
+                if (presetResult != null) { presetBusy = false; restorePresetControls(); presetMessage = presetResult }
+                presetDialog?.dismiss()
+                presetMenu?.dismiss()
                 container.removeAllViews()
                 status.text = listOfNotNull(presetResult, getString(R.string.master_effects_engine_not_ready)).joinToString("\n")
                 container.addView(status)
@@ -187,10 +204,11 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         }
         ui {
             presets = libraryResult.getOrDefault(emptyList())
-            presetLibraryError = libraryResult.exceptionOrNull()?.let { "Cannot read preset library: ${it.message}. Existing library was not changed." }
+            presetLibraryError = libraryResult.exceptionOrNull()?.let { "Preset library unavailable: ${it.message}. Stored presets were not replaced." }
             if (presets.none { it.name == selectedPresetName }) selectedPresetName = null
-            if (presetResult != null) { presetMessage = presetResult; presetBusy = false }
+            if (presetResult != null) { presetMessage = presetResult; presetBusy = false; restorePresetControls() }
             supportActionBar?.title = "$targetLabel · Effects"; render(rack, instances, failed); renderShared(shared, latency)
+            renderPresetMenu()
             if (presetBusy) setPresetControlsEnabled(container, false)
         }
     }
@@ -221,7 +239,11 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                     }.setNegativeButton("Cancel", null).show()
             }
         })
-        renderPresets()
+        container.addView(Button(this).apply {
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
+            text = "FX presets…"
+            setOnClickListener { if (!presetBusy) showPresetMenu() }
+        })
         container.addView(Button(this).apply {
             com.piano.sequencer.ui.UiControlStyle.apply(this)
             text = "MIDI CC mappings"
@@ -295,11 +317,42 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     }
 
     private fun setPresetControlsEnabled(view: View, enabled: Boolean) {
+        if (!enabled && !presetDisabledViews.containsKey(view)) presetDisabledViews[view] = view.isEnabled
         view.isEnabled = enabled
         if (view is android.view.ViewGroup) for (i in 0 until view.childCount) setPresetControlsEnabled(view.getChildAt(i), enabled)
     }
 
-    private fun renderPresets() {
+    private fun restorePresetControls() {
+        presetDisabledViews.forEach { (view, enabled) -> view.isEnabled = enabled }
+        presetDisabledViews.clear()
+    }
+
+    private fun showPresetMenu() {
+        if (presetMenu?.isShowing == true || service == null) return
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        presetMenuContent = content
+        presetMenu = AlertDialog.Builder(this).setTitle("FX presets · $targetLabel")
+            .setView(ScrollView(this).apply { addView(content) })
+            .setNegativeButton("Back to effects", null).create().apply {
+                setOnDismissListener {
+                    presetDialog?.dismiss()
+                    presetDialog = null
+                    presetMenuContent = null
+                    presetMenu = null
+                }
+                show()
+            }
+        renderPresetMenu()
+    }
+
+    private fun renderPresetMenu() {
+        val content = presetMenuContent ?: return
+        content.removeAllViews()
+        renderPresets(content)
+        if (presetBusy) setPresetControlsEnabled(content, false)
+    }
+
+    private fun renderPresets(parent: LinearLayout) {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = ContextCompat.getDrawable(this@InstrumentEffectsActivity, R.drawable.card_frame)
@@ -348,7 +401,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             }
         }
         if (presetLibraryError != null) button("Retry library") { refresh() }
-        container.addView(card)
+        parent.addView(card)
     }
 
     private fun showSavePreset() {
@@ -388,6 +441,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         if (presetBusy || service == null || isFinishing || isDestroyed) return
         presetBusy = true
         setPresetControlsEnabled(container, false)
+        presetMenuContent?.let { setPresetControlsEnabled(it, false) }
         submit { svc ->
             var message = try { action(svc) } catch (e: Exception) {
                 AppLogger.error("InstrumentEffects", "Preset: ${e.message}")
@@ -397,7 +451,13 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                 message += "\nMIDI CC cache refresh failed: ${e.message}"
             }
             try { renderSnapshot(svc, presetResult = message) } catch (e: Exception) {
-                ui { presetBusy = false; status.text = "$message\nCould not refresh controls: ${e.message}"; refresh() }
+                ui {
+                    presetBusy = false
+                    restorePresetControls()
+                    presetMessage = "$message\nCould not refresh controls: ${e.message}"
+                    status.text = presetMessage
+                    renderPresetMenu()
+                }
             }
         }
     }

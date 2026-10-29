@@ -4,10 +4,41 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class InstrumentFxPresetLibraryTest {
+    private data class NativeParameter(
+        val id: Int,
+        val stableName: String,
+        val minimum: Float,
+        val maximum: Float,
+        val defaultValue: Float
+    ) {
+        fun jniInfo() = floatArrayOf(id.toFloat(), minimum, maximum, defaultValue, 0f, 0f, 0f)
+    }
+
+    private object NativeCatalog {
+        val byEffect: Map<String, List<NativeParameter>> by lazy {
+            val stream = InstrumentFxPresetLibraryTest::class.java.getResourceAsStream("/instrument_fx_native_catalog.tsv")
+                ?: error("Missing host-generated native catalog fixture")
+            stream.bufferedReader().useLines { lines ->
+                lines.filter { it.isNotBlank() }.map { line ->
+                    val columns = line.split('\t')
+                    require(columns.size == 6) { "Invalid native fixture line: $line" }
+                    columns[0] to NativeParameter(
+                        columns[1].toInt(), columns[2], columns[3].toFloat(), columns[4].toFloat(), columns[5].toFloat()
+                    )
+                }.toList().groupBy({ it.first }, { it.second })
+            }
+        }
+
+        fun parameter(effectId: String, id: Int) =
+            byEffect.getValue(effectId).first { it.id == id }
+    }
+
     private fun preset(name: String = "One") = InstrumentFxPreset(
         name,
         true,
-        InstrumentFxPresetCodec.insertIds.map { InstrumentFxPreset.Insert(it, true, mapOf(1 to .5f)) },
+        InstrumentFxPresetCodec.insertIds.map { id ->
+            InstrumentFxPreset.Insert(id, true, NativeCatalog.byEffect.getValue(id).associate { it.id to it.defaultValue })
+        },
         InstrumentFxPreset.Delay(true, (0..5).associateWith { .5f })
     )
     @Test fun codecRoundTripAndRejectUnknownIds() {
@@ -46,13 +77,40 @@ class InstrumentFxPresetLibraryTest {
 
     @Test fun seedCommitFailureAndCorruptLibraryArePreserved() {
         var raw: String? = null
+        var failCommit = true
         val storage = object : InstrumentFxPresetStorage {
             override fun read() = raw
-            override fun commit(value: String) = false
+            override fun commit(value: String): Boolean {
+                if (failCommit) return false
+                raw = value
+                return true
+            }
         }
         val library = InstrumentFxPresetLibrary(storage)
-        assertThrows(IllegalStateException::class.java) { library.seedDefaultsIfAbsent(listOf(preset())) }
+        val commitError = assertThrows(IllegalStateException::class.java) {
+            library.listOrSeed { listOf(preset()) }
+        }
+        assertTrue(commitError.message.orEmpty().contains("Cannot commit default preset library"))
         assertNull(raw)
+        failCommit = false
+        assertEquals(listOf(preset()), library.listOrSeed { listOf(preset()) })
+        assertNotNull(raw)
+
+        val readLibrary = InstrumentFxPresetLibrary(object : InstrumentFxPresetStorage {
+            override fun read(): String? = error("disk read failure")
+            override fun commit(value: String) = error("must not commit")
+        })
+        val readError = assertThrows(IllegalStateException::class.java) { readLibrary.listOrSeed { emptyList() } }
+        assertTrue(readError.message.orEmpty().contains("Cannot read preset library"))
+
+        val captureLibrary = InstrumentFxPresetLibrary(object : InstrumentFxPresetStorage {
+            override fun read() = null
+            override fun commit(value: String) = error("must not commit")
+        })
+        val captureError = assertThrows(IllegalStateException::class.java) {
+            captureLibrary.listOrSeed { error("native catalog failure") }
+        }
+        assertTrue(captureError.message.orEmpty().contains("Cannot capture factory presets"))
 
         val corrupt = "corrupt"
         val corruptLibrary = InstrumentFxPresetLibrary(object : InstrumentFxPresetStorage {
@@ -65,28 +123,10 @@ class InstrumentFxPresetLibraryTest {
     private class Port : InstrumentFxChannelPort {
         val calls = mutableListOf<String>()
         var failAt: String? = null
-        var factoryMode = false
         private fun record(value: String): Boolean { calls.add(value); return value != failAt }
         override fun validTarget(setId: String, localChannel: Int) = setId == "set-b" && localChannel == 4
-        private fun factoryDescriptors(id: String): List<FloatArray> {
-            fun descriptor(parameter: Int, min: Float = 0f, max: Float = 1f, default: Float = .5f) =
-                floatArrayOf(parameter.toFloat(), min, max, default, 0f, 0f, 0f)
-            return when (id) {
-                "lsp.parametric_eq" -> listOf(
-                    descriptor(28, 0f, 11f, 0f),
-                    descriptor(33, 10f, 24000f, 1000f),
-                    descriptor(35, .01585f, 63.0957f, 1f)
-                )
-                "lsp.chorus" -> listOf(descriptor(304, 0f, 100f, 100f))
-                "lsp.clipper" -> listOf(descriptor(320, 0f, 10f, 1f))
-                "lsp.filter" -> listOf(descriptor(360, 10f, 24000f, 1000f), descriptor(362, 0f, 10f, 0f))
-                "lsp.flanger" -> listOf(descriptor(403, 0f, 100f, 100f))
-                else -> listOf(descriptor(1), descriptor(2))
-            }
-        }
-        override fun count(id: String) = if (factoryMode) factoryDescriptors(id).size else 1
-        override fun info(id: String, index: Int) =
-            if (factoryMode) factoryDescriptors(id).getOrNull(index) else floatArrayOf(1f, 0f, 1f, 0f, 0f, 0f, 0f)
+        override fun count(id: String) = NativeCatalog.byEffect.getValue(id).size
+        override fun info(id: String, index: Int) = NativeCatalog.byEffect.getValue(id).getOrNull(index)?.jniInfo()
         override fun delayInfo(parameter: Int): FloatArray {
             val max = when (parameter) { 1 -> 2000f; 2, 3 -> .8f; 5 -> 4f; else -> 1f }
             val defaults = listOf(0f, 250f, .35f, .30f, 0f, 0f)
@@ -104,7 +144,7 @@ class InstrumentFxPresetLibraryTest {
         override fun rackEnabled(s: String, c: Int) = true
     }
 
-    @Test fun firstRunSeedsNineNativeDefaultBasedPresetsOnceOnly() {
+    @Test fun firstRunSeedsEightNativeDefaultBasedPresetsOnceOnly() {
         var raw: String? = null
         var commits = 0
         val storage = object : InstrumentFxPresetStorage {
@@ -112,7 +152,7 @@ class InstrumentFxPresetLibraryTest {
             override fun commit(value: String): Boolean { commits++; raw = value; return true }
         }
         val library = InstrumentFxPresetLibrary(storage)
-        val port = Port().apply { factoryMode = true }
+        val port = Port()
         val defaults = InstrumentFxPresetAdapter(port).factoryDefaults("set-b", 4)
         assertEquals(8, defaults.size)
         assertEquals(
@@ -121,7 +161,8 @@ class InstrumentFxPresetLibraryTest {
         )
         defaults.forEach { preset ->
             assertEquals(InstrumentFxPresetCodec.insertIds, preset.effects.map { it.effectId })
-            assertTrue(preset.effects.all { it.parameters.isNotEmpty() })
+            assertEquals(NativeCatalog.byEffect.mapValues { it.value.map(NativeParameter::id).toSet() },
+                preset.effects.associate { it.effectId to it.parameters.keys })
             assertEquals((0..5).toSet(), preset.delay.parameters.keys)
             assertTrue(preset.effects.flatMap { it.parameters.values }.all(Float::isFinite))
         }
@@ -133,14 +174,20 @@ class InstrumentFxPresetLibraryTest {
         assertEquals(9000f, warmViolin.effects.first { it.effectId == "lsp.filter" }.parameters[360])
         assertEquals(1.5f, byName.getValue("Guitar · Crunch").effects.first { it.effectId == "lsp.clipper" }.parameters[320])
         assertEquals(25f, byName.getValue("Guitar · Lead").effects.first { it.effectId == "lsp.chorus" }.parameters[304])
-        assertEquals(1f, port.info("lsp.clipper", 0)!![3])
+        assertEquals(1f, NativeCatalog.parameter("lsp.clipper", 320).defaultValue)
         assertEquals(.12f, byName.getValue("Guitar · Lead").delay.parameters[3])
         assertEquals(.18f, byName.getValue("Violin · Spacious").delay.parameters[3])
         assertEquals(20f, byName.getValue("Piano · Wide").effects.first { it.effectId == "lsp.flanger" }.parameters[403])
         val pianoEq = byName.getValue("Piano · Clean").effects.first { it.effectId == "lsp.parametric_eq" }.parameters
-        assertEquals(5f, pianoEq[28])
+        assertEquals(5f, pianoEq[30])
         assertEquals(200f, pianoEq[33])
-        assertEquals(1.122018f, pianoEq[35])
+        assertEquals(1.122018f, pianoEq[34])
+        assertEquals("band0_type", NativeCatalog.parameter("lsp.parametric_eq", 30).stableName)
+        assertEquals("band0_gain", NativeCatalog.parameter("lsp.parametric_eq", 34).stableName)
+        assertEquals("feedback", NativeCatalog.parameter("lsp.chorus", 303).stableName)
+        assertEquals("mix", NativeCatalog.parameter("lsp.chorus", 304).stableName)
+        assertEquals("drive", NativeCatalog.parameter("lsp.clipper", 320).stableName)
+        assertEquals("mix", NativeCatalog.parameter("lsp.flanger", 403).stableName)
         var generated = 0
         val firstRead = library.listOrSeed { generated++; defaults }
         assertEquals(1, generated)
@@ -162,7 +209,7 @@ class InstrumentFxPresetLibraryTest {
         port.failAt = "enabled:set-b:4:lsp.parametric_eq"
         val result = adapter.apply("set-b", 4, p)
         assertFalse(result.success)
-        assertEquals(1, result.applied)
+        assertEquals(NativeCatalog.byEffect.getValue("lsp.parametric_eq").size, result.applied)
         assertTrue(port.calls.all { it.startsWith("set-b:4:") || it.startsWith("enabled:set-b:4:") })
     }
 

@@ -1,6 +1,7 @@
 # Instrument FX presets
 
-The instrument effects screen has one shared named preset library across Main,
+Open **FX presets…** inside the instrument effects screen to access the separate
+preset submenu. The screen has one shared named preset library across Main,
 file instrument sets, and channels. Selecting a preset does not apply it. Apply
 changes only the channel and instrument set shown on the screen.
 
@@ -20,6 +21,11 @@ precedes application. Application uses existing individual native setters, not a
 atomic audio-boundary transaction: a rejected setter can leave earlier changes
 applied, which is reported. Unavailable effects are skipped; MIDI soft-takeover
 caches are refreshed after application. Corrupt libraries are not silently reset.
+
+Factory regression tests use `instrument_fx_native_catalog.tsv`, generated from
+the native descriptor tables by
+`app/src/main/cpp/lsp-integration/tests/generate_instrument_fx_catalog_fixture.sh`.
+Regenerate this fixture when changing native parameter identities or bounds.
 
 Automated coverage: `InstrumentFxPresetLibraryTest` checks serialization, storage
 failures, initialization, preset recipes, target isolation, validation, and partial

@@ -72,12 +72,20 @@ class InstrumentFxPresetLibrary(private val storage: InstrumentFxPresetStorage) 
     @Synchronized
     fun listOrSeed(defaults: () -> List<InstrumentFxPreset>): List<InstrumentFxPreset> {
         readExisting()?.let { return it }
-        val initial = defaults()
-        val validated = initial.onEach(::validatePreset)
+        val initial = try {
+            defaults()
+        } catch (error: Exception) {
+            throw IllegalStateException("Cannot capture factory presets: ${error.message ?: error.javaClass.simpleName}", error)
+        }
+        val validated = try {
+            initial.onEach(::validatePreset)
+        } catch (error: Exception) {
+            throw IllegalStateException("Cannot validate factory presets: ${error.message ?: error.javaClass.simpleName}", error)
+        }
         require(validated.map { it.name.lowercase() }.toSet().size == validated.size) {
             "Default preset names must be unique"
         }
-        check(storage.commit(InstrumentFxPresetCodec.encode(validated))) { "Preset library seed failed" }
+        commitSeed(validated)
         return validated
     }
     @Synchronized
@@ -101,7 +109,21 @@ class InstrumentFxPresetLibrary(private val storage: InstrumentFxPresetStorage) 
 
     private fun load() = readExisting() ?: emptyList()
 
-    private fun readExisting(): List<InstrumentFxPreset>? = storage.read()?.let(InstrumentFxPresetCodec::decode)
+    private fun readExisting(): List<InstrumentFxPreset>? = try {
+        storage.read()?.let(InstrumentFxPresetCodec::decode)
+    } catch (error: Exception) {
+        throw IllegalStateException("Cannot read preset library: ${error.message ?: error.javaClass.simpleName}", error)
+    }
+
+    private fun commitSeed(presets: List<InstrumentFxPreset>) {
+        val encoded = InstrumentFxPresetCodec.encode(presets)
+        val committed = try {
+            storage.commit(encoded)
+        } catch (error: Exception) {
+            throw IllegalStateException("Cannot commit default preset library: ${error.message ?: error.javaClass.simpleName}", error)
+        }
+        check(committed) { "Cannot commit default preset library: preferences commit returned false" }
+    }
 
     companion object {
         fun validateName(name: String) {
@@ -244,7 +266,7 @@ class InstrumentFxPresetAdapter(private val port: InstrumentFxChannelPort) {
             build(
                 "Piano · Clean",
                 clean,
-                overrides = mapOf("lsp.parametric_eq" to mapOf(28 to 5f, 33 to 200f, 35 to 1.122018f))
+                overrides = mapOf("lsp.parametric_eq" to mapOf(30 to 5f, 33 to 200f, 34 to 1.122018f))
             ),
             build("Piano · Warm", chorus, overrides = mapOf("lsp.chorus" to mapOf(304 to 18f))),
             build(
