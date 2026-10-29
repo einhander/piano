@@ -99,7 +99,7 @@ android {
         }
         release {
             externalNativeBuild {
-                cmake { arguments += "-DPIANO_CALLBACK_DIAGNOSTICS=OFF" }
+                cmake { arguments += "-DPIANO_CALLBACK_DIAGNOSTICS=ON" }
             }
             // Only apply the signing config when credentials are available;
             // otherwise fall back to the default (unsigned) release so builds
