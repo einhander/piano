@@ -119,6 +119,8 @@ object NativeEngineBridge {
     external fun nativeStopAudio(): Int
     external fun nativeIsAudioPlaying(): Boolean
     external fun nativeGetAudioState(): Int
+    /** Worker-only backend state query; refreshes native cached state. */
+    external fun nativeGetActualAudioState(): Int
     external fun nativeIsEngineInitialized(): Boolean
     external fun nativeGetUnderrunCount(): Int
     external fun nativeGetAudioStreamError(): Int

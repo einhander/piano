@@ -1,4 +1,5 @@
 #include "OboeOutput.h"
+#include "StreamRecoveryPolicy.h"
 #include <cmath>
 #include <sstream>
 #ifndef PIANO_CALLBACK_DIAGNOSTICS
@@ -48,6 +49,14 @@ int32_t OboeOutput::getFramesPerBurst() const {
     return mFramesPerBurst;
 }
 
+oboe::StreamState OboeOutput::getActualState() {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
+    if (mStream == nullptr) return oboe::StreamState::Closed;
+    const oboe::StreamState actual = mStream->getState();
+    mState.store(actual, std::memory_order_release);
+    return actual;
+}
+
 oboe::Result OboeOutput::open() {
     std::lock_guard<std::mutex> streamLock(mStreamMutex);
     // Idempotent: the engine is a process-level singleton that survives activity
@@ -55,14 +64,22 @@ oboe::Result OboeOutput::open() {
     // leaking it. A stopped stream can be restarted. A dead stream (error/closed)
     // is closed and reopened.
     if (mStream != nullptr) {
-        oboe::StreamState st = mState.load(std::memory_order_acquire);
+        // Query actual backend state on this serialized worker path. Cached
+        // Started can outlive an AAudio disconnect and must not keep a dead
+        // stream reusable.
+        oboe::StreamState st = mStream->getState();
         // Dead states: Closed / Disconnected (stream errors surface through the
         // error callback, which lands in Closed — there is no Error state).
-        if (st != oboe::StreamState::Closed &&
-            st != oboe::StreamState::Disconnected) {
+        if (!piano::audio::requiresFreshStream(st)) {
             return oboe::Result::OK;
         }
-        mStream->close();
+        mState.store(st, std::memory_order_release);
+        const uint32_t oldGeneration = mStreamGeneration.load(std::memory_order_relaxed);
+        const oboe::Result closeResult = mStream->close();
+        mLastClosedGeneration.store(oldGeneration, std::memory_order_relaxed);
+        mLastCloseResult.store(static_cast<int32_t>(closeResult), std::memory_order_relaxed);
+        mLastCloseReason.store(1, std::memory_order_relaxed); // closed while reopening dead stream
+        mActiveStreamIdentity.store(0, std::memory_order_release);
         mStream = nullptr;
     }
 
@@ -88,6 +105,7 @@ oboe::Result OboeOutput::open() {
             builder.setContentType(oboe::ContentType::Music);
             builder.setAllowedCapturePolicy(oboe::AllowedCapturePolicy::All);
             builder.setCallback(this);
+            builder.setFramesPerCallback(64);
             builder.setErrorCallback(this);
             if (rate > 0) {
                 builder.setSampleRate(rate);
@@ -99,6 +117,8 @@ oboe::Result OboeOutput::open() {
                 // requested — the actual rate is authoritative.
                 mSampleRate = mStream->getSampleRate();
                 mFramesPerBurst = mStream->getFramesPerBurst();
+                mStreamGeneration.fetch_add(1, std::memory_order_acq_rel);
+                mActiveStreamIdentity.store(reinterpret_cast<uintptr_t>(mStream), std::memory_order_release);
                 mPhaseIncrement = kTestFrequency / mSampleRate;
                 mState.store(oboe::StreamState::Open);
 
@@ -150,7 +170,12 @@ void OboeOutput::createLatencyTuner() {
 void OboeOutput::close() {
     std::lock_guard<std::mutex> streamLock(mStreamMutex);
     if (mStream != nullptr) {
-        mStream->close();
+        const uint32_t generation = mStreamGeneration.load(std::memory_order_relaxed);
+        const oboe::Result closeResult = mStream->close();
+        mLastClosedGeneration.store(generation, std::memory_order_relaxed);
+        mLastCloseResult.store(static_cast<int32_t>(closeResult), std::memory_order_relaxed);
+        mLastCloseReason.store(2, std::memory_order_relaxed); // explicit OboeOutput::close
+        mActiveStreamIdentity.store(0, std::memory_order_release);
         mStream = nullptr;
         mState.store(oboe::StreamState::Uninitialized);
     }
@@ -166,10 +191,15 @@ oboe::Result OboeOutput::start() {
     // survives service rebinds (e.g. MIDI device reconnect). AAudio reports a
     // running stream as Started and returns INVALID_STATE (-895) for start()
     // on it — treat "already running" as success instead of a false error.
-    if (mState.load(std::memory_order_acquire) == oboe::StreamState::Started) {
-        if (mStream->getState() == oboe::StreamState::Started) {
-            return oboe::Result::OK;
-        }
+    const oboe::StreamState actualState = mStream->getState();
+    if (piano::audio::requiresFreshStream(actualState)) {
+        mState.store(actualState, std::memory_order_release);
+        return actualState == oboe::StreamState::Disconnected
+            ? oboe::Result::ErrorDisconnected : oboe::Result::ErrorClosed;
+    }
+    if (actualState == oboe::StreamState::Started) {
+        mState.store(oboe::StreamState::Started, std::memory_order_release);
+        return oboe::Result::OK;
     }
     oboe::Result result = mStream->start();
     if (result == oboe::Result::OK) {
@@ -347,7 +377,14 @@ void OboeOutput::publishCallbackStage(uint32_t stage) noexcept {
 
 void OboeOutput::onErrorAfterClose(oboe::AudioStream* stream, oboe::Result error) {
     mLastError.store(static_cast<int32_t>(error), std::memory_order_relaxed);
-    mState.store(oboe::StreamState::Closed);
+    mLastErrorGeneration.store(mStreamGeneration.load(std::memory_order_acquire), std::memory_order_relaxed);
+    mLastErrorDeviceId.store(stream ? stream->getDeviceId() : -1, std::memory_order_relaxed);
+    const bool matches = stream && reinterpret_cast<uintptr_t>(stream) ==
+        mActiveStreamIdentity.load(std::memory_order_acquire);
+    mLastErrorMatchesCurrent.store(matches, std::memory_order_relaxed);
+    // A delayed error callback for a superseded stream must not mark its newer
+    // replacement closed. Identity matching does not dereference the stream.
+    if (matches) mState.store(oboe::StreamState::Closed, std::memory_order_release);
 }
 
 void OboeOutput::generateSineWave(float* buffer, int32_t numFrames) {
@@ -400,17 +437,29 @@ oboe::PerformanceMode OboeOutput::getPerformanceMode() const {
 
 std::string OboeOutput::getStreamDiagnostics() const {
     std::lock_guard<std::mutex> streamLock(mStreamMutex);
-    if (mStream == nullptr) return "closed";
     std::ostringstream out;
-    out << "api=" << oboe::convertToText(mStream->getAudioApi())
+    out << "callback_policy=fixed64,callback_requested=64"
+        << ",generation=" << mStreamGeneration.load(std::memory_order_relaxed)
+        << ",last_closed_generation=" << mLastClosedGeneration.load(std::memory_order_relaxed)
+        << ",last_close_result=" << mLastCloseResult.load(std::memory_order_relaxed)
+        << ",last_close_reason=" << mLastCloseReason.load(std::memory_order_relaxed)
+        << ",last_error_generation=" << mLastErrorGeneration.load(std::memory_order_relaxed)
+        << ",last_error_device=" << mLastErrorDeviceId.load(std::memory_order_relaxed)
+        << ",last_error_matches_current=" << mLastErrorMatchesCurrent.load(std::memory_order_relaxed);
+    if (mStream == nullptr) {
+        out << ",stream=closed,cached_state=" << oboe::convertToText(mState.load(std::memory_order_relaxed));
+        return out.str();
+    }
+    out << ",api=" << oboe::convertToText(mStream->getAudioApi())
         << ",format=" << oboe::convertToText(mStream->getFormat())
         << ",channels=" << mStream->getChannelCount()
         << ",rate=" << mStream->getSampleRate()
         << ",sharing=" << oboe::convertToText(mStream->getSharingMode())
         << ",performance=" << oboe::convertToText(mStream->getPerformanceMode())
         << ",state=" << oboe::convertToText(mStream->getState())
+        << ",cached_state=" << oboe::convertToText(mState.load(std::memory_order_relaxed))
         << ",device=" << mStream->getDeviceId()
-        << ",callback_policy=native,callback_negotiated=" << mStream->getFramesPerDataCallback()
+        << ",callback_negotiated=" << mStream->getFramesPerDataCallback()
         << ",frames_written=" << mStream->getFramesWritten()
         << ",frames_read=" << mStream->getFramesRead();
     const auto timestamp = mStream->getTimestamp(CLOCK_MONOTONIC);

@@ -28,4 +28,9 @@ int main() {
     assert(t.engineCpuUs.load(std::memory_order_relaxed) == 60);
     assert(t.detailSynthCpuUs.load(std::memory_order_relaxed) == 11);
     assert(t.detailOtherCpuUs.load(std::memory_order_relaxed) == 17);
+    CallbackTiming variableFrames;
+    variableFrames.finish(100, 64, 48000);
+    variableFrames.finish(100, 192, 48000);
+    assert(variableFrames.take(variableFrames.minFrames) == 64);
+    assert(variableFrames.take(variableFrames.maxFrames) == 192);
 }

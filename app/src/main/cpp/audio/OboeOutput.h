@@ -28,6 +28,8 @@ public:
     int32_t getFramesPerBurst() const;
     int32_t getUnderrunCount() const { return mUnderrunCount.load(); }
     oboe::StreamState getState() const { return mState.load(); }
+    // Worker-only: queries backend directly and refreshes cached state.
+    oboe::StreamState getActualState();
     int32_t getLastError() const { return mLastError.load(std::memory_order_relaxed); }
 
     // ── Diagnostics (worker-thread reads; benign races are acceptable) ──
@@ -96,6 +98,10 @@ private:
     mutable std::mutex mStreamMutex;
     std::atomic<oboe::StreamState> mState{oboe::StreamState::Uninitialized};
     std::atomic<int32_t> mLastError{0};
+    std::atomic<uint32_t> mStreamGeneration{0}, mLastClosedGeneration{0}, mLastErrorGeneration{0};
+    std::atomic<uintptr_t> mActiveStreamIdentity{0};
+    std::atomic<int32_t> mLastCloseResult{-1}, mLastCloseReason{0}, mLastErrorDeviceId{-1};
+    std::atomic<bool> mLastErrorMatchesCurrent{false};
     int32_t mSampleRate = 0;
     int32_t mFramesPerBurst = 0;
     std::atomic<int32_t> mUnderrunCount{0};

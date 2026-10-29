@@ -55,7 +55,11 @@ Events sorted by `targetFrame` within each callback.
 
 ### Oboe callback frame sizes
 
-Stream opens without a requested callback quantum (`callback_policy=native`); Oboe/Android chooses delivered `numFrames`. Engine scheduling and audio stages must use that actual frame count, not assume 64. Worker perf diagnostics record negotiated callback quantum, callback min/max observed frames, written/read frame positions, and timestamp status/position when supported. These are diagnostic snapshots only; no timestamp queries occur in the callback.
+The current controlled callback-size A/B requests 64 frames (`callback_policy=fixed64`), restoring the prior baseline after a native-size experiment did not resolve the reported behavior. This rollback is not a root-cause fix. Oboe/Android may still deliver varying `numFrames`; engine scheduling and audio stages must use that actual frame count, not assume the request was honored. Worker perf diagnostics record negotiated callback quantum, callback min/max observed frames, written/read frame positions, and timestamp status/position when supported. These are diagnostic snapshots only; no timestamp queries occur in the callback.
+
+Worker `audio_lifecycle` lines bracket open/start/stop operations with operation ID, thread name, cached state, actual stream state, stream generation, and result. A dead-stream close performed inside open is bracketed too. Error callback stores supplied device, current generation snapshot, and whether callback stream identity still matches active stream; worker logs this state later. No logging or JNI occurs in audio callback.
+
+Service recovery requests are single-flight: repeated 1 Hz requests coalesce while one open/start attempt is queued or running. Worker health polling queries actual backend state. Actual `Closed`/`Disconnected` routes through existing serialized open/close path to a fresh stream; `open()` uses backend state rather than stale cache to decide reuse. `start()` returns a terminal-state error rather than calling start on an ended stream. Cached `Started` alone never triggers forced close or watchdog recovery. A late Oboe error callback only marks the stream closed when its supplied stream identity still matches the active stream. After keyboard reconnect, expected evidence is a recovery request, old-generation close, new generation increment, successful start, then callback/frame progress for new stream. Device test required.
 
 ## MIDI Handling
 
