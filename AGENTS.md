@@ -25,10 +25,17 @@ Requires JDK 17, Android SDK (API 34), NDK 26.1, CMake 3.22.1.
   unit tests must pass: `./gradlew :app:testDebugUnitTest` (MIDI parser regression
   suite in `app/src/test/.../midi/MidiMessageParserTest.kt`). On-device behavior is
   verified manually (no adb/logcat on the dev machine).
-- **Release versioning:** Update `app/build.gradle.kts` together: `baseVersion` to the
-  intended semantic version and `versionCode` to the next monotonically increasing
-  integer. Commit the bump on `master`, run the automated checks, then create and push
-  exactly one annotated `v<baseVersion>` tag on that commit (for example `v0.1.1`).
+- **Release versioning:** On `master`, use `scripts/prepare-release.sh X.Y.Z`;
+  do not bump the version manually. The script updates `baseVersion`, chooses the
+  next monotonically increasing `versionCode`, commits the app bump, then
+  synchronizes and commits the F-Droid recipe with that app-source commit's full
+  SHA. It runs the debug build and JVM tests and never tags or pushes automatically.
+  Only after checks pass, use its printed commands to create and push exactly one
+  annotated `v<baseVersion>` tag on the **app-version commit**, not the subsequent
+  metadata commit. Preserve unrelated local files and submodule modifications.
+  To repair/check metadata for an existing release, use
+  `python3 scripts/sync_fdroid_recipe.py` and then the same command with `--check`.
+  Keep F-Droid `Disabled` until submission is explicitly authorized.
   `versionName` resolves from an exact tag; non-tag builds show
   `<baseVersion>~<short-sha>`. Do not infer the next release from only `v*` tags:
   inspect all tags, including legacy bare tags such as `0.1.0`.
