@@ -1,0 +1,2 @@
+# Preserve upstream legal documents byte-for-byte, including original whitespace.
+app/src/main/assets/licenses/*.txt -whitespace

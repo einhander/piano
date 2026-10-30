@@ -1,0 +1,1148 @@
+{
+  "schemaVersion": 1,
+  "source": "app/src/main/cpp/lsp-integration/lsp-sources.lock",
+  "sourceSnapshot": "clean release source snapshot used to capture notice hashes",
+  "modules": [
+    {
+      "name": "lsp-3rd-party",
+      "url": "https://github.com/lsp-plugins/lsp-3rd-party.git",
+      "commit": "a1cccc1663fee4a9babe9386a920033a884046a2",
+      "tag": "1.0.29",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-3rd-party/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-3rd-party/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-audio-iface",
+      "url": "https://github.com/lsp-plugins/lsp-audio-iface.git",
+      "commit": "ce0d8299778eb22b271fba0dc73838fabd266d45",
+      "tag": "1.0.1",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-audio-iface/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-audio-iface/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-common-lib",
+      "url": "https://github.com/lsp-plugins/lsp-common-lib.git",
+      "commit": "e074d4eb479b97a566c3c76333a936ae538aaf85",
+      "tag": "1.0.48",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-common-lib/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-common-lib/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-dsp-lib",
+      "url": "https://github.com/lsp-plugins/lsp-dsp-lib.git",
+      "commit": "c0cddc3bc14c755010ea8189abe560b9bbcd3795",
+      "tag": "1.1.0",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-dsp-lib/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-dsp-lib/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-dsp-units",
+      "url": "https://github.com/lsp-plugins/lsp-dsp-units.git",
+      "commit": "1e3c664f45f8474cf1834f514cba1c17620c4f7c",
+      "tag": "1.0.37",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-dsp-units/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-dsp-units/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-lltl-lib",
+      "url": "https://github.com/lsp-plugins/lsp-lltl-lib.git",
+      "commit": "8dbc7eaf63cd193fae3cba6bdd6c9685c332245a",
+      "tag": "1.0.32",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-lltl-lib/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-lltl-lib/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugin-fw",
+      "url": "https://github.com/lsp-plugins/lsp-plugin-fw.git",
+      "commit": "e74b782a2be694852797cb6eeb7ee5b936e8f632",
+      "tag": "1.0.39",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugin-fw/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugin-fw/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-r3d-base-lib",
+      "url": "https://github.com/lsp-plugins/lsp-r3d-base-lib.git",
+      "commit": "603b6e33954b3eb3ead89da38a13e0065a16db8c",
+      "tag": "1.0.30",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-r3d-base-lib/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-r3d-base-lib/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-r3d-iface",
+      "url": "https://github.com/lsp-plugins/lsp-r3d-iface.git",
+      "commit": "445747e6085d0e497f593a7ac5b0d7b4c4f2854e",
+      "tag": "1.0.30",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-r3d-iface/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-r3d-iface/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-runtime-lib",
+      "url": "https://github.com/lsp-plugins/lsp-runtime-lib.git",
+      "commit": "f8af55f1490431adc70c458516397a4541bdd336",
+      "tag": "1.0.35",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-runtime-lib/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-runtime-lib/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-tk-lib",
+      "url": "https://github.com/lsp-plugins/lsp-tk-lib.git",
+      "commit": "d31fe30066edc7688790d2d85fb5abbe39f79c94",
+      "tag": "1.0.35",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-tk-lib/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-tk-lib/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-ws-lib",
+      "url": "https://github.com/lsp-plugins/lsp-ws-lib.git",
+      "commit": "e0673a9d3179f4288040448d4fd6178df9af6b66",
+      "tag": "1.0.35",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-ws-lib/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-ws-lib/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-ws-lib/LICENSE_OFL.txt",
+          "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2",
+          "bundledAs": "LSP-OFL-1.1.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-ab-tester",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-ab-tester.git",
+      "commit": "1d6ca14ddfcb4fb99c14b331b4bba9b2764a3feb",
+      "tag": "1.0.26",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-ab-tester/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-ab-tester/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-art-delay",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-art-delay.git",
+      "commit": "87cc41cb3ed77f32aad81fe1ff27a8e24464b8f1",
+      "tag": "1.0.35",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-art-delay/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-art-delay/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-autogain",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-autogain.git",
+      "commit": "30ac5a9719ad25f83f6e5024d14cb75507ca26d0",
+      "tag": "1.0.20",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-autogain/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-autogain/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-beat-breather",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-beat-breather.git",
+      "commit": "b9ad00b0eaad7b7b38749ef8226de7933d825c6c",
+      "tag": "1.0.23",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-beat-breather/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-beat-breather/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-chorus",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-chorus.git",
+      "commit": "eae39ba96e08f33d9c95a031c0a5f10dcb1a45c7",
+      "tag": "1.0.16",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-chorus/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-chorus/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-clipper",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-clipper.git",
+      "commit": "735805c57cf45f320d42dfea622ca82b4a4b0826",
+      "tag": "1.0.18",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-clipper/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-clipper/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-compressor",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-compressor.git",
+      "commit": "f22bddf58763c9fd415cda9f44759ddeb9b14f3a",
+      "tag": "1.0.39",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-compressor/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-compressor/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-comp-delay",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-comp-delay.git",
+      "commit": "3b5255f8421f2ab1f0583e19db25296b0346faa2",
+      "tag": "1.0.38",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-comp-delay/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-comp-delay/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-crossover",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-crossover.git",
+      "commit": "6840c30dc3573f4d2101227506ed01f7b90a1b59",
+      "tag": "1.0.35",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-crossover/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-crossover/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-deesser",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-deesser.git",
+      "commit": "4b9ca6d870ab8dd5c350d85d6112ffd58bd1da29",
+      "tag": "1.0.0",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-deesser/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-deesser/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-dyna-processor",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-dyna-processor.git",
+      "commit": "5f93f69505956ef5a69aadb3d3a47a0bd24d5ef2",
+      "tag": "1.0.38",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-dyna-processor/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-dyna-processor/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-expander",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-expander.git",
+      "commit": "373b30a1a1e00bdff88bd6dbdae551534e35b57a",
+      "tag": "1.0.38",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-expander/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-expander/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-filter",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-filter.git",
+      "commit": "edf1c655c13d3738b60d7c58ac51d952ab227672",
+      "tag": "1.0.23",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-filter/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-filter/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-flanger",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-flanger.git",
+      "commit": "b6e3aca12cf3c6df607a2d600a3b84b7163aae5d",
+      "tag": "1.0.23",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-flanger/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-flanger/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-gate",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-gate.git",
+      "commit": "51432c5cd31a4ca7e4c4e274e3e77c3133246dba",
+      "tag": "1.0.38",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-gate/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-gate/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-gott-compressor",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-gott-compressor.git",
+      "commit": "586a87236322c025878c157d9a33f04fa4f1c2db",
+      "tag": "1.0.23",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-gott-compressor/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-gott-compressor/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-graph-equalizer",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-graph-equalizer.git",
+      "commit": "1c27e22644ea03dfb3301eb66fc533939fd693c5",
+      "tag": "1.0.38",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-graph-equalizer/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-graph-equalizer/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-impulse-responses",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-impulse-responses.git",
+      "commit": "df2f6617022a4d82208637de6d197b7ecc188dc7",
+      "tag": "1.0.38",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-impulse-responses/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-impulse-responses/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-impulse-reverb",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-impulse-reverb.git",
+      "commit": "d6849b3e6d3835e97c5a372fd2ad30377c00cbf0",
+      "tag": "1.0.35",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-impulse-reverb/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-impulse-reverb/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-latency-meter",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-latency-meter.git",
+      "commit": "158b605c2f4eff552f1cdf6c0ddb1b25255c7da5",
+      "tag": "1.0.34",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-latency-meter/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-latency-meter/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-limiter",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-limiter.git",
+      "commit": "77707e6571b89cff9d424691eca77ac51e08983d",
+      "tag": "1.0.36",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-limiter/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-limiter/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-loud-comp",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-loud-comp.git",
+      "commit": "9cd3e004e7781e70868be155d5769b6d6f9bc417",
+      "tag": "1.0.34",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-loud-comp/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-loud-comp/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-matcher",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-matcher.git",
+      "commit": "025ed0af40f8add87a0d7c3b63936074adc596b4",
+      "tag": "1.0.5",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-matcher/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-matcher/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-mb-clipper",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-mb-clipper.git",
+      "commit": "769843c27f173e5466fc8b66a166b08e1b5bb417",
+      "tag": "1.0.18",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-mb-clipper/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-mb-clipper/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-mb-compressor",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-mb-compressor.git",
+      "commit": "e8cedad489d68084be08708a1acfb577eb55c9ce",
+      "tag": "1.0.36",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-mb-compressor/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-mb-compressor/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-mb-dyna-processor",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-mb-dyna-processor.git",
+      "commit": "18141cfb84c6417c34ae5e765e6df3928a5b162a",
+      "tag": "1.0.31",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-mb-dyna-processor/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-mb-dyna-processor/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-mb-expander",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-mb-expander.git",
+      "commit": "b28c2be824d2a913c4548b13ad4abfacec8d98a0",
+      "tag": "1.0.34",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-mb-expander/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-mb-expander/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-mb-gate",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-mb-gate.git",
+      "commit": "6bf5ddbc8d50afc55f096a5e81ceb648cca1ba10",
+      "tag": "1.0.34",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-mb-gate/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-mb-gate/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-mb-limiter",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-mb-limiter.git",
+      "commit": "ef130b7d69aab2570975dd8ad8b5837557921aa1",
+      "tag": "1.0.23",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-mb-limiter/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-mb-limiter/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-mb-ringmod-sc",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-mb-ringmod-sc.git",
+      "commit": "eaf61d5907344f965e2101331bce15d3c48adf54",
+      "tag": "1.0.7",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-mb-ringmod-sc/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-mb-ringmod-sc/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-mixer",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-mixer.git",
+      "commit": "663ad2aa1d77de61270ac6743df0e6ab9fe011ba",
+      "tag": "1.0.26",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-mixer/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-mixer/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-noise-generator",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-noise-generator.git",
+      "commit": "f2eb88930331c2fbb96a7f56af16cafc3e0dd019",
+      "tag": "1.0.29",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-noise-generator/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-noise-generator/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-oscillator",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-oscillator.git",
+      "commit": "4484e7e082398a7f61c2105b7b1cc30899571bc4",
+      "tag": "1.0.34",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-oscillator/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-oscillator/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-oscilloscope",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-oscilloscope.git",
+      "commit": "eba11722652ae37a6a6c2d7fe9c026e267b12cd5",
+      "tag": "1.0.34",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-oscilloscope/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-oscilloscope/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-para-equalizer",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-para-equalizer.git",
+      "commit": "637de75727fff15a04b869abded8de6dc81892aa",
+      "tag": "1.0.39",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-para-equalizer/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-para-equalizer/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-phaser",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-phaser.git",
+      "commit": "0e0a7ff4b37088b181c9400022505b7c73d71138",
+      "tag": "1.0.9",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-phaser/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-phaser/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-phase-detector",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-phase-detector.git",
+      "commit": "c0fb1b222f126ce16decae2395d5d3a18c4102e2",
+      "tag": "1.0.34",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-phase-detector/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-phase-detector/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-profiler",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-profiler.git",
+      "commit": "4e5c551f696b69fd08defe9c34a1f9a99a88fc88",
+      "tag": "1.0.34",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-profiler/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-profiler/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-referencer",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-referencer.git",
+      "commit": "98c6f16f78c0c844447b788869fc1f8a442649ef",
+      "tag": "1.0.11",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-referencer/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-referencer/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-return",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-return.git",
+      "commit": "0d7a365644ba64cd184ba4206a936eb573acd492",
+      "tag": "1.0.13",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-return/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-return/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-ringmod-sc",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-ringmod-sc.git",
+      "commit": "1d070dc8303cd2af06a51db342cbf0fcf643f8c6",
+      "tag": "1.0.7",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-ringmod-sc/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-ringmod-sc/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-room-builder",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-room-builder.git",
+      "commit": "0010dffafd30c4d63a63c55668fbe7f60bc69318",
+      "tag": "1.0.35",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-room-builder/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-room-builder/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-sampler",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-sampler.git",
+      "commit": "246221999eca8fa3b0e8995a82e6735082b791bd",
+      "tag": "1.0.38",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-sampler/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-sampler/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-send",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-send.git",
+      "commit": "aa495db1a7bd838566046b923910c959cc28f415",
+      "tag": "1.0.13",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-send/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-send/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-shared",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-shared.git",
+      "commit": "da713812771a9789229a704e4aabcd8f41de4599",
+      "tag": "1.0.38",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-shared/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-shared/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-shared/LICENSE_OFL.txt",
+          "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2",
+          "bundledAs": "LSP-OFL-1.1.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-slap-delay",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-slap-delay.git",
+      "commit": "2b7f99ee7076d4583ee70dad54867d76f3e92324",
+      "tag": "1.0.35",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-slap-delay/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-slap-delay/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-spectrum-analyzer",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-spectrum-analyzer.git",
+      "commit": "859167a2a433cb6c38661a3dee2c97e36cc5d72e",
+      "tag": "1.0.40",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-spectrum-analyzer/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-spectrum-analyzer/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-surge-filter",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-surge-filter.git",
+      "commit": "825a6029bc86cdf547bc0c910b7c84558f61eec1",
+      "tag": "1.0.34",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-surge-filter/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-surge-filter/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    },
+    {
+      "name": "lsp-plugins-trigger",
+      "url": "https://github.com/lsp-plugins/lsp-plugins-trigger.git",
+      "commit": "999088057794045ff30a289c6658f2bbd2a678c2",
+      "tag": "1.0.36",
+      "noticeFiles": [
+        {
+          "sourcePath": "modules/lsp-plugins-trigger/COPYING",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "bundledAs": "LSP-GPL-3.0.txt"
+        },
+        {
+          "sourcePath": "modules/lsp-plugins-trigger/COPYING.LESSER",
+          "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+          "bundledAs": "LSP-LGPL-3.0.txt"
+        }
+      ]
+    }
+  ],
+  "rootNoticeFiles": [
+    {
+      "sourcePath": "COPYING",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "bundledAs": "LSP-GPL-3.0.txt"
+    },
+    {
+      "sourcePath": "COPYING.LESSER",
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+      "bundledAs": "LSP-LGPL-3.0.txt"
+    }
+  ],
+  "sampleHeaderAttribution": {
+    "sourcePath": "modules/lsp-common-lib/include/lsp-plug.in/common/version.h",
+    "sha256": "de1d0e78c11f578fdfec9b42889390ec2dbcd552bb5d49d197253c17aa28574f",
+    "copyrightLines": [
+      "Copyright (C) 2020 Linux Studio Plugins Project <https://lsp-plug.in/>",
+      "(C) 2020 Vladimir Sadovnikov <sadko4u@gmail.com>"
+    ],
+    "bundledAs": "LSP-NOTICE.txt"
+  },
+  "supplementalNotices": [
+    {
+      "sourcePath": "modules/lsp-3rd-party/include/clap/LICENSE",
+      "sha256": "ced49f9ef950277afdb56199369ea6e8165ebfdbfbb37ebfe1827e0de892088d",
+      "bundledAs": "LSP-MIT.txt"
+    },
+    {
+      "sourcePath": "modules/lsp-3rd-party/include/lv2/COPYING",
+      "sha256": "1e6bb175e193608b767ff25a4ed68b82c4db599491cf0d2694435cf60e9a4841",
+      "bundledAs": "LSP-ISC.txt"
+    }
+  ]
+}

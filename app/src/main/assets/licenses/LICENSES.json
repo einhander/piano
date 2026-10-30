@@ -1,0 +1,199 @@
+{
+  "schemaVersion": 1,
+  "notice": "NOTICE.txt",
+  "scope": "Known source and dependency inventory; not a release-complete legal determination.",
+  "components": [
+    {
+      "name": "Piano Sequencer original code",
+      "version": "repository revision",
+      "license": "GPL-3.0-only",
+      "licenseFiles": [
+        "GPL-3.0.txt"
+      ],
+      "source": "https://github.com/einhander/piano"
+    },
+    {
+      "name": "Oboe",
+      "version": "0da326e4 (pinned Git submodule)",
+      "license": "Apache-2.0",
+      "licenseFiles": [
+        "Oboe-Apache-2.0.txt",
+        "Oboe-AUTHORS.txt"
+      ],
+      "source": "https://github.com/google/oboe"
+    },
+    {
+      "name": "FluidSynth",
+      "version": "5776f99e (pinned Git submodule)",
+      "license": "LGPL-2.1-or-later",
+      "licenseFiles": [
+        "FluidSynth-LGPL.txt",
+        "FluidSynth-AUTHORS.txt"
+      ],
+      "source": "https://github.com/FluidSynth/fluidsynth"
+    },
+    {
+      "name": "LAME",
+      "version": "vendored revision",
+      "license": "LGPL-2.0-or-later; ReplayGain files LGPL-2.1-or-later",
+      "licenseFiles": [
+        "LAME-COPYING.txt",
+        "LAME-LICENSE.txt"
+      ],
+      "source": "https://sourceforge.net/projects/lame/",
+      "scopeNote": "Terms from include/lame.h and libmp3lame/gain_analysis.c; original license texts and guidance preserved."
+    },
+    {
+      "name": "LSP Plugins integration source",
+      "version": "see lsp-sources.lock",
+      "license": "mixed: GPL-3.0, LGPL-3.0-or-later, SIL-OFL-1.1, ISC-style, MIT; module headers may specify terms",
+      "licenseFiles": [
+        "LSP-GPL-3.0.txt",
+        "LSP-LGPL-3.0.txt",
+        "LSP-OFL-1.1.txt",
+        "LSP-ISC.txt",
+        "LSP-MIT.txt",
+        "LSP-NOTICE.txt"
+      ],
+      "evidenceFiles": [
+        "LSP-LICENSE-PROVENANCE.json"
+      ],
+      "source": "https://github.com/lsp-plugins/lsp-plugins",
+      "scopeNote": "61 pinned module notice paths and SHA-256 digests are indexed in LSP-LICENSE-PROVENANCE.json. Distinct COPYING/LICENSE texts are bundled once; do not apply GPL indiscriminately to all modules."
+    },
+    {
+      "name": "GCEM",
+      "version": "012ae73c6d0a2cb09ffe86475f5c6fba3926e200",
+      "license": "Apache-2.0",
+      "licenseFiles": [
+        "GCEM-Apache-2.0.txt",
+        "GCEM-NOTICE.txt"
+      ],
+      "source": "https://github.com/kthohr/gcem"
+    },
+    {
+      "name": "Gradle release runtime artifacts",
+      "version": "releaseRuntimeClasspath; see dependency coordinates in docs/third-party-licenses.md",
+      "license": "Apache-2.0",
+      "licenseFiles": [
+        "Apache-2.0.txt"
+      ],
+      "evidenceFiles": [
+        "runtime-dependencies.json"
+      ],
+      "source": "https://repo.maven.apache.org/maven2/",
+      "scopeNote": "All 67 resolved runtime coordinates verified against original POMs (including inherited Guava parent license); see runtime-dependencies.json."
+    },
+    {
+      "name": "Android NDK runtimes (libc++_shared and OpenMP)",
+      "version": "26.1.10909125",
+      "license": "LLVM upstream licenses, including Apache-2.0 WITH LLVM-exception and retained legacy notices",
+      "licenseFiles": [
+        "Android-NDK-NOTICE.txt",
+        "Android-NDK-toolchain-NOTICE.txt"
+      ],
+      "source": "https://developer.android.com/ndk/downloads",
+      "scopeNote": "These two runtimes are present in both APK ABIs; complete package and toolchain notices are bundled conservatively."
+    },
+    {
+      "name": "Resolved release runtime coordinate inventory",
+      "source": "Gradle releaseRuntimeClasspath from .fdroid-validation/release-runtime-dependencies.txt",
+      "license": "Apache-2.0",
+      "licenseFiles": [
+        "Apache-2.0.txt"
+      ],
+      "coordinates": [
+        "androidx.activity:activity:1.8.0",
+        "androidx.activity:activity-ktx:1.8.0",
+        "androidx.annotation:annotation:1.6.0",
+        "androidx.annotation:annotation-experimental:1.3.0",
+        "androidx.annotation:annotation-jvm:1.6.0",
+        "androidx.appcompat:appcompat:1.6.1",
+        "androidx.appcompat:appcompat-resources:1.6.1",
+        "androidx.arch.core:core-common:2.2.0",
+        "androidx.arch.core:core-runtime:2.2.0",
+        "androidx.cardview:cardview:1.0.0",
+        "androidx.collection:collection:1.1.0",
+        "androidx.concurrent:concurrent-futures:1.1.0",
+        "androidx.constraintlayout:constraintlayout:2.1.4",
+        "androidx.constraintlayout:constraintlayout-core:1.0.4",
+        "androidx.coordinatorlayout:coordinatorlayout:1.1.0",
+        "androidx.core:core:1.12.0",
+        "androidx.core:core-ktx:1.12.0",
+        "androidx.cursoradapter:cursoradapter:1.0.0",
+        "androidx.customview:customview:1.1.0",
+        "androidx.documentfile:documentfile:1.0.0",
+        "androidx.drawerlayout:drawerlayout:1.1.1",
+        "androidx.dynamicanimation:dynamicanimation:1.0.0",
+        "androidx.emoji2:emoji2:1.2.0",
+        "androidx.emoji2:emoji2-views-helper:1.2.0",
+        "androidx.fragment:fragment:1.3.6",
+        "androidx.interpolator:interpolator:1.0.0",
+        "androidx.legacy:legacy-support-core-utils:1.0.0",
+        "androidx.lifecycle:lifecycle-common:2.6.1",
+        "androidx.lifecycle:lifecycle-livedata:2.6.1",
+        "androidx.lifecycle:lifecycle-livedata-core:2.6.1",
+        "androidx.lifecycle:lifecycle-process:2.6.1",
+        "androidx.lifecycle:lifecycle-runtime:2.6.1",
+        "androidx.lifecycle:lifecycle-runtime-ktx:2.6.1",
+        "androidx.lifecycle:lifecycle-viewmodel:2.6.1",
+        "androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.1",
+        "androidx.lifecycle:lifecycle-viewmodel-savedstate:2.6.1",
+        "androidx.loader:loader:1.0.0",
+        "androidx.localbroadcastmanager:localbroadcastmanager:1.0.0",
+        "androidx.print:print:1.0.0",
+        "androidx.profileinstaller:profileinstaller:1.3.0",
+        "androidx.recyclerview:recyclerview:1.1.0",
+        "androidx.resourceinspection:resourceinspection-annotation:1.0.1",
+        "androidx.savedstate:savedstate:1.2.1",
+        "androidx.savedstate:savedstate-ktx:1.2.1",
+        "androidx.startup:startup-runtime:1.1.1",
+        "androidx.tracing:tracing:1.0.0",
+        "androidx.transition:transition:1.2.0",
+        "androidx.vectordrawable:vectordrawable:1.1.0",
+        "androidx.vectordrawable:vectordrawable-animated:1.1.0",
+        "androidx.versionedparcelable:versionedparcelable:1.1.1",
+        "androidx.viewpager:viewpager:1.0.0",
+        "androidx.viewpager2:viewpager2:1.0.0",
+        "com.google.android.material:material:1.11.0",
+        "com.google.errorprone:error_prone_annotations:2.15.0",
+        "com.google.guava:listenablefuture:1.0",
+        "org.jetbrains:annotations:13.0",
+        "org.jetbrains.kotlin:kotlin-stdlib:1.9.20",
+        "org.jetbrains.kotlin:kotlin-stdlib-common:1.9.20",
+        "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22",
+        "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.6.4",
+        "org.jetbrains.kotlinx:kotlinx-serialization-core:1.6.0",
+        "org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.6.0",
+        "org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0",
+        "org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.6.0"
+      ],
+      "scopeNote": "All 67 resolved runtime coordinates verified against original POMs (including inherited Guava parent license); see runtime-dependencies.json."
+    }
+  ],
+  "assetSha256": {
+    "Android-NDK-NOTICE.txt": "8ef75b1329afc86cc26b44fd38a4ece8c78266581a32c5e57d6e7b11721183e1",
+    "Android-NDK-toolchain-NOTICE.txt": "d503f647f76ba8dc538eeeb5b3851f61d46a7d1f7651fe580dab8f2fbeecbfe5",
+    "Apache-2.0.txt": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "FluidSynth-AUTHORS.txt": "87fb43b0172262d21a4d39eb1598f8337491d2559ab7039b7aa7c1311e8ddb4e",
+    "FluidSynth-LGPL.txt": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95",
+    "GCEM-Apache-2.0.txt": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+    "GCEM-NOTICE.txt": "b9184798c812dd98d754be0101d600cac3d83ee703e994d3320fcfc9662090ec",
+    "GPL-3.0.txt": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "LAME-COPYING.txt": "e64f9c5a18f56828c10a575df13ade641aa3af4512a7afe6c411256943b57aaf",
+    "LAME-LICENSE.txt": "5c1f8d44f1eacbea3e1c31ff6ee11a4e1690ccbed4ee4af16de3b6eb61dc69a8",
+    "LSP-GPL-3.0.txt": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "LSP-ISC.txt": "1e6bb175e193608b767ff25a4ed68b82c4db599491cf0d2694435cf60e9a4841",
+    "LSP-LGPL-3.0.txt": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+    "LSP-MIT.txt": "ced49f9ef950277afdb56199369ea6e8165ebfdbfbb37ebfe1827e0de892088d",
+    "LSP-NOTICE.txt": "1ca0fb37f060d238b22a1e563884f7f210601adeab9befd08de4ea8377f5bc46",
+    "LSP-OFL-1.1.txt": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2",
+    "NOTICE.txt": "ac4880a7d0d7b1957576010e4d7cd114afae1b50543a7f0786705feeb323be00",
+    "Oboe-AUTHORS.txt": "c04aa4049aeb3d8268ae43074ae89fb86ef5a5eb53ec0c453015bc1889bd6ca9",
+    "Oboe-Apache-2.0.txt": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "SOURCE.txt": "563ef5b1b85f0de94c9e3c643092f85bc6e1867320b91f54b8545e3f1269ba14"
+  }
+}

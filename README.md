@@ -1,6 +1,12 @@
 # Piano Sequencer
 
-Piano Sequencer is an Android live-performance sequencer designed for musicians who use an external USB MIDI keyboard.
+Piano Sequencer is an Android SoundFont synthesizer with USB MIDI keyboard input and playback of prerecorded MIDI parts.
+
+## License
+
+Piano Sequencer's original code is licensed under **GPL-3.0-only**. Third-party
+components retain their own licenses; see [`docs/third-party-licenses.md`](docs/third-party-licenses.md)
+and the bundled notices in `app/src/main/assets/licenses/`.
 
 Its main goal is to provide a focused and reliable performance environment where a musician can connect a MIDI controller, load SoundFont instruments and prepared MIDI material, and control a performance with minimal interaction with the touchscreen.
 

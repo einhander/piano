@@ -1,0 +1,13 @@
+LSP source attribution
+
+The pinned lsp-common-lib source includes this copyright notice (from
+modules/lsp-common-lib/include/lsp-plug.in/common/version.h):
+
+Copyright (C) 2020 Linux Studio Plugins Project <https://lsp-plug.in/>
+           (C) 2020 Vladimir Sadovnikov <sadko4u@gmail.com>
+
+This is one file's attribution, not a substitute for preserving copyright and
+license headers in all corresponding LSP source files. See
+LSP-LICENSE-PROVENANCE.json for pinned source commits and bundled license-text
+hashes. The LGPL-3.0-or-later terms in LSP-LGPL-3.0.txt apply where marked by
+the source; other LSP components may carry different terms.

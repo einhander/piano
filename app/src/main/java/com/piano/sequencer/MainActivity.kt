@@ -1797,6 +1797,11 @@ class MainActivity : AppCompatActivity() {
             Linkify.addLinks(this, Linkify.WEB_URLS)
         })
 
+        card.addView(Button(this).apply {
+            text = "Licenses"
+            setOnClickListener { LicenseDialogs(this@MainActivity).show() }
+        })
+
         card.addView(TextView(this).apply {
             text = "App Log"
             textSize = 16f

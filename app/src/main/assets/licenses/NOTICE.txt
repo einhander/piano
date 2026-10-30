@@ -1,0 +1,28 @@
+Piano Sequencer — license notices
+
+Piano Sequencer original code: GPL-3.0-only. See GPL-3.0.txt.
+Third-party components retain their own terms. License texts and an inventory
+with scope/provenance notes are provided in LICENSES.json and adjacent files.
+Read SOURCE.txt for source and rebuild information.
+
+Apache-2.0 license text: Apache-2.0.txt.
+
+Known included-source notices:
+* Oboe: Apache-2.0; Apache-2.0.txt and Oboe-AUTHORS.txt.
+* FluidSynth: LGPL-2.1-or-later; FluidSynth-LGPL.txt and FluidSynth-AUTHORS.txt.
+* LAME: LGPL-2.0-or-later (`include/lame.h`); ReplayGain analysis has LGPL-2.1-or-later
+  terms. See both upstream LAME-COPYING.txt and LAME-LICENSE.txt.
+* LSP integration source: distinct GPL-3.0, LGPL-3.0-or-later, SIL-OFL-1.1,
+  ISC-style, and MIT notices are in the correspondingly named LSP files. These
+  apply to their respective components; do not treat all LSP code as GPL-only.
+* GCEM: Apache-2.0; both GCEM-Apache-2.0.txt and GCEM-NOTICE.txt.
+* Android NDK 26.1.10909125 `libc++_shared` and `libomp` are shipped for both
+  APK ABIs. Broad package notices from NDK are bundled in Android-NDK-NOTICE.txt
+  and Android-NDK-toolchain-NOTICE.txt.
+* 67 resolved Gradle runtime artifacts declare Apache-2.0 in their original
+  POMs; hashed POM evidence is in runtime-dependencies.json. Three BOM entries
+  are constraints, not packaged artifacts.
+
+This inventory covers inspected native inputs and the recorded dependency
+graph; it is not legal advice or a claim that uninspected embedded archive
+notices do not exist. See docs/third-party-licenses.md and LICENSES.json.

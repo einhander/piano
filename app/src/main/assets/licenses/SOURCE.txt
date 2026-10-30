@@ -1,0 +1,24 @@
+Corresponding source and rebuild information
+
+Project source: https://github.com/einhander/piano
+The source is GPL-3.0-only; see GPL-3.0.txt. Each third-party component keeps
+its own license. Upstream source URLs and known component license texts are in
+LICENSES.json. Dependency revisions are determined by the project source,
+submodule state, and app/src/main/cpp/lsp-integration/lsp-sources.lock.
+
+To obtain source corresponding to a specific release, replace the placeholder
+below with that release's exact tag or commit (not current branch head):
+  git clone https://github.com/einhander/piano.git
+  cd piano
+  git checkout <exact-release-tag-or-commit>
+  git submodule update --init --recursive
+  ./build.sh debug
+
+Build environment requirements are in README.md. For LSP plugins, follow
+app/src/main/cpp/lsp-integration/PROGRESS.md and
+build-lsp-ladspa-android.sh; use the pinned source preparation flow and copy
+the resulting shared library into the documented prebuilt/arm64-v8a location
+before app build. For LGPL components retain source and build/relink scripts
+needed to rebuild a modified component with the app. Signing keys are private,
+not needed for source rebuild, and must never be distributed. Keep exact source
+revisions/configuration and build inputs with the binary.
