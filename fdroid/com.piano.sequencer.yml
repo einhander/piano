@@ -1,0 +1,97 @@
+Categories:
+  - Multimedia
+License: GPL-3.0-only
+SourceCode: https://github.com/einhander/piano
+IssueTracker: https://github.com/einhander/piano/issues
+Summary: Live sequencer for USB MIDI keyboards
+Description: |-
+  Android live sequencer for performances with a USB MIDI keyboard.
+  Uses a native audio engine with FluidSynth and Oboe.
+  Requires a user-provided SoundFont 2 file for synthesizer playback.
+  .
+RepoType: git
+Repo: https://github.com/einhander/piano.git
+Disabled: >-
+  Draft only: F-Droid source preparation and network-isolated build have not
+  been validated against a committed source revision.
+Builds:
+  - versionName: 0.3.0
+    versionCode: 17
+    # TODO: replace with commit containing offline LSP handling and prepared sources.
+    commit: 0b16ffc  # v0.3.0; replace with integrated source-preparation commit
+    submodules: true
+    srclibs:
+      - lsp-3rd-party@a1cccc1663fee4a9babe9386a920033a884046a2
+      - lsp-audio-iface@ce0d8299778eb22b271fba0dc73838fabd266d45
+      - lsp-common-lib@e074d4eb479b97a566c3c76333a936ae538aaf85
+      - lsp-dsp-lib@c0cddc3bc14c755010ea8189abe560b9bbcd3795
+      - lsp-dsp-units@1e3c664f45f8474cf1834f514cba1c17620c4f7c
+      - lsp-lltl-lib@8dbc7eaf63cd193fae3cba6bdd6c9685c332245a
+      - lsp-plugin-fw@e74b782a2be694852797cb6eeb7ee5b936e8f632
+      - lsp-plugins-shared@da713812771a9789229a704e4aabcd8f41de4599
+      - lsp-r3d-base-lib@603b6e33954b3eb3ead89da38a13e0065a16db8c
+      - lsp-r3d-iface@445747e6085d0e497f593a7ac5b0d7b4c4f2854e
+      - lsp-runtime-lib@f8af55f1490431adc70c458516397a4541bdd336
+      - lsp-tk-lib@d31fe30066edc7688790d2d85fb5abbe39f79c94
+      - lsp-ws-lib@e0673a9d3179f4288040448d4fd6178df9af6b66
+      - lsp-plugins-ab-tester@1d6ca14ddfcb4fb99c14b331b4bba9b2764a3feb
+      - lsp-plugins-art-delay@87cc41cb3ed77f32aad81fe1ff27a8e24464b8f1
+      - lsp-plugins-autogain@30ac5a9719ad25f83f6e5024d14cb75507ca26d0
+      - lsp-plugins-beat-breather@b9ad00b0eaad7b7b38749ef8226de7933d825c6c
+      - lsp-plugins-chorus@eae39ba96e08f33d9c95a031c0a5f10dcb1a45c7
+      - lsp-plugins-clipper@735805c57cf45f320d42dfea622ca82b4a4b0826
+      - lsp-plugins-compressor@f22bddf58763c9fd415cda9f44759ddeb9b14f3a
+      - lsp-plugins-comp-delay@3b5255f8421f2ab1f0583e19db25296b0346faa2
+      - lsp-plugins-crossover@6840c30dc3573f4d2101227506ed01f7b90a1b59
+      - lsp-plugins-deesser@4b9ca6d870ab8dd5c350d85d6112ffd58bd1da29
+      - lsp-plugins-dyna-processor@5f93f69505956ef5a69aadb3d3a47a0bd24d5ef2
+      - lsp-plugins-expander@373b30a1a1e00bdff88bd6dbdae551534e35b57a
+      - lsp-plugins-filter@edf1c655c13d3738b60d7c58ac51d952ab227672
+      - lsp-plugins-flanger@b6e3aca12cf3c6df607a2d600a3b84b7163aae5d
+      - lsp-plugins-gate@51432c5cd31a4ca7e4c4e274e3e77c3133246dba
+      - lsp-plugins-gott-compressor@586a87236322c025878c157d9a33f04fa4f1c2db
+      - lsp-plugins-graph-equalizer@1c27e22644ea03dfb3301eb66fc533939fd693c5
+      - lsp-plugins-impulse-responses@df2f6617022a4d82208637de6d197b7ecc188dc7
+      - lsp-plugins-impulse-reverb@d6849b3e6d3835e97c5a372fd2ad30377c00cbf0
+      - lsp-plugins-latency-meter@158b605c2f4eff552f1cdf6c0ddb1b25255c7da5
+      - lsp-plugins-limiter@77707e6571b89cff9d424691eca77ac51e08983d
+      - lsp-plugins-loud-comp@9cd3e004e7781e70868be155d5769b6d6f9bc417
+      - lsp-plugins-matcher@025ed0af40f8add87a0d7c3b63936074adc596b4
+      - lsp-plugins-mb-clipper@769843c27f173e5466fc8b66a166b08e1b5bb417
+      - lsp-plugins-mb-compressor@e8cedad489d68084be08708a1acfb577eb55c9ce
+      - lsp-plugins-mb-dyna-processor@18141cfb84c6417c34ae5e765e6df3928a5b162a
+      - lsp-plugins-mb-expander@b28c2be824d2a913c4548b13ad4abfacec8d98a0
+      - lsp-plugins-mb-gate@6bf5ddbc8d50afc55f096a5e81ceb648cca1ba10
+      - lsp-plugins-mb-limiter@ef130b7d69aab2570975dd8ad8b5837557921aa1
+      - lsp-plugins-mb-ringmod-sc@eaf61d5907344f965e2101331bce15d3c48adf54
+      - lsp-plugins-mixer@663ad2aa1d77de61270ac6743df0e6ab9fe011ba
+      - lsp-plugins-noise-generator@f2eb88930331c2fbb96a7f56af16cafc3e0dd019
+      - lsp-plugins-oscillator@4484e7e082398a7f61c2105b7b1cc30899571bc4
+      - lsp-plugins-oscilloscope@eba11722652ae37a6a6c2d7fe9c026e267b12cd5
+      - lsp-plugins-para-equalizer@637de75727fff15a04b869abded8de6dc81892aa
+      - lsp-plugins-phaser@0e0a7ff4b37088b181c9400022505b7c73d71138
+      - lsp-plugins-phase-detector@c0fb1b222f126ce16decae2395d5d3a18c4102e2
+      - lsp-plugins-profiler@4e5c551f696b69fd08defe9c34a1f9a99a88fc88
+      - lsp-plugins-referencer@98c6f16f78c0c844447b788869fc1f8a442649ef
+      - lsp-plugins-return@0d7a365644ba64cd184ba4206a936eb573acd492
+      - lsp-plugins-ringmod-sc@1d070dc8303cd2af06a51db342cbf0fcf643f8c6
+      - lsp-plugins-room-builder@0010dffafd30c4d63a63c55668fbe7f60bc69318
+      - lsp-plugins-sampler@246221999eca8fa3b0e8995a82e6735082b791bd
+      - lsp-plugins-send@aa495db1a7bd838566046b923910c959cc28f415
+      - lsp-plugins-slap-delay@2b7f99ee7076d4583ee70dad54867d76f3e92324
+      - lsp-plugins-spectrum-analyzer@859167a2a433cb6c38661a3dee2c97e36cc5d72e
+      - lsp-plugins-surge-filter@825a6029bc86cdf547bc0c910b7c84558f61eec1
+      - lsp-plugins-trigger@999088057794045ff30a289c6658f2bbd2a678c2
+      - gcem@012ae73c6d0a2cb09ffe86475f5c6fba3926e200
+    subdir: app
+    ndk: 26.1.10909125
+    build:
+      - bash src/main/cpp/lsp-integration/prepare-fdroid-sources.sh lsp-3rd-party "$$lsp-3rd-party$$" lsp-audio-iface "$$lsp-audio-iface$$" lsp-common-lib "$$lsp-common-lib$$" lsp-dsp-lib "$$lsp-dsp-lib$$" lsp-dsp-units "$$lsp-dsp-units$$" lsp-lltl-lib "$$lsp-lltl-lib$$" lsp-plugin-fw "$$lsp-plugin-fw$$" lsp-plugins-shared "$$lsp-plugins-shared$$" lsp-r3d-base-lib "$$lsp-r3d-base-lib$$" lsp-r3d-iface "$$lsp-r3d-iface$$" lsp-runtime-lib "$$lsp-runtime-lib$$" lsp-tk-lib "$$lsp-tk-lib$$" lsp-ws-lib "$$lsp-ws-lib$$" lsp-plugins-ab-tester "$$lsp-plugins-ab-tester$$" lsp-plugins-art-delay "$$lsp-plugins-art-delay$$" lsp-plugins-autogain "$$lsp-plugins-autogain$$" lsp-plugins-beat-breather "$$lsp-plugins-beat-breather$$" lsp-plugins-chorus "$$lsp-plugins-chorus$$" lsp-plugins-clipper "$$lsp-plugins-clipper$$" lsp-plugins-compressor "$$lsp-plugins-compressor$$" lsp-plugins-comp-delay "$$lsp-plugins-comp-delay$$" lsp-plugins-crossover "$$lsp-plugins-crossover$$" lsp-plugins-deesser "$$lsp-plugins-deesser$$" lsp-plugins-dyna-processor "$$lsp-plugins-dyna-processor$$" lsp-plugins-expander "$$lsp-plugins-expander$$" lsp-plugins-filter "$$lsp-plugins-filter$$" lsp-plugins-flanger "$$lsp-plugins-flanger$$" lsp-plugins-gate "$$lsp-plugins-gate$$" lsp-plugins-gott-compressor "$$lsp-plugins-gott-compressor$$" lsp-plugins-graph-equalizer "$$lsp-plugins-graph-equalizer$$" lsp-plugins-impulse-responses "$$lsp-plugins-impulse-responses$$" lsp-plugins-impulse-reverb "$$lsp-plugins-impulse-reverb$$" lsp-plugins-latency-meter "$$lsp-plugins-latency-meter$$" lsp-plugins-limiter "$$lsp-plugins-limiter$$" lsp-plugins-loud-comp "$$lsp-plugins-loud-comp$$" lsp-plugins-matcher "$$lsp-plugins-matcher$$" lsp-plugins-mb-clipper "$$lsp-plugins-mb-clipper$$" lsp-plugins-mb-compressor "$$lsp-plugins-mb-compressor$$" lsp-plugins-mb-dyna-processor "$$lsp-plugins-mb-dyna-processor$$" lsp-plugins-mb-expander "$$lsp-plugins-mb-expander$$" lsp-plugins-mb-gate "$$lsp-plugins-mb-gate$$" lsp-plugins-mb-limiter "$$lsp-plugins-mb-limiter$$" lsp-plugins-mb-ringmod-sc "$$lsp-plugins-mb-ringmod-sc$$" lsp-plugins-mixer "$$lsp-plugins-mixer$$" lsp-plugins-noise-generator "$$lsp-plugins-noise-generator$$" lsp-plugins-oscillator "$$lsp-plugins-oscillator$$" lsp-plugins-oscilloscope "$$lsp-plugins-oscilloscope$$" lsp-plugins-para-equalizer "$$lsp-plugins-para-equalizer$$" lsp-plugins-phaser "$$lsp-plugins-phaser$$" lsp-plugins-phase-detector "$$lsp-plugins-phase-detector$$" lsp-plugins-profiler "$$lsp-plugins-profiler$$" lsp-plugins-referencer "$$lsp-plugins-referencer$$" lsp-plugins-return "$$lsp-plugins-return$$" lsp-plugins-ringmod-sc "$$lsp-plugins-ringmod-sc$$" lsp-plugins-room-builder "$$lsp-plugins-room-builder$$" lsp-plugins-sampler "$$lsp-plugins-sampler$$" lsp-plugins-send "$$lsp-plugins-send$$" lsp-plugins-slap-delay "$$lsp-plugins-slap-delay$$" lsp-plugins-spectrum-analyzer "$$lsp-plugins-spectrum-analyzer$$" lsp-plugins-surge-filter "$$lsp-plugins-surge-filter$$" lsp-plugins-trigger "$$lsp-plugins-trigger$$" gcem "$$gcem$$"
+      - LSP_OFFLINE=1 bash src/main/cpp/lsp-integration/build-lsp-ladspa-android.sh
+      - mkdir -p src/main/cpp/lsp-integration/prebuilt/arm64-v8a
+      - cp src/main/cpp/third_party/lsp/.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so src/main/cpp/lsp-integration/prebuilt/arm64-v8a/liblsp-plugins-ladspa.so
+      - PIANO_GCEM_INCLUDE_DIR="$PWD/src/main/cpp/third_party/lsp/gcem/include" gradle --offline assembleRelease -x lintVitalRelease --no-daemon --warning-mode none
+    output: build/outputs/apk/release/app-release-unsigned.apk
+CurrentVersion: 0.3.0
+CurrentVersionCode: 17
+UpdateCheckMode: Tags

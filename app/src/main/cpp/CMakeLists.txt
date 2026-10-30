@@ -28,6 +28,10 @@ set(enable-native-dls OFF CACHE BOOL "")
 set(enable-network OFF CACHE BOOL "")
 set(enable-ipv6 OFF CACHE BOOL "")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "")
+# Optional source-prepared GCEM headers for fully offline FluidSynth builds.
+if(DEFINED ENV{PIANO_GCEM_INCLUDE_DIR} AND EXISTS "$ENV{PIANO_GCEM_INCLUDE_DIR}/gcem.hpp")
+    set(GCEM_INCLUDE_DIR "$ENV{PIANO_GCEM_INCLUDE_DIR}" CACHE PATH "Prepared GCEM include directory" FORCE)
+endif()
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/fluidsynth ${CMAKE_CURRENT_BINARY_DIR}/fluidsynth)
 
 # LAME 4.0 encoder library only; sources and notices are vendored from the

@@ -20,7 +20,7 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/../../third_party/lsp" && pwd)"
+ROOT="$(cd "${LSP_ROOT:-$SCRIPT_DIR/../../third_party/lsp}" && pwd)"
 
 MARKER="# --- LSP_ANDROID_DEP_FILTER ---"
 FILTER_BLOCK='

@@ -46,6 +46,9 @@ app/src/main/cpp/3rdparty/fluidsynth/include/fluidsynth/
 # The nested module repos under modules/ are fetched by `make fetch` at build
 # time (not part of the submodule tree).
 app/src/main/cpp/lsp-integration/prebuilt/**/*.so
+# Source staging lives inside the LSP submodule, not lsp-integration/.
+.fdroid-source-test.*/
+.fdroid-validation/
 
 app/src/main/cpp/3rdparty/oboe/build/
 

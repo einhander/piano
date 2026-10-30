@@ -12,12 +12,12 @@
 # Prerequisites:
 #   - Android NDK 26.1.10909125 (ANDROID_SDK_ROOT/ndk/<ver>)
 #   - host g++  (for the resource/meta host pass; LSP runs a host build first)
-#   - the LSP submodule tree already fetched (`make fetch`/`make config` once)
+#   - LSP dependency modules prepared (`make fetch` unless LSP_OFFLINE=1)
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LSP_ROOT="$(cd "$SCRIPT_DIR/../third_party/lsp" && pwd)"
+LSP_ROOT="$(cd "${LSP_ROOT:-$SCRIPT_DIR/../third_party/lsp}" && pwd)"
 cd "$LSP_ROOT"
 
 BUILDDIR="${LSP_BUILDDIR:-.build}"
@@ -67,11 +67,18 @@ make BUILDDIR="$BUILDDIR" CONFIG="$CONFIG" config \
     INSTALL_HEADERS=0 \
     LSP_ANDROID_INSTANTIATE_DIAGNOSTIC="$DIAGNOSTIC"
 
-# Fetch the LSP submodule tree (idempotent).
-make CONFIG="$CONFIG" fetch
+# Fetch the LSP module tree unless caller requires an offline build. In offline
+# mode verify every configured module is present before allowing make to run;
+# this prevents make's fetch target from silently reaching the network.
+if [[ "${LSP_OFFLINE:-0}" == 1 ]]; then
+    "$SCRIPT_DIR/prepare-lsp-sources.sh" --verify --root "$LSP_ROOT"
+    export PIANO_GCEM_INCLUDE_DIR="$LSP_ROOT/gcem/include"
+else
+    make CONFIG="$CONFIG" fetch
+fi
 
 # Apply the Android compatibility patches (idempotent).
-"$SCRIPT_DIR/patches/apply-android-patches.sh"
+LSP_ROOT="$LSP_ROOT" "$SCRIPT_DIR/patches/apply-android-patches.sh"
 
 # Build.
 # Ensure build graph observes configuration choice; isolated output directory

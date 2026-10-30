@@ -12,7 +12,7 @@ set -u
 
 # LSP source tree (fetched upstream; not committed to this repo).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/../../third_party/lsp" && pwd)"
+ROOT="$(cd "${LSP_ROOT:-$SCRIPT_DIR/../../third_party/lsp}" && pwd)"
 PATCH_DIR="$SCRIPT_DIR"
 RT_LIB="$ROOT/modules/lsp-runtime-lib"
 PLUG_FW="$ROOT/modules/lsp-plugin-fw"
@@ -79,6 +79,6 @@ install -m 0644 "$PATCH_DIR/android_posix_shim.cpp" "$RT_LIB/src/main/ipc/androi
 install -m 0644 "$PATCH_DIR/iconv_android_shim.cpp" "$RT_LIB/src/main/io/iconv_android_shim.cpp"
 
 echo ">> Filtering Android-incompatible desktop deps (libsndfile/libpthread/librt)"
-"$PATCH_DIR/filter-android-deps.sh"
+LSP_ROOT="$ROOT" "$PATCH_DIR/filter-android-deps.sh"
 
 echo ">> Done."
