@@ -3,22 +3,20 @@ Categories:
 License: GPL-3.0-only
 SourceCode: https://github.com/einhander/piano
 IssueTracker: https://github.com/einhander/piano/issues
-Summary: Live sequencer for USB MIDI keyboards
+AutoName: Piano Sequencer
+Summary: SoundFont synthesizer with USB MIDI input and MIDI playback
 Description: |-
-  Android live sequencer for performances with a USB MIDI keyboard.
-  Uses a native audio engine with FluidSynth and Oboe.
-  Requires a user-provided SoundFont 2 file for synthesizer playback.
-  .
+  Play SoundFont instruments on your Android device using a USB MIDI keyboard,
+  and play along with prerecorded MIDI parts.
+
+  Requires a user-provided SoundFont 2 (.sf2) file. No SoundFont is included.
 RepoType: git
 Repo: https://github.com/einhander/piano.git
-Disabled: >-
-  Draft only: F-Droid source preparation and network-isolated build have not
-  been validated against a committed source revision.
+Disabled: Awaiting publication of pinned source commit and F-Droid review
 Builds:
   - versionName: 0.3.0
     versionCode: 17
-    # TODO: replace with commit containing offline LSP handling and prepared sources.
-    commit: 0b16ffc  # v0.3.0; replace with integrated source-preparation commit
+    commit: a2020fa3aff9d59bd811d1a760cffb377702a320
     submodules: true
     srclibs:
       - lsp-3rd-party@a1cccc1663fee4a9babe9386a920033a884046a2
@@ -85,8 +83,13 @@ Builds:
       - gcem@012ae73c6d0a2cb09ffe86475f5c6fba3926e200
     subdir: app
     ndk: 26.1.10909125
-    build:
+    # Upstream demo application is not used by the Oboe library build.
+    rm:
+      - app/src/main/cpp/third_party/oboe/apps/OboeTester
+    prebuild:
+      - sed -i 's/versionName = resolvedVersionName/versionName = "0.3.0"/' build.gradle.kts
       - bash src/main/cpp/lsp-integration/prepare-fdroid-sources.sh lsp-3rd-party "$$lsp-3rd-party$$" lsp-audio-iface "$$lsp-audio-iface$$" lsp-common-lib "$$lsp-common-lib$$" lsp-dsp-lib "$$lsp-dsp-lib$$" lsp-dsp-units "$$lsp-dsp-units$$" lsp-lltl-lib "$$lsp-lltl-lib$$" lsp-plugin-fw "$$lsp-plugin-fw$$" lsp-plugins-shared "$$lsp-plugins-shared$$" lsp-r3d-base-lib "$$lsp-r3d-base-lib$$" lsp-r3d-iface "$$lsp-r3d-iface$$" lsp-runtime-lib "$$lsp-runtime-lib$$" lsp-tk-lib "$$lsp-tk-lib$$" lsp-ws-lib "$$lsp-ws-lib$$" lsp-plugins-ab-tester "$$lsp-plugins-ab-tester$$" lsp-plugins-art-delay "$$lsp-plugins-art-delay$$" lsp-plugins-autogain "$$lsp-plugins-autogain$$" lsp-plugins-beat-breather "$$lsp-plugins-beat-breather$$" lsp-plugins-chorus "$$lsp-plugins-chorus$$" lsp-plugins-clipper "$$lsp-plugins-clipper$$" lsp-plugins-compressor "$$lsp-plugins-compressor$$" lsp-plugins-comp-delay "$$lsp-plugins-comp-delay$$" lsp-plugins-crossover "$$lsp-plugins-crossover$$" lsp-plugins-deesser "$$lsp-plugins-deesser$$" lsp-plugins-dyna-processor "$$lsp-plugins-dyna-processor$$" lsp-plugins-expander "$$lsp-plugins-expander$$" lsp-plugins-filter "$$lsp-plugins-filter$$" lsp-plugins-flanger "$$lsp-plugins-flanger$$" lsp-plugins-gate "$$lsp-plugins-gate$$" lsp-plugins-gott-compressor "$$lsp-plugins-gott-compressor$$" lsp-plugins-graph-equalizer "$$lsp-plugins-graph-equalizer$$" lsp-plugins-impulse-responses "$$lsp-plugins-impulse-responses$$" lsp-plugins-impulse-reverb "$$lsp-plugins-impulse-reverb$$" lsp-plugins-latency-meter "$$lsp-plugins-latency-meter$$" lsp-plugins-limiter "$$lsp-plugins-limiter$$" lsp-plugins-loud-comp "$$lsp-plugins-loud-comp$$" lsp-plugins-matcher "$$lsp-plugins-matcher$$" lsp-plugins-mb-clipper "$$lsp-plugins-mb-clipper$$" lsp-plugins-mb-compressor "$$lsp-plugins-mb-compressor$$" lsp-plugins-mb-dyna-processor "$$lsp-plugins-mb-dyna-processor$$" lsp-plugins-mb-expander "$$lsp-plugins-mb-expander$$" lsp-plugins-mb-gate "$$lsp-plugins-mb-gate$$" lsp-plugins-mb-limiter "$$lsp-plugins-mb-limiter$$" lsp-plugins-mb-ringmod-sc "$$lsp-plugins-mb-ringmod-sc$$" lsp-plugins-mixer "$$lsp-plugins-mixer$$" lsp-plugins-noise-generator "$$lsp-plugins-noise-generator$$" lsp-plugins-oscillator "$$lsp-plugins-oscillator$$" lsp-plugins-oscilloscope "$$lsp-plugins-oscilloscope$$" lsp-plugins-para-equalizer "$$lsp-plugins-para-equalizer$$" lsp-plugins-phaser "$$lsp-plugins-phaser$$" lsp-plugins-phase-detector "$$lsp-plugins-phase-detector$$" lsp-plugins-profiler "$$lsp-plugins-profiler$$" lsp-plugins-referencer "$$lsp-plugins-referencer$$" lsp-plugins-return "$$lsp-plugins-return$$" lsp-plugins-ringmod-sc "$$lsp-plugins-ringmod-sc$$" lsp-plugins-room-builder "$$lsp-plugins-room-builder$$" lsp-plugins-sampler "$$lsp-plugins-sampler$$" lsp-plugins-send "$$lsp-plugins-send$$" lsp-plugins-slap-delay "$$lsp-plugins-slap-delay$$" lsp-plugins-spectrum-analyzer "$$lsp-plugins-spectrum-analyzer$$" lsp-plugins-surge-filter "$$lsp-plugins-surge-filter$$" lsp-plugins-trigger "$$lsp-plugins-trigger$$" gcem "$$gcem$$"
+    build:
       - LSP_OFFLINE=1 bash src/main/cpp/lsp-integration/build-lsp-ladspa-android.sh
       - mkdir -p src/main/cpp/lsp-integration/prebuilt/arm64-v8a
       - cp src/main/cpp/third_party/lsp/.build/target/lsp-plugin-fw/lsp-plugins-ladspa.so src/main/cpp/lsp-integration/prebuilt/arm64-v8a/liblsp-plugins-ladspa.so
