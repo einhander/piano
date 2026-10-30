@@ -49,6 +49,12 @@ jobs:
           # FluidSynth + Oboe are git submodules required for the native build.
           submodules: recursive
 
+      - name: Sync and verify F-Droid metadata for source commit
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          python3 scripts/sync_fdroid_recipe.py --commit "$GITHUB_SHA"
+          python3 scripts/sync_fdroid_recipe.py --commit "$GITHUB_SHA" --check
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -190,6 +196,14 @@ jobs:
         with:
           name: app-release-apk
           path: app/build/outputs/apk/release/app-release*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload F-Droid metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: fdroid-metadata
+          path: fdroid/
           if-no-files-found: error
           retention-days: 30
 

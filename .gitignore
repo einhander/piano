@@ -49,6 +49,7 @@ app/src/main/cpp/lsp-integration/prebuilt/**/*.so
 # Source staging lives inside the LSP submodule, not lsp-integration/.
 .fdroid-source-test.*/
 .fdroid-validation/
+scripts/__pycache__/
 
 app/src/main/cpp/3rdparty/oboe/build/
 
