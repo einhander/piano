@@ -8,7 +8,7 @@
 # Usage (from anywhere):
 #   app/src/main/cpp/lsp-integration/patches/apply-android-patches.sh
 #
-set -u
+set -euo pipefail
 
 # LSP source tree (fetched upstream; not committed to this repo).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -25,20 +25,20 @@ if [ ! -d "$RT_LIB" ] || [ ! -d "$PLUG_FW" ] || [ ! -d "$COMMON_LIB" ]; then
 fi
 
 apply_patch_once() {
-    local module="$1" patch="$2" sentinel="$3" marker="$4"
-    if git -C "$module" apply --whitespace=nowarn --reverse --check "$patch" >/dev/null 2>&1; then
+    local module="$1" patch_file="$2" sentinel="$3" marker="$4"
+    if patch -d "$module" -p1 --batch --forward --reverse --dry-run < "$patch_file" >/dev/null 2>&1; then
         echo "   (already applied)"
     elif grep -Fq "$marker" "$module/$sentinel"; then
         # Other deterministic build filtering edits may make a full reverse
         # check fail even though this patch's source changes are present.
         echo "   (source marker already present)"
     else
-        git -C "$module" apply --whitespace=nowarn "$patch"
+        patch -d "$module" -p1 --batch --forward < "$patch_file"
     fi
 }
 
 echo ">> Applying lsp-common-lib Android patch"
-apply_patch_once "$COMMON_LIB" "$PATCH_DIR/lsp-common-lib-android.patch" dependencies.mk 'ANDROID_TARGET'
+apply_patch_once "$COMMON_LIB" "$PATCH_DIR/lsp-common-lib-android.patch" src/main/stdlib.cpp 'LSP_ANDROID_HAS_QSORT_FALLBACK'
 
 echo ">> Applying lsp-runtime-lib Android patch"
 apply_patch_once "$RT_LIB" "$PATCH_DIR/lsp-runtime-lib-android.patch" include/lsp-plug.in/io/charset.h 'Bionic ships <iconv.h>'
@@ -50,14 +50,14 @@ DIAGNOSTIC="${LSP_ANDROID_INSTANTIATE_DIAGNOSTIC:-0}"
 case "$DIAGNOSTIC" in
     1)
         echo ">> Enabling OPTIONAL LADSPA instantiate diagnostics (not for release)"
-        git -C "$PLUG_FW" apply --whitespace=nowarn --reverse --check "$PATCH_DIR/lsp-plugin-fw-android-diag.patch" >/dev/null 2>&1 \
+        patch -d "$PLUG_FW" -p1 --batch --forward --reverse --dry-run < "$PATCH_DIR/lsp-plugin-fw-android-diag.patch" >/dev/null 2>&1 \
             && echo "   (already applied)" \
-            || git -C "$PLUG_FW" apply --whitespace=nowarn "$PATCH_DIR/lsp-plugin-fw-android-diag.patch"
+            || patch -d "$PLUG_FW" -p1 --batch --forward < "$PATCH_DIR/lsp-plugin-fw-android-diag.patch"
         ;;
     0)
         echo ">> Ensuring LADSPA instantiate diagnostics are disabled"
-        if git -C "$PLUG_FW" apply --whitespace=nowarn --reverse --check "$PATCH_DIR/lsp-plugin-fw-android-diag.patch" >/dev/null 2>&1; then
-            git -C "$PLUG_FW" apply --reverse --whitespace=nowarn "$PATCH_DIR/lsp-plugin-fw-android-diag.patch"
+        if patch -d "$PLUG_FW" -p1 --batch --forward --reverse --dry-run < "$PATCH_DIR/lsp-plugin-fw-android-diag.patch" >/dev/null 2>&1; then
+            patch -d "$PLUG_FW" -p1 --batch --forward --reverse < "$PATCH_DIR/lsp-plugin-fw-android-diag.patch"
         else
             echo "   (not applied)"
         fi
