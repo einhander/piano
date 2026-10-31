@@ -514,7 +514,7 @@ class SettingsActivity : AppCompatActivity() {
             com.piano.sequencer.ui.UiControlStyle.apply(this)
             setOnClickListener { startActivity(Intent(this@SettingsActivity, AudioDiagnosticsActivity::class.java)) }
         }, LinearLayout.LayoutParams(-1, -2))
-        findViewById<LinearLayout>(R.id.settingsSections).addView(section, 0)
+        findViewById<LinearLayout>(R.id.settingsSections).addView(section, 3)
         mainExecutor.execute {
             val result = runCatching { DiagnosticsProfile.load(getSharedPreferences("piano_prefs", MODE_PRIVATE)) }
             runOnUiThread {
