@@ -195,6 +195,8 @@ public:
     bool resetChannelRange(int first, int count);
     bool setChannelVolume(int channel, int value);
     int getChannelVolume(int channel) const;
+    bool setChannelRelease(int channel, float timecents);
+    float getChannelRelease(int channel) const;
 
     // Get the bank + program currently set on a channel (worker thread).
     // Returns the desired (enqueued) value, which also tracks live MIDI
@@ -339,11 +341,13 @@ private:
     std::atomic<float> mAppliedReverbWidth{100.0f};
     std::atomic<float> mAppliedReverbLevel{0.9f};
     mutable std::mutex mReverbConfigMutex; // producers/preparation only; never audio callback
+    mutable std::mutex mReleaseConfigMutex; // producers/preparation only; never audio callback
     std::atomic<int> mChorusOn{1};
     std::atomic<int> mInterps{4};
     // Packed bank<<8|program per channel; -1 = no explicit program.
     std::atomic<int> mChannelPrograms[256];
     std::atomic<int> mChannelVolumes[256];
+    std::atomic<float> mChannelRelease[256];
 
     // Active voice count (audio thread refreshes after each render).
     std::atomic<int> mActiveVoices{0};

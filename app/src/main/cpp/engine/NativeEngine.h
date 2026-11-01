@@ -103,6 +103,8 @@ public:
     bool getChannelProgram(int channel, int& bank, int& program) const;
     bool setChannelVolume(int channel, int value);
     int getChannelVolume(int channel) const;
+    bool setChannelRelease(int channel, float timecents);
+    float getChannelRelease(int channel) const;
 
     // Transport control
     void setBPM(double bpm);

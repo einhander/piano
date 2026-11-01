@@ -1,5 +1,7 @@
 package com.piano.sequencer.midi
 
+import com.piano.sequencer.InstrumentReleasePreferences
+
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
@@ -838,7 +840,13 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                             }
                         }
                     },
-                    resetRange = { svc.resetInstrumentChannelRange(set.channelBase, 16) }
+                    resetRange = {
+                        val reset = svc.resetInstrumentChannelRange(set.channelBase, 16)
+                        val preferencesCleared = reset && InstrumentReleasePreferences.resetSet(
+                            appContext.getSharedPreferences("piano_prefs", android.content.Context.MODE_PRIVATE), setId
+                        )
+                        reset && preferencesCleared
+                    }
                 )
             }
             if (!ok) AppLogger.warn("TRIG", "FILE set removal blocked; range reset failed or set unsupported id=$setId")

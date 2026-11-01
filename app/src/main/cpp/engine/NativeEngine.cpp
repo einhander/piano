@@ -378,6 +378,8 @@ bool NativeEngine::setChannelVolume(int channel, int value) {
 int NativeEngine::getChannelVolume(int channel) const {
     return mSynth ? mSynth->getChannelVolume(channel) : 100;
 }
+bool NativeEngine::setChannelRelease(int channel, float value) { return mSynth && mSynth->setChannelRelease(channel, value); }
+float NativeEngine::getChannelRelease(int channel) const { return mSynth ? mSynth->getChannelRelease(channel) : 0.0f; }
 
 bool NativeEngine::getChannelProgram(int channel, int& bank, int& program) const {
     return mSynth ? mSynth->getChannelProgram(channel, bank, program) : false;

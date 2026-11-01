@@ -1378,6 +1378,7 @@ class MainActivity : AppCompatActivity() {
             restoreRacks = { EffectStateRestore.restoreInstruments(this, svc, true) },
             restoreDelays = { EffectStateRestore.restoreInstrumentDelays(this, svc) }
         )
+        InstrumentReleasePreferences.restoreStartup(this, svc)
         if (count <= 0) {
             AppLogger.warn("MainActivity", "Instrument LSP effects unavailable; saved rack state retained")
         }

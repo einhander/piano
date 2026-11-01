@@ -5,8 +5,8 @@
 #include <algorithm>
 #include <thread>
 #include <chrono>
-#include <omp.h>
 #include <cmath>
+#include <omp.h>
 
 namespace {
 bool setDrumChannels(fluid_synth_t* synth) {
@@ -28,6 +28,7 @@ FluidSynthEngine::FluidSynthEngine() {
     for (int i = 0; i < 256; i++) {
         mChannelPrograms[i].store(-1, std::memory_order_relaxed);
         mChannelVolumes[i].store(100, std::memory_order_relaxed);
+        mChannelRelease[i].store(0.0f, std::memory_order_relaxed);
     }
     for (int i = 0; i < kAudioGroups * 2; ++i) mRenderAudioPtrs[i] = mRenderAudio[i];
     mRenderFxPtrs[0] = mRenderFx[0];
@@ -78,6 +79,7 @@ FluidSynthEngine::~FluidSynthEngine() {
 bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
     WorkerAccessGuard workerAccess(*this);
     std::lock_guard<std::mutex> reverbConfigLock(mReverbConfigMutex);
+    std::lock_guard<std::mutex> releaseConfigLock(mReleaseConfigMutex);
     // m8: free whatever was created if a later slot fails to allocate
     // (previously slot 0's settings/synth leaked when slot 1's failed).
     auto cleanup = [this]() {
@@ -189,6 +191,7 @@ void FluidSynthEngine::applyDesiredState(fluid_synth_t* synth) {
         if (ch < 16) {
             fluid_synth_cc(synth, ch, 7, mChannelVolumes[ch].load(std::memory_order_relaxed));
         }
+        fluid_synth_set_gen(synth, ch, GEN_VOLENVRELEASE, mChannelRelease[ch].load(std::memory_order_relaxed));
         int packed = mChannelPrograms[ch].load(std::memory_order_relaxed);
         if (packed >= 0) {
             fluid_synth_bank_select(synth, ch, packed >> 8);
@@ -268,6 +271,7 @@ int FluidSynthEngine::prepareInactiveSlot(const std::vector<std::string>& sfPath
     // Serialize desired reverb snapshot through slot activation: a concurrent
     // producer then enqueues only after the new active slot is no longer skipped.
     std::unique_lock<std::mutex> reverbConfigLock(mReverbConfigMutex);
+    std::unique_lock<std::mutex> releaseConfigLock(mReleaseConfigMutex);
     // M2: apply the current desired state to the prepared slot BEFORE the flip
     // (so the new active slot has the correct settings when it becomes active).
     applyDesiredState(synth);
@@ -289,6 +293,7 @@ int FluidSynthEngine::prepareInactiveSlot(const std::vector<std::string>& sfPath
     // skips the target slot for the entire preparation).
     mPreparing[target].store(false, std::memory_order_release);
     reverbConfigLock.unlock();
+    releaseConfigLock.unlock();
 
     return lastSfId;
 }
@@ -358,6 +363,7 @@ bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
     // Keep reverb producer from slipping a command between desired-state
     // restore and the slot flip (both slots are skipped while preparing).
     std::unique_lock<std::mutex> reverbConfigLock(mReverbConfigMutex);
+    std::unique_lock<std::mutex> releaseConfigLock(mReleaseConfigMutex);
     applyDesiredState(newSynth);
     if (mSynth[target]) delete_fluid_synth(mSynth[target]);
     if (mSettings[target]) delete_fluid_settings(mSettings[target]);
@@ -377,6 +383,7 @@ bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
     // M2: clear the preparing flag.
     mPreparing[target].store(false, std::memory_order_release);
     reverbConfigLock.unlock();
+    releaseConfigLock.unlock();
 
     // Update the sample rate.
     mSampleRate = newRate;
@@ -570,6 +577,8 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             break;
         case SynthCmdType::CC:
             fluid_synth_cc(synth, cmd.a, cmd.b, static_cast<int>(cmd.f));
+            if (cmd.b == 121 && cmd.a >= 0 && cmd.a < kInstrumentChannelCount)
+                fluid_synth_set_gen(synth, cmd.a, GEN_VOLENVRELEASE, mChannelRelease[cmd.a].load(std::memory_order_relaxed));
             if (cmd.a >= 0 && cmd.a < 16 && (cmd.b == 120 || cmd.b == 123))
                 mRecentNoteOnMask.fetch_and(static_cast<uint16_t>(~(1u << cmd.a)), std::memory_order_relaxed);
             if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount && (cmd.b == 120 || cmd.b == 123)) {
@@ -614,12 +623,16 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
                     fluid_synth_cc(synth, ch, 120, 0);
                     fluid_synth_cc(synth, ch, 121, 0);
                     fluid_synth_cc(synth, ch, 123, 0);
+                    fluid_synth_set_gen(synth, ch, GEN_VOLENVRELEASE, 0.0);
                     std::memset(mActiveNotes[ch], 0, sizeof(mActiveNotes[ch]));
                     std::memset(mHeldNotes[ch], 0, sizeof(mHeldNotes[ch]));
                     std::memset(mHeldVel[ch], 0, sizeof(mHeldVel[ch]));
                     refreshActiveChannelBit(ch);
                 }
             }
+            break;
+        case SynthCmdType::SET_CHANNEL_RELEASE:
+            if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount) fluid_synth_set_gen(synth, cmd.a, GEN_VOLENVRELEASE, cmd.f);
             break;
         case SynthCmdType::SET_POLYPHONY:
             fluid_synth_set_polyphony(synth, cmd.a);
@@ -724,6 +737,8 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
             break;
         case 0xB0: // Control Change
             fluid_synth_cc(synth, channel, m.data1, m.data2);
+            if (m.data1 == 121)
+                fluid_synth_set_gen(synth, channel, GEN_VOLENVRELEASE, mChannelRelease[channel].load(std::memory_order_relaxed));
             // Preserve live CC7 as synth desired state across SF2/rate swaps.
             if (m.data1 == 7) mChannelVolumes[channel].store(m.data2, std::memory_order_relaxed);
             if (m.data1 == 120 || m.data1 == 123) {
@@ -874,9 +889,12 @@ void FluidSynthEngine::noteOn(int channel, int note, int velocity) {
 
 bool FluidSynthEngine::resetChannelRange(int first, int count) {
     if (!mInitialized.load() || first < 0 || count <= 0 || first > kInstrumentChannelCount || count > kInstrumentChannelCount - first) return false;
+    std::lock_guard<std::mutex> releaseLock(mReleaseConfigMutex);
     SynthCmd c;
     if (!makeResetChannelRangeCommand(first, count, kInstrumentChannelCount, c)) return false;
-    return mCmdQueue.push(c);
+    if (!mCmdQueue.push(c)) return false;
+    for (int ch = first; ch < first + count; ++ch) mChannelRelease[ch].store(0.0f, std::memory_order_relaxed);
+    return true;
 }
 
 void FluidSynthEngine::noteOff(int channel, int note) {
@@ -1080,6 +1098,20 @@ bool FluidSynthEngine::setChannelVolume(int channel, int value) {
 
 int FluidSynthEngine::getChannelVolume(int channel) const {
     return channel >= 0 && channel < kInstrumentChannelCount ? mChannelVolumes[channel].load(std::memory_order_relaxed) : 100;
+}
+
+bool FluidSynthEngine::setChannelRelease(int channel, float timecents) {
+    if (channel < 0 || channel >= kInstrumentChannelCount || !std::isfinite(timecents) || timecents < -2400.0f || timecents > 2400.0f) return false;
+    std::lock_guard<std::mutex> lock(mReleaseConfigMutex);
+    SynthCmd c{}; c.type = SynthCmdType::SET_CHANNEL_RELEASE; c.a = channel; c.f = timecents;
+    if (!mInitialized.load(std::memory_order_relaxed)) { mChannelRelease[channel].store(timecents, std::memory_order_relaxed); return true; }
+    if (!mCmdQueue.push(c)) return false;
+    mChannelRelease[channel].store(timecents, std::memory_order_relaxed);
+    return true;
+}
+
+float FluidSynthEngine::getChannelRelease(int channel) const {
+    return channel >= 0 && channel < kInstrumentChannelCount ? mChannelRelease[channel].load(std::memory_order_relaxed) : 0.0f;
 }
 
 // ── Getters (worker thread — atomic reads of the desired settings) ───────────

@@ -51,6 +51,7 @@ enum class SynthCmdType : uint8_t {
     SET_CHANNEL_VOLUME,
     SET_REVERB_PARAMS,
     RESET_CHANNEL_RANGE,
+    SET_CHANNEL_RELEASE,
 };
 
 struct SynthCmd {
