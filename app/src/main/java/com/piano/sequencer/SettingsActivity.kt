@@ -73,16 +73,21 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    private fun addReverbLearnRow(controls: LinearLayout, p: EffectParameter) {
+    private fun addReverbLearnRow(controls: LinearLayout, mappings: LinearLayout, p: EffectParameter) {
         parameters["fluidsynth.reverb" to p.stableId] = p
         controls.addView(Button(this).apply {
-            text = "MIDI Learn · ${p.displayName}"
+            text = "MIDI Learn"
             com.piano.sequencer.ui.UiControlStyle.apply(this)
+            contentDescription = "MIDI Learn: Global Reverb ${p.displayName}"
+            minWidth = 0
+            minimumWidth = 0
+            maxWidth = (112 * resources.displayMetrics.density).toInt()
+            minimumHeight = (48 * resources.displayMetrics.density).toInt()
             setOnClickListener { learn(p) }
-        })
+        }, LinearLayout.LayoutParams(-2, -2))
         val row = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         reverbMappingRows[p.stableId] = row
-        controls.addView(row)
+        mappings.addView(row)
     }
 
     private lateinit var btnBrowse: Button
@@ -676,14 +681,28 @@ class SettingsActivity : AppCompatActivity() {
     private fun renderGlobalReverb(parameters: List<EffectParameter>) {
         val controls = findViewById<LinearLayout>(R.id.globalReverbControls)
         controls.removeAllViews()
+        val enableRow = findViewById<LinearLayout>(R.id.globalReverbEnableRow)
+        // Preserve the XML state label and switch; replace only the Learn button.
+        while (enableRow.childCount > 2) enableRow.removeViewAt(2)
+        val enableMappings = findViewById<LinearLayout>(R.id.globalReverbEnableMappings)
+        enableMappings.removeAllViews()
         reverbMappingRows.clear()
         this.parameters.clear()
         parameters.forEach { p ->
-            addReverbLearnRow(controls, p)
-            if (p.stableId == "0") return@forEach
+            if (p.stableId == "0") {
+                addReverbLearnRow(enableRow, enableMappings, p)
+                return@forEach
+            }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            val setting = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            controls.addView(row, LinearLayout.LayoutParams(-1, -2))
+            row.addView(setting, LinearLayout.LayoutParams(0, -2, 1f))
             val label = TextView(this).apply { text = "${p.displayName}: ${instrumentValueLabel(p, p.value.rawValue)}" }
-            controls.addView(label)
-            controls.addView(SeekBar(this).apply {
+            setting.addView(label)
+            setting.addView(SeekBar(this).apply {
                 minimumHeight = (48 * resources.displayMetrics.density).toInt()
                 contentDescription = "Global Reverb ${p.displayName}"
                 max = 1000
@@ -721,6 +740,7 @@ class SettingsActivity : AppCompatActivity() {
                     override fun onStopTrackingTouch(bar: SeekBar?) { tracking = false; save(bar?.progress ?: 0) }
                 })
             })
+            addReverbLearnRow(row, controls, p)
         }
         refresh()
     }

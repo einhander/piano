@@ -7,6 +7,8 @@ import android.content.ServiceConnection
 import android.os.Bundle
 import android.os.IBinder
 import android.view.View
+import android.view.Gravity
+import kotlin.math.pow
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.SeekBar
@@ -66,6 +68,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     private var presetLibraryError: String? = null
     private var presetMessage: String? = null
     @Volatile private var presetBusy = false
+    private var releaseDialog: AlertDialog? = null
     private var presetDialog: AlertDialog? = null
     private var presetMenu: AlertDialog? = null
     private var presetMenuContent: LinearLayout? = null
@@ -80,6 +83,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         override fun onServiceDisconnected(name: ComponentName?) {
             service?.let { ccController.detach(this@InstrumentEffectsActivity, it) }
             service = null
+            releaseDialog?.dismiss()
             presetDialog?.dismiss()
             presetMenu?.dismiss()
             presetBusy = false
@@ -121,6 +125,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         // explicitly rather than leave an invisible capture after recreation.
         if (ownsLearn) ccController.cancelLearn()
         learnDialog?.dismiss()
+        releaseDialog?.dismiss()
         presetDialog?.dismiss()
         presetMenu?.dismiss()
         presetDisabledViews.clear()
@@ -241,6 +246,11 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         })
         container.addView(Button(this).apply {
             com.piano.sequencer.ui.UiControlStyle.apply(this)
+            text = "Release · $targetLabel"
+            setOnClickListener { openReleaseEditor(channel) }
+        })
+        container.addView(Button(this).apply {
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
             text = "FX presets…"
             setOnClickListener { if (!presetBusy) showPresetMenu() }
         })
@@ -313,6 +323,139 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             })
             card.addView(controls)
             container.addView(card)
+        }
+    }
+
+    /** Identity and slot are captured once; stale dialogs never follow a recycled file slot. */
+    private fun releaseChannel(setId: String, localChannel: Int): Int {
+        val base = if (setId == MAIN_INSTRUMENT_SET_ID) null
+            else FileInstrumentSetStore.get(this).all().firstOrNull { it.id == setId }?.channelBase ?: return -1
+        return resolveInstrumentIdentityChannel(setId, localChannel, base)
+    }
+
+    private fun openReleaseEditor(localChannel: Int) {
+        val setId = this.setId
+        val absolute = releaseChannel(setId, localChannel)
+        if (absolute < 0) {
+            AlertDialog.Builder(this).setMessage("Instrument set is missing or unsupported").setPositiveButton("OK", null).show()
+            return
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(8), dp(24), dp(8))
+        }
+        val valueLabel = TextView(this).apply { text = "Loading…"; textSize = 16f }
+        val slider = SeekBar(this).apply {
+            max = 4800
+            progress = 2400
+            isEnabled = false
+            contentDescription = "Release relative to SoundFont default"
+        }
+        content.addView(valueLabel)
+        content.addView(slider, LinearLayout.LayoutParams(-1, dp(48)))
+        content.addView(LinearLayout(this).apply {
+            listOf("Shorter", "SF2 default", "Longer").forEachIndexed { index, label ->
+                addView(TextView(this@InstrumentEffectsActivity).apply {
+                    text = label
+                    textSize = 12f
+                    gravity = when (index) { 0 -> Gravity.START; 1 -> Gravity.CENTER; else -> Gravity.END }
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+            }
+        })
+        content.addView(TextView(this).apply {
+            text = "Relative to this preset’s release, not milliseconds. SF2 limits may clamp the result. Longer release uses more voices."
+            textSize = 13f
+            setPadding(0, dp(12), 0, 0)
+        })
+        val status = TextView(this).apply { textSize = 13f; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+        content.addView(status)
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Release · $targetLabel")
+            .setView(content)
+            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Reset", null)
+            .setPositiveButton("Apply", null)
+            .create()
+        releaseDialog = dialog
+        dialog.setOnDismissListener { if (releaseDialog === dialog) releaseDialog = null }
+        dialog.show()
+        fun alive() = !isFinishing && !isDestroyed && dialog.isShowing
+        fun showValue() {
+            val tc = slider.progress - 2400
+            valueLabel.text = if (tc == 0) "SF2 default · 1×" else
+                String.format(java.util.Locale.getDefault(), "≈ %.2f× SF2 release", 2.0.pow(tc / 1200.0))
+        }
+        slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) = showValue()
+            override fun onStartTrackingTouch(bar: SeekBar?) {}
+            override fun onStopTrackingTouch(bar: SeekBar?) {}
+        })
+        fun busy(saving: Boolean) {
+            slider.isEnabled = !saving
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = !saving
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = !saving
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).isEnabled = !saving
+            dialog.setCancelable(!saving)
+            dialog.setCanceledOnTouchOutside(!saving)
+        }
+        fun apply(reset: Boolean) {
+            val target = if (reset) 0f else (slider.progress - 2400).toFloat()
+            busy(true)
+            status.text = "Saving…"
+            worker.execute {
+                val error = runCatching {
+                    check(releaseChannel(setId, localChannel) == absolute) { "Instrument set changed or was removed. Reopen Release." }
+                    val svc = service ?: error("Playback service is not connected")
+                    val old = svc.getChannelRelease(absolute)
+                    check(old.isFinite()) { "Could not read current release" }
+                    val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+                    val hadKey = prefs.contains(InstrumentReleasePreferences.key(setId, localChannel))
+                    val savedOld = InstrumentReleasePreferences.load(prefs, setId, localChannel)
+                    check(svc.setChannelRelease(absolute, target)) { "Could not apply release; nothing saved" }
+                    val saved = runCatching {
+                        if (reset) InstrumentReleasePreferences.reset(prefs, setId, localChannel)
+                        else InstrumentReleasePreferences.save(prefs, setId, localChannel, target)
+                    }.getOrDefault(false)
+                    if (!saved) {
+                        val rolledBack = runCatching { svc.setChannelRelease(absolute, old) }.getOrDefault(false)
+                        // SharedPreferences commit failure may still change its in-memory map.
+                        runCatching {
+                            if (hadKey) InstrumentReleasePreferences.save(prefs, setId, localChannel, savedOld)
+                            else InstrumentReleasePreferences.reset(prefs, setId, localChannel)
+                        }
+                        error(if (rolledBack) "Could not save release; previous sound restored. Try again."
+                            else "Could not save or restore release. Sound may differ from saved setting.")
+                    }
+                }.exceptionOrNull()?.message
+                runOnUiThread {
+                    if (!alive()) return@runOnUiThread
+                    busy(false)
+                    if (error == null) dialog.dismiss() else status.text = error
+                }
+            }
+        }
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { apply(false) }
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { apply(true) }
+        busy(true)
+        worker.execute {
+            val result = runCatching {
+                check(releaseChannel(setId, localChannel) == absolute) { "Instrument set changed or was removed" }
+                val svc = service ?: error("Playback service is not connected")
+                svc.getChannelRelease(absolute).also {
+                    check(it.isFinite() && it in -2400f..2400f) { "Could not read release" }
+                }
+            }
+            runOnUiThread {
+                if (!alive()) return@runOnUiThread
+                busy(false)
+                result.onSuccess { slider.progress = (it + 2400f).toInt(); showValue() }
+                    .onFailure {
+                        status.text = it.message
+                        slider.isEnabled = false
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+                        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = false
+                    }
+            }
         }
     }
 
