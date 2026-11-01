@@ -248,10 +248,31 @@ void InstrumentEffectManager::process(float* const buses[kChannels], int frames)
     for (int channel = 0; channel < kChannels; ++channel) {
         float* bus = buses[channel];
         if (!bus) continue;
+        auto* publishedClipper = mPublished[channel][lsp::kSlotClipper].load(std::memory_order_acquire);
+        // Until a clipper has ever been effective, its dry timeline has no
+        // observable consumer. Keep ring history only for published clippers;
+        // on first enable, timeline latch stays false until latency history and
+        // plugin warmup are both established.
+        if (!publishedClipper && !mClipperTimelineActive[channel] &&
+            mClipperAlignMix[channel] == 0.0f && mWetMix[channel][lsp::kSlotClipper] == 0.0f) {
+            bool anyInsert = false;
+            for (int slot = 0; slot < kEffects; ++slot) {
+                if (slot == lsp::kSlotClipper) continue;
+                auto* effect = mPublished[channel][slot].load(std::memory_order_acquire);
+                if (effect && effect->isAvailable() &&
+                    (mWetMix[channel][slot] > 0.0f ||
+                     (mRackEnabled[channel].load(std::memory_order_acquire) &&
+                      mEffectEnabled[channel][slot].load(std::memory_order_acquire) && !effect->isBypassed()))) {
+                    anyInsert = true;
+                    break;
+                }
+            }
+            if (!anyInsert) continue;
+        }
         // Continuously retain a short input history without modifying output.
         // Before first Clipper publication the complete rack remains bit-exact.
         for (int slot = 0; slot < kEffects; ++slot) {
-            auto* effect = mPublished[channel][slot].load(std::memory_order_acquire);
+            auto* effect = slot == lsp::kSlotClipper ? publishedClipper : mPublished[channel][slot].load(std::memory_order_acquire);
             if (slot==lsp::kSlotClipper) {
                 const bool published=effect && effect->isAvailable();
                 const int latency=published?mClipperLatency[channel]:0;

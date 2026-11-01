@@ -242,6 +242,35 @@ int main() {
     assert(one[0]==3*frames+1 && one[1]==3*frames+1);
     for(float sample:one) assert(std::isfinite(sample));
 
+    // Unpublished idle fast path must retain no stale samples: first clipper
+    // enable on channel 127 starts with current input, not prior idle signal.
+    auto idleEnableStorage = std::make_unique<InstrumentEffectManager>(factory); auto& idleEnable = *idleEnableStorage;
+    assert(idleEnable.prepare(48000,frames));
+    std::array<std::array<float,frames*2>,kInstrumentChannelCount> idleData{};
+    std::array<float*,kInstrumentChannelCount> idleBuses{};
+    for(int c=0;c<kInstrumentChannelCount;++c) idleBuses[c]=idleData[c].data();
+    for(int i=0;i<frames;++i) idleData[127][i*2]=idleData[127][i*2+1]=1000.0f+i;
+    idleEnable.process(idleBuses.data(),frames);
+    assert(idleEnable.instantiate(127,lsp::kSlotClipper));
+    idleEnable.setRackEnabled(127,true);
+    assert(idleEnable.setEffectEnabledChecked(127,lsp::kSlotClipper,true));
+    for(int i=0;i<frames;++i) idleData[127][i*2]=idleData[127][i*2+1]=2000.0f+i;
+    idleEnable.process(idleBuses.data(),frames);
+    assert(idleData[127][0]==2000.0f && idleData[127][2]==2001.0f);
+    assert(idleData[16][0]==0.0f && idleData[0][0]==0.0f);
+
+    // A non-clipper insert still processes when no clipper is published.
+    auto noClipperActiveStorage = std::make_unique<InstrumentEffectManager>(factory); auto& noClipperActive = *noClipperActiveStorage;
+    assert(noClipperActive.prepare(48000,frames));
+    assert(noClipperActive.instantiate(127,lsp::kSlotFilter));
+    assert(noClipperActive.setParameterChecked(127,lsp::kSlotFilter,1,2.0f));
+    noClipperActive.setRackEnabled(127,true);
+    assert(noClipperActive.setEffectEnabledChecked(127,lsp::kSlotFilter,true));
+    idleData[127].fill(1.0f);
+    noClipperActive.process(idleBuses.data(),frames);
+    assert(idleData[127][0]>1.0f);
+    assert(idleData[0][0]==0.0f && idleData[16][0]==0.0f);
+
     fakeClipperLatency=128;
     auto maxDelayStorage = std::make_unique<InstrumentEffectManager>(factory); auto& maxDelay = *maxDelayStorage; assert(maxDelay.prepare(48000,frames));
     for(int i=0;i<frames;++i) one[i*2]=one[i*2+1]=float(i+1);
@@ -258,21 +287,16 @@ int main() {
     assert(!invalid.instantiate(0,lsp::kSlotClipper));
     fakeClipperLatency=2;
 
-    // Bounded 128-channel clipper-rack benchmark. Disabled-but-published case
-    // mirrors the callback's warm/latency-alignment path; host numbers are not
-    // representative of device callback budgets.
-    constexpr int benchFrames=256, benchIterations=500;
+    // 64-frame host benchmarks compare idle unpublished, one active non-clipper
+    // insert, and published-disabled clipper baseline. Not a device budget.
+    constexpr int benchFrames=64, benchIterations=1000;
     auto benchStorage=std::make_unique<InstrumentEffectManager>(factory); auto& bench=*benchStorage;
     assert(bench.prepare(48000,benchFrames));
     std::array<std::array<float,benchFrames*2>,kInstrumentChannelCount> benchData{};
     std::array<float*,kInstrumentChannelCount> benchBuses{};
-    for(int c=0;c<kInstrumentChannelCount;++c) {
-        benchBuses[c]=benchData[c].data();
-        assert(bench.instantiate(c,lsp::kSlotClipper)); // published; bypassed and disabled
-    }
-    const int benchCallsBefore=LatencyEffect::processCalls;
+    for(int c=0;c<kInstrumentChannelCount;++c) benchBuses[c]=benchData[c].data();
     auto measure=[&](const char* label) {
-        for(int i=0;i<100;++i) bench.process(benchBuses.data(),benchFrames);
+        for(int i=0;i<300;++i) bench.process(benchBuses.data(),benchFrames);
         std::vector<double> us; us.reserve(benchIterations);
         for(int i=0;i<benchIterations;++i) {
             auto start=std::chrono::steady_clock::now();
@@ -280,11 +304,37 @@ int main() {
             us.push_back(std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count());
         }
         std::sort(us.begin(),us.end());
-        std::cerr << "InstrumentEffectManager 128 channels, " << label << ", 256 frames: median "
+        std::cerr << "InstrumentEffectManager 128 channels, " << label << ", " << benchFrames << " frames: median "
                   << us[benchIterations/2] << " us, p95 " << us[benchIterations*95/100] << " us\n";
     };
-    measure("published clipper disabled");
-    assert(LatencyEffect::processCalls==benchCallsBefore); // benchmark confirms no disabled DSP runs
+    measure("unpublished idle");
+    assert(bench.instantiate(127,lsp::kSlotFilter));
+    bench.setRackEnabled(127,true);
+    assert(bench.setEffectEnabledChecked(127,lsp::kSlotFilter,true));
+    measure("one active non-clipper insert ch127");
+    auto publishedStorage=std::make_unique<InstrumentEffectManager>(factory); auto& published=*publishedStorage;
+    assert(published.prepare(48000,benchFrames));
+    std::array<std::array<float,benchFrames*2>,kInstrumentChannelCount> publishedData{};
+    std::array<float*,kInstrumentChannelCount> publishedBuses{};
+    for(int c=0;c<kInstrumentChannelCount;++c) {
+        publishedBuses[c]=publishedData[c].data();
+        assert(published.instantiate(c,lsp::kSlotClipper));
+    }
+    auto publishedMeasure=[&]() {
+        for(int i=0;i<300;++i) published.process(publishedBuses.data(),benchFrames);
+        std::vector<double> us; us.reserve(benchIterations);
+        for(int i=0;i<benchIterations;++i) {
+            auto start=std::chrono::steady_clock::now();
+            published.process(publishedBuses.data(),benchFrames);
+            us.push_back(std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count());
+        }
+        std::sort(us.begin(),us.end());
+        std::cerr << "InstrumentEffectManager 128 channels, published clipper disabled, " << benchFrames << " frames: median "
+                  << us[benchIterations/2] << " us, p95 " << us[benchIterations*95/100] << " us\n";
+    };
+    const int benchCallsBefore=LatencyEffect::processCalls;
+    publishedMeasure();
+    assert(LatencyEffect::processCalls==benchCallsBefore); // no disabled DSP runs
 
     auto stressStorage = std::make_unique<InstrumentEffectManager>(factory); auto& stress = *stressStorage; assert(stress.prepare(48000,frames));
     assert(stress.instantiate(0,0));
