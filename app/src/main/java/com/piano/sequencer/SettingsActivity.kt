@@ -29,7 +29,61 @@ import java.io.IOException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 
+import android.widget.EditText
+import android.widget.ScrollView
+import android.text.InputType
+import androidx.appcompat.app.AlertDialog
+import com.piano.sequencer.midi.*
+import java.lang.ref.WeakReference
+
 class SettingsActivity : AppCompatActivity() {
+
+
+    private val ccController get() = (application as PianoApp).instrumentEffectCcController
+    private var ownsLearn = false
+    private var learnUiActive = false
+    private var learnDialog: AlertDialog? = null
+    private val learnedSources = mutableMapOf<Pair<String, String>, String>()
+    private val parameters = mutableMapOf<Pair<String, String>, EffectParameter>()
+    private val reverbMappingRows = mutableMapOf<String, LinearLayout>()
+
+    override fun onPause() {
+        learnUiActive = false
+        if (ownsLearn) ccController.cancelLearn()
+        ownsLearn = false
+        learnDialog?.dismiss()
+        learnDialog = null
+        super.onPause()
+    }
+
+    private fun refresh() {
+        reverbMappingRows.forEach { (id, row) ->
+            row.removeAllViews()
+            val p = parameters["fluidsynth.reverb" to id] ?: return@forEach
+            ccController.mappings().filter { it.scope == EffectCcScope.GLOBAL &&
+                it.effectId == "fluidsynth.reverb" && it.parameterId == id }.forEach { m ->
+                row.addView(label(mappingDescription(m)))
+                row.addView(Button(this).apply {
+                    text = "Edit / Unlearn mapping"
+                    com.piano.sequencer.ui.UiControlStyle.apply(this)
+                    setOnClickListener { editMapping(m, p) }
+                })
+            }
+            if (row.childCount == 0) row.addView(label("No MIDI CC assigned · Shared across all instrument sets"))
+        }
+    }
+
+    private fun addReverbLearnRow(controls: LinearLayout, p: EffectParameter) {
+        parameters["fluidsynth.reverb" to p.stableId] = p
+        controls.addView(Button(this).apply {
+            text = "MIDI Learn · ${p.displayName}"
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
+            setOnClickListener { learn(p) }
+        })
+        val row = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        reverbMappingRows[p.stableId] = row
+        controls.addView(row)
+    }
 
     private lateinit var btnBrowse: Button
     private lateinit var tvRecordingFolder: TextView
@@ -72,12 +126,14 @@ class SettingsActivity : AppCompatActivity() {
             // screen during service startup) — the executor is already shut down.
             if (isFinishing || isDestroyed) return
             service = (binder as PlaybackService.PlaybackBinder).getService()
+            ccController.attach(this@SettingsActivity, service!!)
             refreshRecordingFolder()
             CompletableFuture.runAsync({
             loadCurrentValues()
         }, mainExecutor)
         }
         override fun onServiceDisconnected(name: ComponentName?) {
+            service?.let { ccController.detach(this@SettingsActivity, it) }
             service = null
             refreshRecordingFolder()
         }
@@ -139,7 +195,9 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        learnUiActive = true
         refreshRecordingFolder()
+        if (service != null) CompletableFuture.runAsync({ loadCurrentValues() }, mainExecutor)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -413,6 +471,7 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        service?.let { ccController.detach(this, it) }
         mainExecutor.shutdown()
         super.onDestroy()
         try {
@@ -553,7 +612,7 @@ class SettingsActivity : AppCompatActivity() {
         val sf2Count = svc.getSoundFontCount()
         val reverbAvailable = svc.isSharedFxAvailable("fluidsynth.reverb")
         val reverb = svc.getSharedFxParameter("fluidsynth.reverb", 0)
-        val reverbControls = if (!reverbAvailable) emptyList() else (1..4).mapNotNull { id ->
+        val reverbControls = if (!reverbAvailable) emptyList() else (0..4).mapNotNull { id ->
             svc.getSharedFxParamInfo("fluidsynth.reverb", id)?.let { info ->
                 com.piano.sequencer.midi.sharedFxParameterFromNativeInfo("fluidsynth.reverb", id, info,
                     svc.getSharedFxParameter("fluidsynth.reverb", id))?.let { sharedPresentation("fluidsynth.reverb", it) }
@@ -617,7 +676,11 @@ class SettingsActivity : AppCompatActivity() {
     private fun renderGlobalReverb(parameters: List<EffectParameter>) {
         val controls = findViewById<LinearLayout>(R.id.globalReverbControls)
         controls.removeAllViews()
+        reverbMappingRows.clear()
+        this.parameters.clear()
         parameters.forEach { p ->
+            addReverbLearnRow(controls, p)
+            if (p.stableId == "0") return@forEach
             val label = TextView(this).apply { text = "${p.displayName}: ${instrumentValueLabel(p, p.value.rawValue)}" }
             controls.addView(label)
             controls.addView(SeekBar(this).apply {
@@ -659,7 +722,173 @@ class SettingsActivity : AppCompatActivity() {
                 })
             })
         }
+        refresh()
     }
+
+    private fun label(value: String) = TextView(this).apply { text = value; textSize = 14f }
+    private fun mappingDescription(m: EffectCcMapping): String {
+        val name = parameters[m.effectId to m.parameterId]?.displayName ?: "Parameter ${m.parameterId}"
+        return "${m.source ?: "Any source"} · MIDI ch ${m.inputChannel?.plus(1) ?: "Any"} · CC ${m.controller}\nShared · all instrument sets · Reverb · $name\nRaw ${m.minRaw}–${m.maxRaw}${if (m.invert) " · Inverted" else ""} · Soft takeover · ${if (m.disposition == CcDisposition.PASS) "Pass-through" else "Consume"}"
+    }
+
+    private fun learn(p: EffectParameter) {
+        if (ccController.isLearning()) {
+            Toast.makeText(this, "Finish current MIDI Learn first.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val owner = WeakReference(this)
+        val started = ccController.startLearn(globalReverbLearnTemplate(p)) { result ->
+            owner.get()?.runOnUiThread {
+                owner.get()?.takeUnless { it.isFinishing || it.isDestroyed || !it.learnUiActive }?.onLearnResult(result)
+            }
+        }
+        if (!started) {
+            AlertDialog.Builder(this).setMessage("Finish MIDI-file trigger learning first.").setPositiveButton("OK", null).show()
+            return
+        }
+        ownsLearn = true
+        learnDialog?.dismiss()
+        learnDialog = AlertDialog.Builder(this).setTitle(p.displayName)
+            .setMessage("Waiting for MIDI CC…\nMove a controller within 10 seconds.")
+            .setNegativeButton("Cancel") { _, _ -> ownsLearn = false; ccController.cancelLearn() }
+            .setOnCancelListener { ownsLearn = false; ccController.cancelLearn() }.show()
+    }
+
+    private fun onLearnResult(result: EffectCcLearnResult) {
+        ownsLearn = false
+        learnDialog?.dismiss()
+        learnDialog = null
+        val mapping = result.mapping
+        mapping?.source?.let { learnedSources[mapping.effectId to mapping.parameterId] = it }
+        if (mapping != null && triggerConflicts(mapping).isNotEmpty()) {
+            // Capture auto-adds when no effect conflict exists. Roll it back until
+            // the user explicitly approves deleting overlapping trigger cells.
+            if (result.conflict == null) ccController.remove(mapping)
+            saveMapping(mapping)
+            refresh()
+            return
+        }
+        when {
+            result.timedOut -> AlertDialog.Builder(this).setMessage("No MIDI CC received. Learning timed out.").setPositiveButton("OK", null).show()
+            mapping != null && result.conflict != null -> confirmConflict(mapping, result.conflict.existing)
+            mapping != null -> {
+                refresh()
+                AlertDialog.Builder(this).setTitle("MIDI CC captured").setMessage(mappingDescription(mapping) + ccWarning(mapping.controller))
+                    .setPositiveButton("Edit mapping") { _, _ -> editMapping(mapping, parameters[mapping.effectId to mapping.parameterId]) }
+                    .setNegativeButton("Done", null).show()
+            }
+            else -> AlertDialog.Builder(this).setMessage("Effect MIDI Learn cancelled.").setPositiveButton("OK", null).show()
+        }
+    }
+
+    private fun confirmConflict(incoming: EffectCcMapping, existing: EffectCcMapping, old: EffectCcMapping? = null) {
+        AlertDialog.Builder(this).setTitle("MIDI CC already mapped")
+            .setMessage("New mapping:\n${mappingDescription(incoming)}\n\nExisting mapping:\n${mappingDescription(existing)}\n\nReplace the existing mapping?${ccWarning(incoming.controller)}")
+            .setNegativeButton("Cancel", null).setPositiveButton("Replace") { _, _ ->
+                saveMapping(incoming, old, existing)
+            }.show()
+    }
+
+    private fun saveMapping(mapping: EffectCcMapping, old: EffectCcMapping? = null, replacing: EffectCcMapping? = null,
+                            approvedTriggers: List<SequencerCell>? = null) {
+        // Check collisions before removing an edited mapping; Cancel preserves it.
+        val conflict = ccController.mappings().firstOrNull { it != old && it != replacing && it.controller == mapping.controller &&
+            (it.source == null || mapping.source == null || it.source == mapping.source) &&
+            (it.inputChannel == null || mapping.inputChannel == null || it.inputChannel == mapping.inputChannel) }
+        if (conflict != null) { confirmConflict(mapping, conflict, old); return }
+        val triggers = triggerConflicts(mapping)
+        if (triggers.isNotEmpty() && (approvedTriggers == null || triggers.any { it !in approvedTriggers })) {
+            AlertDialog.Builder(this).setTitle("CC assigned to sequencer triggers")
+                .setMessage("Effect mapping:\n${mappingDescription(mapping)}\n\nOverlapping trigger cells:\n" +
+                    triggers.joinToString("\n") { cell ->
+                        val content = if (cell.mode == "CHORD") "Chord" else cell.filePath.substringAfterLast('/').ifEmpty { "Empty cell" }
+                        "Cell ${cell.id} · $content · CC ${cell.ccNumber} · ${cell.triggerSource ?: "Any source"} · MIDI ch ${if (cell.triggerChannel < 0) "Any" else cell.triggerChannel + 1}"
+                    } + "\n\nReplace deletes ALL listed sequencer cells and their trigger assignments, then saves this effect mapping. Cancel keeps existing trigger cells and any old edited effect mapping." + ccWarning(mapping.controller))
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Replace") { _, _ -> saveMapping(mapping, old, replacing, triggers) }.show()
+            return
+        }
+        val raced = if (replacing == null) ccController.replace(mapping, old)
+            else synchronized(ccController) {
+                ccController.replace(ccController.mappings().filter { it != old && it != replacing } + mapping)
+            }
+        if (raced != null) {
+            confirmConflict(mapping, raced.existing, old)
+        } else {
+            // Never delete cells before the effect-to-effect transaction succeeds.
+            val store = MidiFileMappingStore.get(this)
+            triggers.filter { it in approvedTriggers.orEmpty() }.forEach { cell ->
+                // Do not remove a cell edited since the confirmation snapshot.
+                if (store.get(cell.id) == cell) store.remove(cell.id)
+            }
+        }
+        refresh()
+    }
+
+    private fun triggerConflicts(mapping: EffectCcMapping): List<SequencerCell> =
+        MidiFileMappingStore.get(this).all().filter { cell ->
+            cell.triggerType == TRIGGER_CC && cell.ccNumber == mapping.controller &&
+                (cell.triggerSource == null || mapping.source == null || cell.triggerSource == mapping.source) &&
+                (cell.triggerChannel < 0 || mapping.inputChannel == null || cell.triggerChannel == mapping.inputChannel)
+        }
+
+
+    private fun editMapping(m: EffectCcMapping, p: EffectParameter?) {
+        val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), dp(8)) }
+        form.addView(label(mappingDescription(m)))
+        fun selector(title: String, options: List<String>, selected: Int): Spinner {
+            form.addView(label(title))
+            return Spinner(this).apply {
+                adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item, options)
+                setSelection(selected); form.addView(this)
+            }
+        }
+        val source = m.source ?: learnedSources[m.effectId to m.parameterId]
+        val sourceSelector = selector("Input source", listOf("Any source") + listOfNotNull(source?.let { "Learned source: $it" }), if (m.source == null) 0 else 1)
+        if (source == null) form.addView(label("Learn again to capture a specific source/device."))
+        val channelSelector = selector("Input MIDI channel", listOf("Any channel") + (1..16).map { "Channel $it" }, m.inputChannel?.plus(1) ?: 0)
+        fun field(title: String, value: Float): EditText {
+            form.addView(label(title))
+            return EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+                setText(value.toString()); form.addView(this)
+            }
+        }
+        val minimum = field("Minimum raw value", m.minRaw)
+        val maximum = field("Maximum raw value", m.maxRaw)
+        val invert = SwitchCompat(this).apply { text = "Invert"; isChecked = m.invert; form.addView(this) }
+        selector("Pickup mode", listOf("Soft takeover (current)"), 0)
+        form.addView(label("Only Soft takeover is supported. Move the controller to the current value before changes apply. Immediate mode is unavailable."))
+        val consume = SwitchCompat(this).apply { text = "Consume MIDI CC (off: Pass-through)"; isChecked = m.disposition == CcDisposition.CONSUME; form.addView(this) }
+        val warning = label(ccWarning(m.controller).trim()).apply { visibility = if (text.isEmpty()) View.GONE else View.VISIBLE }
+        form.addView(warning)
+        consume.setOnCheckedChangeListener { _, _ -> warning.text = ccWarning(m.controller).trim() }
+        form.addView(label("Pass-through also sends the CC to the instrument. Consume uses it only for this effect."))
+        val dialog = AlertDialog.Builder(this).setTitle("Edit MIDI CC mapping")
+            .setView(ScrollView(this).apply { addView(form) }).setNegativeButton("Cancel", null)
+            .setNeutralButton("Unlearn") { _, _ -> ccController.remove(m); refresh() }
+            .setPositiveButton("Save", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val lo = minimum.text.toString().toFloatOrNull()
+                val hi = maximum.text.toString().toFloatOrNull()
+                if (lo == null || hi == null || !lo.isFinite() || !hi.isFinite() || hi <= lo ||
+                    (p != null && (lo < p.minimum || hi > p.maximum))) {
+                    maximum.error = if (p != null) "Use ${p.minimum}–${p.maximum}; maximum must exceed minimum" else "Enter finite values; maximum must exceed minimum"
+                } else {
+                    dialog.dismiss()
+                    saveMapping(m.copy(minRaw = lo, maxRaw = hi, invert = invert.isChecked,
+                        source = if (sourceSelector.selectedItemPosition == 0) null else source,
+                        inputChannel = (channelSelector.selectedItemPosition - 1).takeIf { it >= 0 },
+                        disposition = if (consume.isChecked) CcDisposition.CONSUME else CcDisposition.PASS), m)
+                }
+            }
+        }
+        dialog.show()
+    }
+    private fun ccWarning(cc: Int): String = if (cc in setOf(0, 32, 6, 38, 7, 10, 11, 64) || cc in 120..127)
+        "\n\nWarning: CC $cc can change bank, data entry, volume, pan, expression, sustain or channel mode. Pass-through may also affect the instrument; Consume prevents its normal instrument action. Choose deliberately." else ""
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     private fun pickSf2File(uri: Uri) {
         val fileName = uri.lastPathSegment
