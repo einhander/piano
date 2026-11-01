@@ -439,8 +439,8 @@ private:
     int mMaxSynthFrames = kMaxSynthFrames;
     std::vector<float> mSynthChannelBuffers;
     std::vector<float> mSynthReturnBuffer;
-    float* mSynthChannelPtrs[piano::kInstrumentChannelCount]{};
-    float* mSynthSegmentPtrs[piano::kInstrumentChannelCount]{};
+    float* mSynthChannelPtrs[piano::kAudioBusCount]{};
+    float* mSynthSegmentPtrs[piano::kAudioBusCount]{};
 
     // Count-in metronome state
     std::atomic<bool> mCountingIn{false};

@@ -532,7 +532,7 @@ void FluidSynthEngine::processCommands() {
 }
 
 void FluidSynthEngine::refreshActiveChannelBit(int channel) {
-    if (channel < 0 || channel >= kInstrumentChannelCount) return;
+    if (!piano::isAudioBusChannel(channel)) return;
     bool any = false;
     for (int note = 0; note < 128; ++note) {
         if (mActiveNotes[channel][note] != 0) {
@@ -542,18 +542,17 @@ void FluidSynthEngine::refreshActiveChannelBit(int channel) {
     }
     // Legacy activity masks describe Main channels only. Keep high channels
     // out of this 16-bit surface; note tracking still covers all 128.
-    if (channel < 16) {
-        const auto bit = static_cast<uint16_t>(1u << channel);
-        if (any) mActiveChannelMask.fetch_or(bit, std::memory_order_relaxed);
-        else mActiveChannelMask.fetch_and(static_cast<uint16_t>(~bit), std::memory_order_relaxed);
-    }
+    const auto bit = static_cast<uint16_t>(1u << channel);
+    if (any) mActiveChannelMask.fetch_or(bit, std::memory_order_relaxed);
+    else mActiveChannelMask.fetch_and(static_cast<uint16_t>(~bit), std::memory_order_relaxed);
 }
 
 void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd& cmd) {
     switch (cmd.type) {
         case SynthCmdType::NOTE_ON:
+            if (!piano::isAudioBusChannel(cmd.a)) break;
             fluid_synth_noteon(synth, cmd.a, cmd.b, static_cast<int>(cmd.f));
-            if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount && cmd.b >= 0 && cmd.b < 128 && cmd.f > 0) {
+            if (piano::isAudioBusChannel(cmd.a) && cmd.b >= 0 && cmd.b < 128 && cmd.f > 0) {
                 mActiveNotes[cmd.a][cmd.b] = 1;
                 if (cmd.a < 16) {
                     mActiveChannelMask.fetch_or(static_cast<uint16_t>(1u << cmd.a), std::memory_order_relaxed);
@@ -562,28 +561,33 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             }
             break;
         case SynthCmdType::NOTE_OFF:
+            if (!piano::isAudioBusChannel(cmd.a)) break;
             fluid_synth_noteoff(synth, cmd.a, cmd.b);
-            if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount && cmd.b >= 0 && cmd.b < 128) {
+            if (piano::isAudioBusChannel(cmd.a) && cmd.b >= 0 && cmd.b < 128) {
                 mActiveNotes[cmd.a][cmd.b] = 0;
                 refreshActiveChannelBit(cmd.a);
             }
             break;
         case SynthCmdType::CC:
+            if (!piano::isAudioBusChannel(cmd.a)) break;
             fluid_synth_cc(synth, cmd.a, cmd.b, static_cast<int>(cmd.f));
-            if (cmd.a >= 0 && cmd.a < 16 && (cmd.b == 120 || cmd.b == 123))
+            if (piano::isAudioBusChannel(cmd.a) && (cmd.b == 120 || cmd.b == 123))
                 mRecentNoteOnMask.fetch_and(static_cast<uint16_t>(~(1u << cmd.a)), std::memory_order_relaxed);
-            if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount && (cmd.b == 120 || cmd.b == 123)) {
+            if (piano::isAudioBusChannel(cmd.a) && (cmd.b == 120 || cmd.b == 123)) {
                 std::memset(mActiveNotes[cmd.a], 0, sizeof(mActiveNotes[cmd.a]));
                 refreshActiveChannelBit(cmd.a);
             }
             break;
         case SynthCmdType::PROGRAM_CHANGE:
+            if (!piano::isAudioBusChannel(cmd.a)) break;
             fluid_synth_program_change(synth, cmd.a, cmd.b);
             break;
         case SynthCmdType::PITCH_BEND:
+            if (!piano::isAudioBusChannel(cmd.a)) break;
             fluid_synth_pitch_bend(synth, cmd.a, cmd.b);
             break;
         case SynthCmdType::CHANNEL_PRESSURE:
+            if (!piano::isAudioBusChannel(cmd.a)) break;
             fluid_synth_channel_pressure(synth, cmd.a, cmd.b);
             break;
         case SynthCmdType::PANIC:
@@ -607,7 +611,7 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             mRecentNoteOnMask.store(0, std::memory_order_relaxed);
             break;
         case SynthCmdType::RESET_CHANNEL_RANGE:
-            if (cmd.a >= 0 && cmd.b >= 0 && cmd.a <= kInstrumentChannelCount && cmd.b <= kInstrumentChannelCount - cmd.a) {
+            if (cmd.a >= 0 && cmd.b >= 0 && cmd.a <= kAudioBusCount && cmd.b <= kAudioBusCount - cmd.a) {
                 for (int ch = cmd.a; ch < cmd.a + cmd.b; ++ch) {
                     fluid_synth_all_sounds_off(synth, ch);
                     fluid_synth_cc(synth, ch, 64, 0);
@@ -648,7 +652,7 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             fluid_synth_set_interp_method(synth, -1, cmd.a);
             break;
         case SynthCmdType::SET_CHANNEL_PROGRAM:
-            if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount) {
+            if (piano::isAudioBusChannel(cmd.a)) {
                 // fluid_synth_bank_select handles bank style (GM/GS/XG) and the
                 // full 0-16383 range; raw CC0 only covers 0-127.
                 fluid_synth_bank_select(synth, cmd.a, cmd.b);
@@ -656,7 +660,7 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             }
             break;
         case SynthCmdType::SET_CHANNEL_VOLUME:
-            if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount) {
+            if (piano::isAudioBusChannel(cmd.a)) {
                 fluid_synth_cc(synth, cmd.a, 7, cmd.b);
                 // Queue order is authoritative: reconcile desired state here,
                 // after any earlier/later live CC7 already drained this callback.
@@ -683,7 +687,7 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
     uint8_t status = m.status;
     uint8_t type = status & 0xF0;
     int channel = m.channel == 0xFFFF ? (status & 0x0F) : m.channel;
-    if (channel < 0 || channel >= kInstrumentChannelCount) return;
+    if (!piano::isAudioBusChannel(channel)) return;
     const bool isLive = (m.timestamp == 0);
     bool noteOff = false;
 
@@ -866,7 +870,7 @@ static inline void makeCmd(SynthCmd& c, SynthCmdType t, int a = 0, int b = 0, fl
 }
 
 void FluidSynthEngine::noteOn(int channel, int note, int velocity) {
-    if (!mInitialized.load() || channel < 0 || channel >= kInstrumentChannelCount) return;
+    if (!mInitialized.load() || !piano::isAudioBusChannel(channel)) return;
     SynthCmd c;
     makeCmd(c, SynthCmdType::NOTE_ON, channel, note, static_cast<float>(velocity));
     mCmdQueue.push(c);
@@ -880,35 +884,35 @@ bool FluidSynthEngine::resetChannelRange(int first, int count) {
 }
 
 void FluidSynthEngine::noteOff(int channel, int note) {
-    if (!mInitialized.load() || channel < 0 || channel >= kInstrumentChannelCount) return;
+    if (!mInitialized.load() || !piano::isAudioBusChannel(channel)) return;
     SynthCmd c;
     makeCmd(c, SynthCmdType::NOTE_OFF, channel, note);
     mCmdQueue.push(c);
 }
 
 void FluidSynthEngine::controlChange(int channel, int controller, int value) {
-    if (!mInitialized.load() || channel < 0 || channel >= kInstrumentChannelCount) return;
+    if (!mInitialized.load() || !piano::isAudioBusChannel(channel)) return;
     SynthCmd c;
     makeCmd(c, SynthCmdType::CC, channel, controller, static_cast<float>(value));
     mCmdQueue.push(c);
 }
 
 void FluidSynthEngine::programChange(int channel, int program) {
-    if (!mInitialized.load() || channel < 0 || channel >= kInstrumentChannelCount) return;
+    if (!mInitialized.load() || !piano::isAudioBusChannel(channel)) return;
     SynthCmd c;
     makeCmd(c, SynthCmdType::PROGRAM_CHANGE, channel, program);
     mCmdQueue.push(c);
 }
 
 void FluidSynthEngine::pitchBend(int channel, int value) {
-    if (!mInitialized.load() || channel < 0 || channel >= kInstrumentChannelCount) return;
+    if (!mInitialized.load() || !piano::isAudioBusChannel(channel)) return;
     SynthCmd c;
     makeCmd(c, SynthCmdType::PITCH_BEND, channel, value);
     mCmdQueue.push(c);
 }
 
 void FluidSynthEngine::channelPressure(int channel, int value) {
-    if (!mInitialized.load() || channel < 0 || channel >= kInstrumentChannelCount) return;
+    if (!mInitialized.load() || !piano::isAudioBusChannel(channel)) return;
     SynthCmd c;
     makeCmd(c, SynthCmdType::CHANNEL_PRESSURE, channel, value);
     mCmdQueue.push(c);
@@ -1044,7 +1048,7 @@ void FluidSynthEngine::setInterps(int method) {
 
 bool FluidSynthEngine::setChannelProgram(int channel, int bank, int program) {
     if (!mInitialized.load()) return false;
-    if (channel < 0 || channel >= kInstrumentChannelCount) return false;
+    if (!piano::isAudioBusChannel(channel)) return false;
     if (bank < 0) bank = 0;
     if (bank > 16383) bank = 16383;
     if (program < 0 || program > 127) program = 0;
@@ -1056,7 +1060,7 @@ bool FluidSynthEngine::setChannelProgram(int channel, int bank, int program) {
 
 bool FluidSynthEngine::getChannelProgram(int channel, int& bank, int& program) const {
     if (!mInitialized.load()) return false;
-    if (channel < 0 || channel >= kInstrumentChannelCount) return false;
+    if (!piano::isAudioBusChannel(channel)) return false;
     int packed = mChannelPrograms[channel].load(std::memory_order_relaxed);
     if (packed < 0) {
         bank = 0;
@@ -1069,7 +1073,7 @@ bool FluidSynthEngine::getChannelProgram(int channel, int& bank, int& program) c
 }
 
 bool FluidSynthEngine::setChannelVolume(int channel, int value) {
-    if (channel < 0 || channel >= kInstrumentChannelCount) return false;
+    if (!piano::isAudioBusChannel(channel)) return false;
     value = std::clamp(value, 0, 127);
     mChannelVolumes[channel].store(value, std::memory_order_relaxed);
     if (!mInitialized.load(std::memory_order_relaxed)) return true;

@@ -47,8 +47,8 @@ private:
 std::atomic<NativeEngine*> NativeEngine::sInstance{nullptr};
 
 bool NativeEngine::resetInstrumentChannelRange(int first, int count) {
-    if (first < 0 || count < 0 || first > piano::kInstrumentChannelCount ||
-        count > piano::kInstrumentChannelCount - first) return false;
+    if (first < 0 || count < 0 || first > piano::kAudioBusCount ||
+        count > piano::kAudioBusCount - first) return false;
     if (!mSynth) return false;
     FluidSynthEngine::WorkerAccessGuard workerAccess(*mSynth);
     if (!mSynth->resetChannelRange(first, count)) return false;
@@ -130,10 +130,10 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     }
     mMixer.init(16, mMaxSynthFrames);
     mMasterBus.init(mMaxSynthFrames);
-    mSynthChannelBuffers.assign(static_cast<size_t>(piano::kInstrumentChannelCount) * mMaxSynthFrames * 2, 0.0f);
+    mSynthChannelBuffers.assign(static_cast<size_t>(piano::kAudioBusCount) * mMaxSynthFrames * 2, 0.0f);
     mSynthReturnBuffer.assign(static_cast<size_t>(mMaxSynthFrames) * 2, 0.0f);
     mDelayBuffers.assign(static_cast<size_t>(mMaxSynthFrames) * 4, 0.0f);
-    for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch)
+    for (int ch = 0; ch < piano::kAudioBusCount; ++ch)
         mSynthChannelPtrs[ch] = mSynthChannelBuffers.data() + static_cast<size_t>(ch) * mMaxSynthFrames * 2;
 
     // Prepare the master effect chain scratch buffers at the same max as
@@ -793,18 +793,18 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
             if (eventOffset < offset) eventOffset = offset;
             if (eventOffset > safeFrames) eventOffset = safeFrames;
             if (eventOffset > offset) {
-                for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
+                for (int ch = 0; ch < piano::kAudioBusCount; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
                 float* sharedReturn = mSynthReturnBuffer.data() + offset * 2;
                 renderSynthSegment(mSynthSegmentPtrs, sharedReturn, eventOffset - offset);
                 measureStageCpu(stageCpuNs[1], [&] { mInstrumentEffects.process(mSynthSegmentPtrs,eventOffset-offset); });
-                float* delayBuses[piano::kInstrumentChannelCount];
-                for (int ch=0; ch<piano::kInstrumentChannelCount; ++ch) delayBuses[ch]=mSynthSegmentPtrs[ch];
+                float* delayBuses[piano::kAudioBusCount];
+                for (int ch=0; ch<piano::kAudioBusCount; ++ch) delayBuses[ch]=mSynthSegmentPtrs[ch];
                 measureStageCpu(stageCpuNs[2], [&] {
                     mInstrumentDelays.process(delayBuses, eventOffset - offset, mTransport.bpmMicros / 1000000.0);
                 });
                 measureStageCpu(stageCpuNs[3], [&] {
                     for (int f = offset; f < eventOffset; ++f)
-                        for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) {
+                        for (int ch = 0; ch < piano::kAudioBusCount; ++ch) {
                             track0[f * 2] += mSynthChannelPtrs[ch][f * 2];
                             track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
                         }
@@ -815,18 +815,18 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
             offset = eventOffset;
         }
         if (offset < safeFrames) {
-            for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
+            for (int ch = 0; ch < piano::kAudioBusCount; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
             float* sharedReturn = mSynthReturnBuffer.data() + offset * 2;
             renderSynthSegment(mSynthSegmentPtrs, sharedReturn, safeFrames - offset);
             measureStageCpu(stageCpuNs[1], [&] { mInstrumentEffects.process(mSynthSegmentPtrs,safeFrames-offset); });
-            float* delayBuses[piano::kInstrumentChannelCount];
-            for (int ch=0; ch<piano::kInstrumentChannelCount; ++ch) delayBuses[ch]=mSynthSegmentPtrs[ch];
+            float* delayBuses[piano::kAudioBusCount];
+            for (int ch=0; ch<piano::kAudioBusCount; ++ch) delayBuses[ch]=mSynthSegmentPtrs[ch];
             measureStageCpu(stageCpuNs[2], [&] {
                 mInstrumentDelays.process(delayBuses, safeFrames - offset, mTransport.bpmMicros / 1000000.0);
             });
             measureStageCpu(stageCpuNs[3], [&] {
                 for (int f = offset; f < safeFrames; ++f)
-                    for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) {
+                    for (int ch = 0; ch < piano::kAudioBusCount; ++ch) {
                         track0[f * 2] += mSynthChannelPtrs[ch][f * 2];
                         track0[f * 2 + 1] += mSynthChannelPtrs[ch][f * 2 + 1];
                     }

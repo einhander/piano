@@ -96,7 +96,7 @@ int main() {
     std::array<std::array<float,frames*2>,kInstrumentChannelCount> data{};
     std::array<std::array<float,frames*2>,kInstrumentChannelCount> before{};
     std::array<float*,kInstrumentChannelCount> buses{};
-    for(int c=0;c<kInstrumentChannelCount;++c) {
+    for(int c=0;c<kAudioBusCount;++c) {
         buses[c]=data[c].data();
         for(int i=0;i<frames*2;++i) data[c][i]=before[c][i]=float(c+i+1);
     }
@@ -105,8 +105,8 @@ int main() {
     assert(data==before);
 
     assert(manager.instantiate(2,0) && manager.instantiate(7,0));
-    assert(manager.instantiate(127,0));
-    assert(!manager.instantiate(128,0));
+    assert(manager.instantiate(15,0));
+    assert(!manager.instantiate(16,0));
     assert(!manager.setEffectEnabledChecked(3,1,true));
     assert(manager.setParameterChecked(2,0,id,lo));
     assert(manager.setParameterChecked(7,0,id,hi));
@@ -115,13 +115,13 @@ int main() {
     assert(manager.setEffectEnabledChecked(2,0,true));
     assert(manager.setEffectEnabledChecked(7,0,true));
 
-    for(int c=0;c<kInstrumentChannelCount;++c) {
+    for(int c=0;c<kAudioBusCount;++c) {
         for(int i=0;i<frames*2;++i) data[c][i]=before[c][i]=float(c+i+1);
     }
     // Unavailable slot and disabled racks are exact passthrough while other
     // channels have active effects.
     manager.process(buses.data(),frames);
-    for(int c=0;c<kInstrumentChannelCount;++c) if(c!=2 && c!=7) assert(data[c]==before[c]);
+    for(int c=0;c<kAudioBusCount;++c) if(c!=2 && c!=7) assert(data[c]==before[c]);
     assert(data[2][2] == before[2][2]);
     assert(data[2][(frames-1)*2] >= before[2][(frames-1)*2]);
 
@@ -137,9 +137,9 @@ int main() {
     assert(manager.getParameter(2,0,id)==lo && manager.getParameter(7,0,id)==hi);
     assert(manager.rackEnabled(2) && manager.rackEnabled(7));
     assert(manager.effectEnabled(2,0) && manager.effectEnabled(7,0));
-    for(int c=0;c<kInstrumentChannelCount;++c) for(int i=0;i<frames*2;++i) data[c][i]=before[c][i]=float(c+i+1);
+    for(int c=0;c<kAudioBusCount;++c) for(int i=0;i<frames*2;++i) data[c][i]=before[c][i]=float(c+i+1);
     manager.process(buses.data(),frames);
-    for(int c=0;c<kInstrumentChannelCount;++c) if(c!=2 && c!=7) assert(data[c]==before[c]);
+    for(int c=0;c<kAudioBusCount;++c) if(c!=2 && c!=7) assert(data[c]==before[c]);
     assert(data[2][2] == before[2][2]);
 
     manager.setEffectEnabled(2,0,false);
@@ -152,19 +152,19 @@ int main() {
     manager.process(buses.data(),frames);
     assert(data[7][0] >= before[7][0]-hi);
     assert(data[7][0] <= before[7][0]+hi);
-    for(int c=0;c<kInstrumentChannelCount;++c) if(c!=7) assert(data[c]==before[c]);
-    assert(manager.setParameterChecked(127,0,id,hi));
-    assert(manager.rackEnabled(127)==false);
-    assert(manager.getParameter(127,0,id)==hi);
+    for(int c=0;c<kAudioBusCount;++c) if(c!=7) assert(data[c]==before[c]);
+    assert(manager.setParameterChecked(15,0,id,hi));
+    assert(manager.rackEnabled(15)==false);
+    assert(manager.getParameter(15,0,id)==hi);
     assert(manager.setParameterChecked(0,0,id,lo));
-    assert(manager.getParameter(0,0,id)==lo && manager.getParameter(16,0,id)==0.0f);
-    assert(manager.resetChannelRange(127,1));
-    assert(!manager.rackEnabled(127) && !manager.effectEnabled(127,0));
-    assert(manager.getParameterChecked(127,0,id,read) && read==def);
+    assert(manager.getParameter(0,0,id)==lo && manager.getParameter(1,0,id)==0.0f);
+    assert(manager.resetChannelRange(15,1));
+    assert(!manager.rackEnabled(15) && !manager.effectEnabled(15,0));
+    assert(manager.getParameterChecked(15,0,id,read) && read==def);
     assert(manager.getParameter(7,0,id)==hi);
-    assert(!manager.resetChannelRange(127,2));
+    assert(!manager.resetChannelRange(15,2));
     assert(!manager.resetChannelRange(-1,1));
-    assert(manager.resetChannelRange(128,0));
+    assert(manager.resetChannelRange(16,0));
 
     // Clipper alignment ring is warm before publication, preserves old all-OFF
     // samples exactly, and stays active when rack/slot bypassed after arming.
@@ -258,7 +258,7 @@ int main() {
     assert(!invalid.instantiate(0,lsp::kSlotClipper));
     fakeClipperLatency=2;
 
-    // Bounded 128-channel clipper-rack benchmark. Disabled-but-published case
+    // Bounded 16-bus clipper-rack benchmark. Disabled-but-published case
     // mirrors the callback's warm/latency-alignment path; host numbers are not
     // representative of device callback budgets.
     constexpr int benchFrames=256, benchIterations=500;
@@ -266,7 +266,7 @@ int main() {
     assert(bench.prepare(48000,benchFrames));
     std::array<std::array<float,benchFrames*2>,kInstrumentChannelCount> benchData{};
     std::array<float*,kInstrumentChannelCount> benchBuses{};
-    for(int c=0;c<kInstrumentChannelCount;++c) {
+    for(int c=0;c<kAudioBusCount;++c) {
         benchBuses[c]=benchData[c].data();
         assert(bench.instantiate(c,lsp::kSlotClipper)); // published; bypassed and disabled
     }
@@ -280,7 +280,7 @@ int main() {
             us.push_back(std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count());
         }
         std::sort(us.begin(),us.end());
-        std::cerr << "InstrumentEffectManager 128 channels, " << label << ", 256 frames: median "
+        std::cerr << "InstrumentEffectManager 16 buses, " << label << ", 256 frames: median "
                   << us[benchIterations/2] << " us, p95 " << us[benchIterations*95/100] << " us\n";
     };
     measure("published clipper disabled");

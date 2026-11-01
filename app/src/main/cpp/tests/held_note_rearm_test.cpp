@@ -86,17 +86,18 @@ int main(int argc, char** argv) {
             return fail("A: loadSoundFont failed: %s", sf2Path);
         }
 
-        // Absolute file channels remain valid through 127, while wider values
-        // are rejected rather than folded or passed to FluidSynth.
-        if (!synth.setChannelProgram(127, 258, 12) || synth.setChannelProgram(128, 258, 12) ||
+        // Diagnostic synth accepts only Main channels 0..15; wider MIDI
+        // identities are preserved by parser but rejected at synth boundary.
+        if (!synth.setChannelProgram(15, 258, 12) || synth.setChannelProgram(16, 258, 12) ||
             synth.setChannelProgram(255, 258, 12))
             return fail("A: channel-program bounds mismatch");
         synth.processCommands();
         int extendedBank = -1, extendedProgram = -1;
-        if (!synth.getChannelProgram(127, extendedBank, extendedProgram) ||
+        if (!synth.getChannelProgram(15, extendedBank, extendedProgram) ||
             extendedBank != 258 || extendedProgram != 12)
-            return fail("A: extended-channel preset state mismatch");
-        if (synth.getChannelProgram(128, extendedBank, extendedProgram))
+            return fail("A: channel-15 preset state mismatch");
+        if (synth.getChannelProgram(16, extendedBank, extendedProgram) ||
+            synth.getChannelProgram(127, extendedBank, extendedProgram))
             return fail("A: out-of-range channel-program query accepted");
         for (int channel : {16, 127}) {
             MidiMessage high = mkMsg(0x90, 61, 90, 1);
@@ -107,9 +108,9 @@ int main(int argc, char** argv) {
             synth.processOneMidi(high);
         }
         if (synth.getActiveChannelMask() != 0)
-            return fail("A: legacy 16-bit activity mask unexpectedly includes file channels");
+            return fail("A: rejected extended-channel events changed activity mask");
 
-        // A0: Each MIDI channel maps to its corresponding dry stereo bus.
+        // A0: Each supported MIDI channel maps to its corresponding dry stereo bus.
         // Global FluidSynth effects return is exposed independently, not folded
         // into any dry channel bus. Channel 10 uses percussion bank behavior
         // that varies with the test SF2, so keep this fixture on channel 2.

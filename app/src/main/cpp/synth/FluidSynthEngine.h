@@ -61,7 +61,7 @@ class FluidSynthEngine {
 public:
     // Runtime routing supports absolute MIDI channels 0..127. MIDI channel
     // numbers are preserved; no modulo/folding is performed.
-    static constexpr int kInstrumentChannelCount = piano::kInstrumentChannelCount;
+    static constexpr int kInstrumentChannelCount = piano::kAudioBusCount;
     static constexpr int kMaxPolyphony = 2048;
     // Callback admission: exactly one non-blocking attempt per callback.
     bool tryEnterAudioCallback();
@@ -136,9 +136,9 @@ public:
     // Audio thread only (inside the synth access region). NO allocations.
     void render(float* output, int numFrames);
 
-    // Render one dry stereo bus for each absolute MIDI channel (0..127), plus
+    // Render one dry stereo bus for each supported MIDI channel (0..15), plus
     // FluidSynth's distinct shared stereo reverb/chorus return. All
-    // destinations are interleaved and may be null. Contract: outputs has 128
+    // destinations are interleaved and may be null. Contract: outputs has 16
     // entries. The return is reported exactly once, never added to a channel.
     void renderChannels(float* const outputs[kInstrumentChannelCount], float* sharedReturn, int numFrames);
 
@@ -311,7 +311,7 @@ private:
 
     int mSampleRate = 48000;
     int mBufferSize = 0;
-    // Fixed-size planar scratch for FluidSynth process() (128 stereo audio
+    // Fixed-size planar scratch for FluidSynth process() (16 stereo audio
     // groups + FluidSynth's shared stereo effects return). Allocated once on
     // the control thread and reused for every event-split segment.
     static constexpr int kAudioGroups = kInstrumentChannelCount;

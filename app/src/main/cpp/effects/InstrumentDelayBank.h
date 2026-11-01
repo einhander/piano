@@ -11,7 +11,7 @@
 // setParameter/getParameter may run concurrently with process().
 class InstrumentDelayBank {
 public:
-    static constexpr int kChannels = piano::kInstrumentChannelCount;
+    static constexpr int kChannels = piano::kAudioBusCount;
     static constexpr int kParameterCount = 6;
     bool prepare(double sampleRate, int maxFrames) noexcept;
     bool prepared() const noexcept { return mPrepared.load(std::memory_order_acquire); }

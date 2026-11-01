@@ -41,9 +41,9 @@ int main() {
     assert(!q.pop(out));
 
     SynthCmd reset{};
-    assert(makeResetChannelRangeCommand(16, 16, 128, reset));
-    assert(reset.type == SynthCmdType::RESET_CHANNEL_RANGE && reset.a == 16 && reset.b == 16);
-    assert(!makeResetChannelRangeCommand(112, 17, 128, reset));
+    assert(makeResetChannelRangeCommand(0, 16, 16, reset));
+    assert(reset.type == SynthCmdType::RESET_CHANNEL_RANGE && reset.a == 0 && reset.b == 16);
+    assert(!makeResetChannelRangeCommand(0, 17, 16, reset));
 
     // Exercise same lock + update/queue/commit transaction used by engine
     // compatibility setters; distinct concurrent fields must not overwrite.

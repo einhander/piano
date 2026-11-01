@@ -7,19 +7,20 @@
 #include <chrono>
 #include <vector>
 
-// Host integration test against bundled FluidSynth. Pass repo's bundled SF2
-// path as argv[1]. This exercises the actual synth channel->audio-group map,
-// not a mock of the production channel arithmetic.
+// Host integration test against bundled FluidSynth. Diagnostic contract has
+// 16 output buses: channel 15 renders; extended channel 16 is rejected by
+// production FluidSynthEngine (this test checks actual FluidSynth group layout).
 int main(int argc, char** argv) {
     assert(argc == 2);
-    constexpr int channels = 128;
+    constexpr int channels = 16;
+    constexpr int midiChannels = 128;
     constexpr int frames = 4096;
     fluid_settings_t* settings = new_fluid_settings();
     assert(settings);
     fluid_settings_setnum(settings, "synth.sample-rate", 48000.0);
     fluid_settings_setint(settings, "synth.audio-groups", channels);
     fluid_settings_setint(settings, "synth.audio-channels", channels);
-    fluid_settings_setint(settings, "synth.midi-channels", channels);
+    fluid_settings_setint(settings, "synth.midi-channels", midiChannels);
     fluid_settings_setint(settings, "synth.effects-groups", 1);
     fluid_settings_setint(settings, "synth.cpu-cores", 1);
     fluid_synth_t* synth = new_fluid_synth(settings);
@@ -27,9 +28,9 @@ int main(int argc, char** argv) {
     const int sfid = fluid_synth_sfload(synth, argv[1], 1);
     assert(sfid >= 0);
 
-    constexpr int active[] = {0, 16, 127};
-    constexpr int notes[] = {48, 60, 72};
-    for (int i = 0; i < 3; ++i) {
+    constexpr int active[] = {0, 15};
+    constexpr int notes[] = {48, 60};
+    for (int i = 0; i < 2; ++i) {
         fluid_synth_program_select(synth, active[i], sfid, 0, 0);
         assert(fluid_synth_noteon(synth, active[i], notes[i], 110) == FLUID_OK);
     }
@@ -51,12 +52,11 @@ int main(int argc, char** argv) {
     }
     for (int ch : active) assert(energy[ch] > 1e-5);
     for (int ch = 0; ch < channels; ++ch) {
-        if (ch != 0 && ch != 16 && ch != 127) assert(energy[ch] < 1e-12);
+        if (ch != 0 && ch != 15) assert(energy[ch] < 1e-12);
     }
-    assert(energy[0] != energy[16] && energy[16] != energy[127] && energy[0] != energy[127]);
+    assert(energy[0] != energy[15]);
 
-    // Focused render benchmark: alternate 16/128 groups after identical note
-    // setup. Host timing is comparative only; device callback cost differs.
+    // Focused diagnostic render benchmark, using the production 16-group layout.
     constexpr int block = 64;
     constexpr int iterations = 1000;
     constexpr int warmup = 100;
@@ -66,8 +66,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < channels * 2; ++i) benchDryPtrs[i] = benchDry.data() + static_cast<size_t>(i) * block;
     float* benchFxPtrs[] = {benchFx.data(), benchFx.data() + block};
     const auto benchmark = [&](int groups) {
-        // Repeat identical render with each output-group setting. Channels
-        // above 15 remain configured, preserving 0/16/127 isolation coverage.
+        // Settings are construction-time; build fresh synth with requested groups.
         fluid_settings_setint(settings, "synth.audio-groups", groups);
         fluid_settings_setint(settings, "synth.audio-channels", groups);
         // Settings are construction-time; reconfigure through a fresh synth.
@@ -75,7 +74,7 @@ int main(int argc, char** argv) {
         assert(measured);
         const int measuredSfid = fluid_synth_sfload(measured, argv[1], 1);
         assert(measuredSfid >= 0);
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 2; ++i) {
             fluid_synth_program_select(measured, active[i], measuredSfid, 0, 0);
             assert(fluid_synth_noteon(measured, active[i], notes[i], 110) == FLUID_OK);
         }
@@ -94,7 +93,6 @@ int main(int argc, char** argv) {
         delete_fluid_synth(measured);
     };
     benchmark(16);
-    benchmark(128);
 
     delete_fluid_synth(synth);
     delete_fluid_settings(settings);

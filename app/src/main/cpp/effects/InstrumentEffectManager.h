@@ -16,7 +16,7 @@ class InstrumentEffectManager {
 public:
     using EffectFactory = std::unique_ptr<AudioEffect> (*)(int slot);
     enum class PrepareStatus : uint8_t { Unprepared, Ready, InvalidArguments, AllocationFailed, ReprepareRequiresQuiescence };
-    static constexpr int kChannels = kInstrumentChannelCount;
+    static constexpr int kChannels = kAudioBusCount;
     static constexpr int kEffects = lsp::kInstrumentEffectCount;
     explicit InstrumentEffectManager(EffectFactory factory = nullptr) noexcept;
     ~InstrumentEffectManager();
