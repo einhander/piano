@@ -179,12 +179,16 @@ Kotlin plugins: `org.jetbrains.kotlin.android`, `org.jetbrains.kotlin.plugin.ser
 
 ## Dev-machine toolchain (this container)
 
-- JDK 17 Temurin at `/opt/jdk-17`; Android SDK at `/opt/android-sdk`
+- Toolchain lives under `~/tools`, not `/opt`: JDK 17 Temurin at
+  `~/tools/jdk-17.0.14+7`; Android SDK at `~/tools/android-sdk`
   (platform android-34, build-tools 34.0.0, ndk 26.1.10909125, cmake 3.22.1,
   platform-tools, cmdline-tools/latest). Env exports live in `~/.piano_env.sh`
   (sourced from `~/.bashrc` and `~/.profile`); `local.properties` points at the
   SDK root. System `g++` 14.2 + `cmake` 3.31 are used only for the LSP host
   build / offline tests.
+- Before building, set `JAVA_HOME="$HOME/tools/jdk-17.0.14+7"`,
+  `ANDROID_HOME="$HOME/tools/android-sdk"`, `ANDROID_SDK_ROOT="$ANDROID_HOME"`,
+  and prepend `"$JAVA_HOME/bin"` to `PATH`. Do not assume shell exports are loaded.
 - Build/verify: `./build.sh debug` must print `BUILD SUCCESSFUL`; unit tests
   `./gradlew :app:testDebugUnitTest` must pass.
 - Shallow-clone gotcha: the `oboe`/`fluidsynth` submodules are NOT fetched by

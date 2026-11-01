@@ -611,7 +611,7 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             mRecentNoteOnMask.store(0, std::memory_order_relaxed);
             break;
         case SynthCmdType::RESET_CHANNEL_RANGE:
-            if (cmd.a >= 0 && cmd.b >= 0 && cmd.a <= kAudioBusCount && cmd.b <= kAudioBusCount - cmd.a) {
+            if (cmd.a >= 0 && cmd.b >= 0 && cmd.a <= piano::kAudioBusCount && cmd.b <= piano::kAudioBusCount - cmd.a) {
                 for (int ch = cmd.a; ch < cmd.a + cmd.b; ++ch) {
                     fluid_synth_all_sounds_off(synth, ch);
                     fluid_synth_cc(synth, ch, 64, 0);
