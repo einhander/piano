@@ -57,6 +57,13 @@
     <string name="settings_off">Off</string>
     <string name="settings_btn_settings">Settings</string>
     <string name="settings_midi_title">MIDI</string>
+    <string name="settings_midi_learn_title">MIDI Learn actions</string>
+    <string name="settings_midi_learn_hint">Tap Learn, then send a MIDI control to assign it to an action.</string>
+    <string name="settings_midi_learn_record">Record</string>
+    <string name="settings_midi_learn_panic">Panic</string>
+    <string name="settings_midi_learn_unassigned">Not assigned</string>
+    <string name="settings_midi_learn_record_description">Learn MIDI control for Record</string>
+    <string name="settings_midi_learn_panic_description">Learn MIDI control for Panic</string>
     <string name="settings_pitch_bend_channels_label">Pitch bend &amp; mod channels</string>
     <string name="settings_pitch_bend_channels_desc">Channels that pitch bend and modulation follow before the first note is played.</string>
     <string name="settings_channel_n">Channel %d</string>

@@ -40,6 +40,16 @@ class SettingsActivity : AppCompatActivity() {
 
 
     private val ccController get() = (application as PianoApp).instrumentEffectCcController
+    private val actionMapper get() = (application as PianoApp).actionMidiMapper
+    private val learnTimeout = android.os.Handler(android.os.Looper.getMainLooper())
+    private val timeoutTask = Runnable {
+        val timedOutAction = actionLearn
+        if (timedOutAction != null) {
+            actionMapper.cancelLearn()
+            actionLearn = null
+            refreshActionMidiLabels("Learning timed out.", timedOutAction)
+        }
+    }
     private var ownsLearn = false
     private var learnUiActive = false
     private var learnDialog: AlertDialog? = null
@@ -48,6 +58,10 @@ class SettingsActivity : AppCompatActivity() {
     private val reverbMappingRows = mutableMapOf<String, LinearLayout>()
 
     override fun onPause() {
+        actionMapper.cancelLearn()
+        learnTimeout.removeCallbacks(timeoutTask)
+        (application as PianoApp).setActionMidiLearnListener(null)
+        actionLearn = null
         learnUiActive = false
         if (ownsLearn) ccController.cancelLearn()
         ownsLearn = false
@@ -57,6 +71,7 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun refresh() {
+        if (::btnRecordMidiLearn.isInitialized) refreshActionMidiLabels()
         reverbMappingRows.forEach { (id, row) ->
             row.removeAllViews()
             val p = parameters["fluidsynth.reverb" to id] ?: return@forEach
@@ -71,6 +86,39 @@ class SettingsActivity : AppCompatActivity() {
             }
             if (row.childCount == 0) row.addView(label("No MIDI CC assigned · Shared across all instrument sets"))
         }
+    }
+
+    private lateinit var btnRecordMidiLearn: Button
+    private lateinit var btnPanicMidiLearn: Button
+    private lateinit var tvRecordMidiAssignment: TextView
+    private lateinit var tvPanicMidiAssignment: TextView
+    private var actionLearn: MidiAction? = null
+
+    private fun refreshActionMidiLabels(message: String? = null, statusAction: MidiAction? = actionLearn) {
+        tvRecordMidiAssignment.text = when {
+            message != null && statusAction == MidiAction.RECORD -> message
+            actionLearn == MidiAction.RECORD -> "Listening for one MIDI event…"
+            else -> actionMapper.mapping(MidiAction.RECORD)?.describe() ?: getString(R.string.settings_midi_learn_unassigned)
+        }
+        tvPanicMidiAssignment.text = when {
+            message != null && statusAction == MidiAction.PANIC -> message
+            actionLearn == MidiAction.PANIC -> "Listening for one MIDI event…"
+            else -> actionMapper.mapping(MidiAction.PANIC)?.describe() ?: getString(R.string.settings_midi_learn_unassigned)
+        }
+        btnRecordMidiLearn.text = if (actionLearn == MidiAction.RECORD) "Listening…" else getString(R.string.ui_learn)
+        btnPanicMidiLearn.text = if (actionLearn == MidiAction.PANIC) "Listening…" else getString(R.string.ui_learn)
+    }
+
+    private fun startActionLearn(action: MidiAction) {
+        if (actionLearn == action) { actionMapper.cancelLearn(); actionLearn = null; learnTimeout.removeCallbacks(timeoutTask); refreshActionMidiLabels("Learning cancelled.", action); return }
+        if (actionLearn != null) { actionMapper.cancelLearn(); actionLearn = null; learnTimeout.removeCallbacks(timeoutTask) }
+        if (ccController.isLearning() || MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
+            Toast.makeText(this, "Finish other MIDI Learn first.", Toast.LENGTH_SHORT).show(); return
+        }
+        if (!actionMapper.startLearn(action)) { Toast.makeText(this, "Another action learn is active.", Toast.LENGTH_SHORT).show(); return }
+        actionLearn = action
+        refreshActionMidiLabels("Listening for one MIDI event…")
+        learnTimeout.postDelayed(timeoutTask, 10_000L)
     }
 
     private fun addReverbLearnRow(controls: LinearLayout, mappings: LinearLayout, p: EffectParameter) {
@@ -200,6 +248,17 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        (application as PianoApp).setActionMidiLearnListener { result ->
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                val completedAction = actionLearn ?: return@runOnUiThread
+                learnTimeout.removeCallbacks(timeoutTask)
+                actionLearn = null
+                val message = if (result.captured != null) "MIDI assignment saved."
+                    else "This MIDI control is already assigned to ${result.conflict?.name?.lowercase()}."
+                refreshActionMidiLabels(message, completedAction)
+            }
+        }
         learnUiActive = true
         refreshRecordingFolder()
         if (service != null) CompletableFuture.runAsync({ loadCurrentValues() }, mainExecutor)
@@ -217,6 +276,13 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         btnBrowse = findViewById(R.id.btnBrowse)
+        btnRecordMidiLearn = findViewById(R.id.btnRecordMidiLearn)
+        btnPanicMidiLearn = findViewById(R.id.btnPanicMidiLearn)
+        tvRecordMidiAssignment = findViewById(R.id.tvRecordMidiAssignment)
+        tvPanicMidiAssignment = findViewById(R.id.tvPanicMidiAssignment)
+        btnRecordMidiLearn.setOnClickListener { startActionLearn(MidiAction.RECORD) }
+        btnPanicMidiLearn.setOnClickListener { startActionLearn(MidiAction.PANIC) }
+        refreshActionMidiLabels()
         tvRecordingFolder = findViewById(R.id.tvRecordingFolder)
         btnRecordingFolder = findViewById(R.id.btnRecordingFolder)
         btnRecordingFolder.setOnClickListener {
@@ -752,6 +818,10 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun learn(p: EffectParameter) {
+        if (actionMapper.isLearning()) {
+            Toast.makeText(this, "Finish current MIDI Learn first.", Toast.LENGTH_SHORT).show()
+            return
+        }
         if (ccController.isLearning()) {
             Toast.makeText(this, "Finish current MIDI Learn first.", Toast.LENGTH_SHORT).show()
             return

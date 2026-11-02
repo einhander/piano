@@ -43,6 +43,9 @@ import com.piano.sequencer.midi.PitchBendChannelResolver
 import com.piano.sequencer.midi.MultiChannelResolver
 import com.piano.sequencer.midi.MidiIngressRouter
 import com.piano.sequencer.midi.MidiInputTrace
+import com.piano.sequencer.midi.ActionMidiMapper
+import com.piano.sequencer.midi.MidiAction
+import com.piano.sequencer.midi.MidiTriggerType
 import com.piano.sequencer.midi.SequencerCell
 import com.piano.sequencer.midi.noteToName
 import com.piano.sequencer.project.PseqArchive
@@ -112,6 +115,21 @@ class MainActivity : AppCompatActivity() {
     private lateinit var midiManager: MidiDeviceManager
     private lateinit var midiInputReceiver: MidiInputReceiver
     private lateinit var midiIngress: MidiIngressRouter
+    private val actionMidiMapper get() = (application as PianoApp).actionMidiMapper
+
+    private fun dispatchActionMidi(action: MidiAction) {
+        runOnUiThread {
+            when (action) {
+                MidiAction.RECORD -> toggleAudioRecording()
+                MidiAction.PANIC -> dispatchMidi { it.panic() }
+            }
+        }
+    }
+
+    private fun toggleAudioRecording() {
+        if (audioRecordingActive) onStopRecordingRequested()
+        else onStartRecordingRequested()
+    }
 
     // Channel of the last note played — pitch bend / mod / breath follow this
     // channel. -1 until the first note. MIDI input callbacks run on binder
@@ -987,13 +1005,26 @@ class MainActivity : AppCompatActivity() {
         )
         midiInputReceiver.setCallback(object : MidiInputReceiver.Callback {
             override fun onNoteOn(channel: Int, note: Int, velocity: Int, source: String) {
-                withMidiIngress { midiIngress.noteOn(channel, note, velocity, source) }
+                withMidiIngress {
+                    val result = actionMidiMapper.event(MidiTriggerType.NOTE_ON, channel, note, velocity)
+                    if (result.captured != null || result.conflict != null) runOnUiThread {
+                        (application as PianoApp).notifyActionMidiLearn(result)
+                    }
+                    result.action?.let(::dispatchActionMidi)
+                    if (!result.consumed) midiIngress.noteOn(channel, note, velocity, source)
+                }
             }
             override fun onNoteOff(channel: Int, note: Int, velocity: Int, source: String) {
-                withMidiIngress { midiIngress.noteOff(channel, note, velocity, source) }
+                withMidiIngress {
+                    if (!actionMidiMapper.consumesNoteOff(channel, note)) midiIngress.noteOff(channel, note, velocity, source)
+                }
             }
             override fun onControlChange(channel: Int, controller: Int, value: Int, source: String) {
                 withMidiIngress {
+                val actionResult = actionMidiMapper.event(MidiTriggerType.CC, channel, controller, value)
+                if (actionResult.captured != null || actionResult.conflict != null) runOnUiThread { (application as PianoApp).notifyActionMidiLearn(actionResult) }
+                actionResult.action?.let(::dispatchActionMidi)
+                if (actionResult.consumed) return@withMidiIngress
                 val effectController = (application as PianoApp).instrumentEffectCcController
                 midiIngress.controlChange(
                     channel, controller, value, source,
@@ -1015,6 +1046,10 @@ class MainActivity : AppCompatActivity() {
             }
             override fun onProgramChange(channel: Int, program: Int, source: String) {
                 withMidiIngress {
+                val actionResult = actionMidiMapper.event(MidiTriggerType.PROGRAM, channel, program, 0)
+                if (actionResult.captured != null || actionResult.conflict != null) runOnUiThread { (application as PianoApp).notifyActionMidiLearn(actionResult) }
+                actionResult.action?.let(::dispatchActionMidi)
+                if (actionResult.consumed) return@withMidiIngress
                 val consumed = MidiFileTriggerController.get(this@MainActivity).onProgramChange(channel, program, source)
                 AppLogger.info("MIDI", "PROGRAM ch=${channel + 1} program=$program outcome=${if (consumed) "consumed" else "not-consumed/forwarded"}")
                 if (consumed) return

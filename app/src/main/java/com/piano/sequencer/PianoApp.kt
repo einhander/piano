@@ -20,6 +20,11 @@ import java.util.Locale
  * the app's private filesDir.
  */
 class PianoApp : Application() {
+    lateinit var actionMidiMapper: com.piano.sequencer.midi.ActionMidiMapper
+        private set
+    @Volatile private var actionMidiLearnListener: ((com.piano.sequencer.midi.ActionMidiMapper.Result) -> Unit)? = null
+    fun setActionMidiLearnListener(listener: ((com.piano.sequencer.midi.ActionMidiMapper.Result) -> Unit)?) { actionMidiLearnListener = listener }
+    fun notifyActionMidiLearn(result: com.piano.sequencer.midi.ActionMidiMapper.Result) { actionMidiLearnListener?.invoke(result) }
     lateinit var instrumentEffectCcController: com.piano.sequencer.midi.InstrumentEffectCcController
         private set
     @Volatile private var playbackServiceAlive = false
@@ -52,6 +57,7 @@ class PianoApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instrumentEffectCcController = com.piano.sequencer.midi.InstrumentEffectCcController(this)
+        actionMidiMapper = com.piano.sequencer.midi.ActionMidiMapper(getSharedPreferences("piano_prefs", MODE_PRIVATE))
         com.piano.sequencer.midi.MidiFileLearnState.onStarting = { instrumentEffectCcController.cancelLearnWithResult() }
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
