@@ -57,6 +57,24 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     private var bound = false
     private val expanded = mutableSetOf<String>()
     private val ccController get() = (application as PianoApp).instrumentEffectCcController
+    private val valueRefreshers = mutableListOf<() -> Unit>()
+    private val feedbackHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val feedback = object : Runnable {
+        override fun run() {
+            if (service != null) valueRefreshers.forEach { it() }
+            feedbackHandler.postDelayed(this, 50)
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        feedbackHandler.post(feedback)
+    }
+
+    override fun onStop() {
+        feedbackHandler.removeCallbacks(feedback)
+        super.onStop()
+    }
     private var learnDialog: AlertDialog? = null
     private var ownsLearn = false
     private val learnedSources = mutableMapOf<Pair<String, String>, String>()
@@ -225,6 +243,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     }
 
     private fun render(rack: Boolean, instances: List<EffectInstance>, failed: Boolean) {
+        valueRefreshers.clear()
         parameters = instances.flatMap { instance -> instance.parameters.map { (instance.descriptor.stableId to it.stableId) to it } }.toMap()
         container.removeAllViews()
         status.text = "$targetLabel\n" + if (failed) failureDetail ?: getString(R.string.instrument_effects_error) else getString(R.string.instrument_effects_hint)
@@ -709,13 +728,32 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                 max = 1000
                 progress = instrumentParameterProgress(p, p.value.rawValue)
                 contentDescription = p.displayName
+                var dragging = false
+                var saving = false
+                var displayedRaw = p.value.rawValue
+                val targetSet = setId
+                val targetChannel = channel
+                valueRefreshers.add {
+                    if (isAttachedToWindow && !dragging && !saving && isEnabled &&
+                        setId == targetSet && channel == targetChannel) {
+                        val raw = ccController.cachedValue(targetSet, targetChannel, id, p.stableId, scope(id))
+                        if (raw != null && raw.isFinite() && raw != displayedRaw) {
+                            displayedRaw = raw
+                            progress = instrumentParameterProgress(p, raw)
+                            value.text = "${p.displayName}: ${instrumentValueLabel(p, raw)}"
+                        }
+                    }
+                }
                 setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                     private var tracking = false
                     private fun save(progress: Int) {
                         val raw = instrumentParameterValue(p, progress)
+                        displayedRaw = raw
+                        saving = true
                         submit { svc ->
-                            if (!setParameter(svc, id, p, raw))
-                                renderSnapshot(svc, true)
+                            try {
+                                if (!setParameter(svc, id, p, raw)) renderSnapshot(svc, true)
+                            } finally { ui { saving = false } }
                         }
                     }
                     override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -724,9 +762,10 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                         // Keyboard/accessibility changes do not call onStopTrackingTouch.
                         if (fromUser && !tracking) save(progress)
                     }
-                    override fun onStartTrackingTouch(bar: SeekBar?) { tracking = true }
+                    override fun onStartTrackingTouch(bar: SeekBar?) { tracking = true; dragging = true }
                     override fun onStopTrackingTouch(bar: SeekBar?) {
                         tracking = false
+                        dragging = false
                         save(bar?.progress ?: 0)
                     }
                 })
@@ -749,7 +788,8 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         val name = if (m.parameterId == "-1") "Insert enabled" else parameters[m.effectId to m.parameterId]?.displayName ?: "Parameter ${m.parameterId}"
         val effect = EFFECTS.firstOrNull { it.first == m.effectId }?.second?.let { getString(it) } ?: m.effectId
         val target = if (m.scope == EffectCcScope.GLOBAL && m.parameterId != "6") "Shared · all instrument sets" else "${if (m.targetInstrumentSetId == MAIN_INSTRUMENT_SET_ID) "Main" else if (m.targetInstrumentSetId == setId) setName else "File set ${m.targetInstrumentSetId}"} · channel ${m.targetInstrumentChannel + 1}"
-        return "${m.source ?: "Any source"} · MIDI ch ${m.inputChannel?.plus(1) ?: "Any"} · CC ${m.controller}\n$target · $effect · $name\nRaw ${m.minRaw}–${m.maxRaw}${if (m.invert) " · Inverted" else ""} · Soft takeover · ${if (m.disposition == CcDisposition.PASS) "Pass-through" else "Consume"}"
+        val controller = if (m.controllerType == com.piano.sequencer.midi.EffectControllerType.PITCH_BEND) "PB" else "CC ${m.controller}"
+        return "${m.source ?: "Any source"} · MIDI ch ${m.inputChannel?.plus(1) ?: "Any"} · $controller\n$target · $effect · $name\nRaw ${m.minRaw}–${m.maxRaw}${if (m.invert) " · Inverted" else ""} · Soft takeover · ${if (m.disposition == CcDisposition.PASS) "Pass-through" else "Consume"}"
     }
 
     private fun learn(id: String, p: EffectParameter) {
@@ -790,7 +830,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             mapping != null && result.conflict != null -> confirmConflict(mapping, result.conflict.existing)
             mapping != null -> {
                 refresh()
-                AlertDialog.Builder(this).setTitle("MIDI CC captured").setMessage(mappingDescription(mapping) + ccWarning(mapping.controller))
+                AlertDialog.Builder(this).setTitle("MIDI controller captured").setMessage(mappingDescription(mapping) + if (mapping.controllerType == com.piano.sequencer.midi.EffectControllerType.CC) ccWarning(mapping.controller) else "")
                     .setPositiveButton("Edit mapping") { _, _ -> editMapping(mapping, parameters[mapping.effectId to mapping.parameterId]) }
                     .setNegativeButton("Done", null).show()
             }

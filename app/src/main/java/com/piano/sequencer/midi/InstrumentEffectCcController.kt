@@ -53,6 +53,8 @@ class InstrumentEffectCcController(context: Context) {
         }
     }
     fun mappings() = coordinator.mappings()
+    /** Read worker-maintained cache; safe for UI feedback and performs no JNI. */
+    fun cachedValue(setId: String, target: Int, effect: String, parameter: String, scope: EffectCcScope = EffectCcScope.INSTRUMENT): Float? = synchronized(lock) { cache[ParamKey(setId,target,effect,parameter,scope)]?.current }
     /** Native-derived target metadata for CC Learn UI; includes toggles. */
     fun parameterMetadata(scope: EffectCcScope, effectId: String, parameterId: Int, targetChannel: Int = 0, targetSetId: String = MAIN_INSTRUMENT_SET_ID): com.piano.sequencer.EffectParameter? =
         when {
@@ -142,11 +144,29 @@ class InstrumentEffectCcController(context: Context) {
         l.timeout.cancel(false)
         l.callback(result)
     }
+    fun onPitchBend(source: String, channel: Int, value: Int): Boolean {
+        require(channel in 0..15 && value in 0..16383)
+        val learn = synchronized(this) { learning?.also { learning = null; it.timeout.cancel(false) } }
+        if (learn != null) {
+            val mapping = learn.template.copy(source=source,inputChannel=channel,controller=0,controllerType=EffectControllerType.PITCH_BEND,disposition=CcDisposition.CONSUME)
+            learn.callback(EffectCcLearnResult(mapping, coordinator.add(mapping)))
+            if (coordinator.mappings().contains(mapping)) { cacheReady=false; executor.execute { persist(); service?.let(::refreshCache) } }
+            return true
+        }
+        val selected=coordinator.mappings().filter { it.matchesPitchBend(source,channel) }.maxByOrNull { (if(it.source!=null) 2 else 0)+(if(it.inputChannel!=null) 1 else 0) } ?: return false
+        val key=ParamKey(selected.targetInstrumentSetId,effectCcTargetChannel(selected),selected.effectId,selected.parameterId,selected.scope)
+        val cached=synchronized(lock) { cache[key] } ?: return selected.disposition==CcDisposition.CONSUME
+        if(service==null) return selected.disposition==CcDisposition.CONSUME
+        val current=synchronized(lock) { cached.current }; var dispatched=false
+        coordinator.onPitchBend(source,channel,value,{e,p->if(e==key.effect&&p==key.parameter) cached.descriptor else null},{e,p->if(e==key.effect&&p==key.parameter) current else 0f}) { _,_,raw -> dispatched=true; synchronized(lock) { pending[key]=Pending(key,key.parameter.toInt(),raw); cached.current=raw } }
+        if(dispatched) synchronized(lock) { if(!draining) { draining=true; executor.execute(::drain) } }
+        return selected.disposition==CcDisposition.CONSUME
+    }
     fun onControlChange(source: String, channel: Int, cc: Int, value: Int): Boolean {
         require(channel in 0..15 && cc in 0..127 && value in 0..127)
         val learn = synchronized(this) { learning.also { if (it != null) { learning = null; it.timeout.cancel(false) } } }
         if (learn != null) {
-            val mapping = learn.template.copy(source = source, inputChannel = channel, controller = cc)
+            val mapping = learn.template.copy(source = source, inputChannel = channel, controller = cc, controllerType = EffectControllerType.CC)
             learn.callback(EffectCcLearnResult(mapping, coordinator.add(mapping)))
             if (coordinator.mappings().contains(mapping)) {
                 cacheReady = false
@@ -167,7 +187,7 @@ class InstrumentEffectCcController(context: Context) {
         if (cached == null) {
             // No descriptor means unsupported, not a transient cache miss.
             if (!cacheReady && service != null) refreshCache()
-            return consume && !cacheReady
+            return consume
         }
         if (service == null) return consume
         val current = synchronized(lock) { cached.current }
@@ -176,7 +196,7 @@ class InstrumentEffectCcController(context: Context) {
             { effect, parameter -> if (effect == key.effect && parameter == key.parameter) cached.descriptor else null },
             { effect, parameter -> if (effect == key.effect && parameter == key.parameter) current else 0f }) { _, _, raw ->
                 dispatched = true
-                synchronized(lock) { pending[key] = Pending(key, key.parameter.toInt(), raw) }
+                synchronized(lock) { pending[key] = Pending(key, key.parameter.toInt(), raw); cached.current = raw }
             }
         if (dispatched && service != null) synchronized(lock) {
             if (!draining) { draining = true; executor.execute(::drain) }
@@ -261,15 +281,17 @@ class InstrumentEffectCcController(context: Context) {
                        result
                     } else svc.setInstrumentEffectParameter(event.key.setId, event.key.target, event.key.effect, event.parameterId, event.value).also { ok ->
                    }
-                    if (!ok) android.util.Log.w("EffectCc", "Setter rejected set=${event.key.setId} local=${event.key.target} id=${event.parameterId} result=$ok")
-                else synchronized(lock) { cache[event.key]?.current = event.value }
+                     if (!ok) {
+                         android.util.Log.w("EffectCc", "Setter rejected set=${event.key.setId} local=${event.key.target} id=${event.parameterId} result=$ok")
+                         synchronized(lock) { cache[event.key]?.current = runCatching { svc.getInstrumentEffectParameter(event.key.setId,event.key.target,event.key.effect,event.parameterId) }.getOrDefault(cache[event.key]?.descriptor?.value?.rawValue ?: 0f) }
+                     }
              } catch (e: Exception) { android.util.Log.e("EffectCc", "MIDI dispatch failed", e) } }
         }
     }
     private fun persist() { prefs.edit().putString(KEY, encode(coordinator.mappings())).apply() }
     companion object {
         private const val KEY = "instrument_effect_cc_mappings_v1"
-        fun encode(items: List<EffectCcMapping>): String = JSONObject().put("version", 1).put("mappings", JSONArray().also { a -> items.forEach { m -> a.put(JSONObject().put("source",m.source).put("channel",m.inputChannel ?: -1).put("cc",m.controller).put("target",m.targetInstrumentChannel).put("targetSetId",m.targetInstrumentSetId).put("effect",m.effectId).put("parameter",m.parameterId).put("min",m.minRaw.toDouble()).put("max",m.maxRaw.toDouble()).put("invert",m.invert).put("pickup",m.pickupMode.name).put("disposition",m.disposition.name).put("scope",m.scope.name)) } }).toString()
+        fun encode(items: List<EffectCcMapping>): String = JSONObject().put("version", 1).put("mappings", JSONArray().also { a -> items.forEach { m -> a.put(JSONObject().put("source",m.source).put("channel",m.inputChannel ?: -1).put("cc",m.controller).put("controllerType",m.controllerType.name).put("target",m.targetInstrumentChannel).put("targetSetId",m.targetInstrumentSetId).put("effect",m.effectId).put("parameter",m.parameterId).put("min",m.minRaw.toDouble()).put("max",m.maxRaw.toDouble()).put("invert",m.invert).put("pickup",m.pickupMode.name).put("disposition",m.disposition.name).put("scope",m.scope.name)) } }).toString()
         fun decode(text: String?): List<EffectCcMapping> {
             if (text == null) return emptyList()
         return try {
@@ -277,11 +299,11 @@ class InstrumentEffectCcController(context: Context) {
             val array = root.getJSONArray("mappings")
             (0 until array.length()).map { i ->
                 val o = array.getJSONObject(i)
-                EffectCcMapping(if (o.isNull("source")) null else o.getString("source"), o.optInt("channel", -1).takeIf { it >= 0 }, o.getInt("cc"), o.getInt("target"), o.getString("effect"), o.getString("parameter"), o.getDouble("min").toFloat(), o.getDouble("max").toFloat(), o.optBoolean("invert"), PickupMode.valueOf(o.optString("pickup", PickupMode.SOFT_TAKEOVER.name)), CcDisposition.valueOf(o.optString("disposition", if (o.optBoolean("consume")) "CONSUME" else "PASS")), EffectCcScope.valueOf(o.optString("scope", EffectCcScope.INSTRUMENT.name)), o.optString("targetSetId", MAIN_INSTRUMENT_SET_ID))
+                EffectCcMapping(if (o.isNull("source")) null else o.getString("source"), o.optInt("channel", -1).takeIf { it >= 0 }, o.optInt("cc", 0), o.getInt("target"), o.getString("effect"), o.getString("parameter"), o.getDouble("min").toFloat(), o.getDouble("max").toFloat(), o.optBoolean("invert"), PickupMode.valueOf(o.optString("pickup", PickupMode.SOFT_TAKEOVER.name)), CcDisposition.valueOf(o.optString("disposition", if (o.optBoolean("consume")) "CONSUME" else "PASS")), EffectCcScope.valueOf(o.optString("scope", EffectCcScope.INSTRUMENT.name)), o.optString("targetSetId", MAIN_INSTRUMENT_SET_ID), EffectControllerType.valueOf(o.optString("controllerType", "CC")))
             }.let { items -> items.takeIf { it.indices.all { i -> (0 until i).none { j -> collides(items[i], items[j]) } } } ?: emptyList() }
         } catch (_: Exception) { emptyList() }
         }
-        private fun collides(a: EffectCcMapping,b: EffectCcMapping) = (a.source==null || b.source==null || a.source==b.source) && a.controller==b.controller && (a.inputChannel==null || b.inputChannel==null || a.inputChannel==b.inputChannel)
+        private fun collides(a: EffectCcMapping,b: EffectCcMapping) = a.controllerType==b.controllerType && (a.source==null || b.source==null || a.source==b.source) && a.controller==b.controller && (a.inputChannel==null || b.inputChannel==null || a.inputChannel==b.inputChannel)
     }
     private fun sharedName(scope: String, id: Int) = when(scope) {
         "native.delay" -> listOf("Enabled", "Time", "Feedback", "Wet", "Sync", "Division").getOrElse(id) { "Parameter $id" }

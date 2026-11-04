@@ -82,6 +82,46 @@ class EffectMidiMappingTest {
         assertEquals(0f, EffectMidiCoordinator.scale(mapping(invert = true), parameter(), 127), 0f)
     }
 
+    @Test fun pitchBendTypedIdentityScalingPickupAndSourceIsolation() {
+        val m = mapping(source = "dev|port=2", channel = 7).copy(controller = 0, controllerType = EffectControllerType.PITCH_BEND)
+        assertEquals(0f, EffectMidiCoordinator.scale(m, parameter(), 0, 16383), 0f)
+        assertEquals(1f, EffectMidiCoordinator.scale(m, parameter(), 16383, 16383), 0f)
+        val c=EffectMidiCoordinator(); assertNull(c.add(m)); val out=mutableListOf<Float>()
+        assertFalse(c.onPitchBend("other|port=2",7,16383,{_,_->parameter()},{_,_->.5f}) { _,_,v->out+=v })
+        assertTrue(out.isEmpty())
+        var current = .5f
+        c.onPitchBend("dev|port=2",7,0,{_,_->parameter()},{_,_->current}) { _,_,v->out+=v; current=v }
+        c.onPitchBend("dev|port=2",7,16383,{_,_->parameter()},{_,_->current}) { _,_,v->out+=v; current=v }
+        current=1f
+        c.onPitchBend("dev|port=2",7,16383,{_,_->parameter()},{_,_->current}) { _,_,v->out+=v }
+        assertEquals(2, out.size)
+        assertEquals(1f,out.last(),0f)
+        assertFalse(m.matches("dev|port=2",7,0))
+    }
+
+    @Test fun pitchBendAndCcMappingsAreDistinctAndLegacyCcJsonStaysCc() {
+        val cc=mapping(channel=7); val pb=cc.copy(controller=0,controllerType=EffectControllerType.PITCH_BEND)
+        val c=EffectMidiCoordinator(); assertNull(c.add(cc)); assertNull(c.add(pb))
+        assertEquals("CC", EffectControllerType.valueOf("CC").name)
+        assertEquals(EffectControllerType.PITCH_BEND, pb.controllerType)
+        assertTrue(cc.matches("dev",7,7)); assertFalse(cc.matchesPitchBend("dev",7))
+        assertTrue(pb.matchesPitchBend("dev",7)); assertFalse(pb.matches("dev",7,7))
+    }
+
+    @Test fun pitchBendPickupRemainsArmedUntilManualCurrentChangesAndHandlesLogInvert() {
+        val c=EffectMidiCoordinator()
+        val m=mapping(source="dev|port=2",channel=7,min=.1f,max=10f,invert=true).copy(controller=0,controllerType=EffectControllerType.PITCH_BEND)
+        assertNull(c.add(m)); val p=parameter(min=.1f,max=10f,log=true); val out=mutableListOf<Float>(); var current=1f
+        fun event(v:Int) { c.onPitchBend("dev|port=2",7,v,{_,_->p},{_,_->current}) { _,_,x->out+=x; current=x } }
+        // Inverted raw position corresponding to log-space current=1 is about 0.5.
+        event(8192); event(8193)
+        assertTrue(out.isNotEmpty())
+        val count=out.size; event(8194); assertEquals(count+1,out.size)
+        current=10f; event(8194); assertEquals(count+1,out.size)
+        event(0); assertEquals(10f,out.last(),.0001f)
+        event(16383); assertEquals(0.1f,out.last(),.0001f)
+    }
+
     @Test fun logarithmicScaling() {
         val p = parameter(min = .1f, max = 10f, log = true)
         val m = mapping(min = .1f, max = 10f)
@@ -145,21 +185,25 @@ class EffectMidiMappingTest {
 
     @Test fun pickupCrossesBothDirectionsAndHandlesReversal() {
         val c = EffectMidiCoordinator(); c.add(mapping(channel = 0)); val out = mutableListOf<Float>()
-        cc(c, 20, { .5f }, out); cc(c, 90, { .5f }, out); cc(c, 40, { .5f }, out)
+        var current=.5f
+        fun event(v:Int) { cc(c,v,{current},out); if(out.isNotEmpty()) current=out.last() }
+        event(20); event(90); event(40)
         assertEquals(2, out.size) // pickup arms at 90; subsequent movement dispatches normally
         val other = EffectMidiCoordinator(); other.add(mapping(channel = 0)); val out2 = mutableListOf<Float>()
-        cc(other, 100, { .5f }, out2); cc(other, 40, { .5f }, out2)
+        var current2=.5f
+        cc(other,100,{current2},out2); cc(other,40,{current2},out2)
         assertEquals(1, out2.size) // crossing and arming occur on same downward CC
     }
 
     @Test fun manualParameterChangeResetsPickup() {
         val c = EffectMidiCoordinator(); c.add(mapping(channel = 0)); val out = mutableListOf<Float>()
         var current = .5f
-        cc(c, 63, { current }, out)
+        fun event(v:Int) { cc(c,v,{current},out); if(out.isNotEmpty()) current=out.last() }
+        event(63)
         assertEquals(1, out.size)
         current = .8f
-        cc(c, 65, { current }, out); assertEquals(1, out.size)
-        cc(c, 102, { current }, out); cc(c, 100, { current }, out)
+        cc(c,65,{current},out); assertEquals(1,out.size)
+        event(102); event(100)
         assertEquals(3, out.size) // 102 crosses and arms; 100 dispatches after pickup
     }
 }

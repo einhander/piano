@@ -1061,11 +1061,14 @@ class MainActivity : AppCompatActivity() {
                 // Delegate to trigger controller — consumed while learning (first
                 // pitch bend of the session is captured) or when a cell is mapped
                 // to pitch bend (press toggles the cell's file; repeats consumed).
+                val effectController=(application as PianoApp).instrumentEffectCcController
+                if (effectController.isLearning() && effectController.onPitchBend(source,channel,value)) return
                 val consumed = MidiFileTriggerController.get(this@MainActivity).onPitchBend(channel, value, source)
                 if (consumed) {
                     AppLogger.info("MIDI", "PITCH BEND ch=${channel + 1} value=$value outcome=consumed")
                     return
                 }
+                if (effectController.onPitchBend(source, channel, value)) return
                 MidiInputTrace.routine("bend-outcome-$channel", value.toString()) {
                     "PITCH BEND ch=${channel + 1} value=$value outcome=not-consumed/forwarded"
                 }

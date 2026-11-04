@@ -56,6 +56,33 @@ class SettingsActivity : AppCompatActivity() {
     private val learnedSources = mutableMapOf<Pair<String, String>, String>()
     private val parameters = mutableMapOf<Pair<String, String>, EffectParameter>()
     private val reverbMappingRows = mutableMapOf<String, LinearLayout>()
+    // UI-only cache reads: no JNI, and no refresh while a control is being dragged/saved.
+    private val reverbValueRefreshers = mutableListOf<() -> Unit>()
+    private val effectFeedbackHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val effectFeedback = object : Runnable {
+        override fun run() {
+            reverbValueRefreshers.forEach { it() }
+            effectFeedbackHandler.postDelayed(this, 50)
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        effectFeedbackHandler.post(effectFeedback)
+    }
+
+    override fun onStop() {
+        effectFeedbackHandler.removeCallbacks(effectFeedback)
+        super.onStop()
+    }
+
+    private fun cachedReverbValue(parameter: String): Float? {
+        val mapping = ccController.mappings().lastOrNull {
+            it.scope == EffectCcScope.GLOBAL && it.effectId == "fluidsynth.reverb" && it.parameterId == parameter
+        } ?: return null
+        return ccController.cachedValue(mapping.targetInstrumentSetId, mapping.targetInstrumentChannel,
+            mapping.effectId, mapping.parameterId, mapping.scope)?.takeIf { it.isFinite() }
+    }
 
     override fun onPause() {
         actionLearnGeneration++
@@ -776,9 +803,24 @@ class SettingsActivity : AppCompatActivity() {
         val enableMappings = findViewById<LinearLayout>(R.id.globalReverbEnableMappings)
         enableMappings.removeAllViews()
         reverbMappingRows.clear()
+        reverbValueRefreshers.clear()
         this.parameters.clear()
         parameters.forEach { p ->
             if (p.stableId == "0") {
+                reverbValueRefreshers.add {
+                    val raw = cachedReverbValue("0")
+                    if (raw != null && switchReverb.isEnabled && !switchReverb.isPressed) {
+                        val enabled = raw >= .5f
+                        if (switchReverb.isChecked != enabled) {
+                            isRestoringState = true
+                            try {
+                                switchReverb.isChecked = enabled
+                                tvReverb.text = getString(R.string.settings_reverb_value,
+                                    getString(if (enabled) R.string.settings_on else R.string.settings_off))
+                            } finally { isRestoringState = false }
+                        }
+                    }
+                }
                 addReverbLearnRow(enableRow, enableMappings, p)
                 return@forEach
             }
@@ -796,6 +838,18 @@ class SettingsActivity : AppCompatActivity() {
                 contentDescription = "Global Reverb ${p.displayName}"
                 max = 1000
                 progress = instrumentParameterProgress(p, p.value.rawValue)
+                var dragging = false
+                var displayedRaw = p.value.rawValue
+                reverbValueRefreshers.add {
+                    if (!dragging && isEnabled) {
+                        val raw = cachedReverbValue(p.stableId)
+                        if (raw != null && raw != displayedRaw) {
+                            displayedRaw = raw
+                            progress = instrumentParameterProgress(p, raw)
+                            label.text = "${p.displayName}: ${instrumentValueLabel(p, raw)}"
+                        }
+                    }
+                }
                 setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                     private var tracking = false
                     private fun save(progress: Int) {
@@ -822,11 +876,12 @@ class SettingsActivity : AppCompatActivity() {
                         }
                     }
                     override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                        if (fromUser) displayedRaw = instrumentParameterValue(p, progress)
                         label.text = "${p.displayName}: ${instrumentValueLabel(p, instrumentParameterValue(p, progress))}"
                         if (fromUser && !tracking) save(progress)
                     }
-                    override fun onStartTrackingTouch(bar: SeekBar?) { tracking = true }
-                    override fun onStopTrackingTouch(bar: SeekBar?) { tracking = false; save(bar?.progress ?: 0) }
+                    override fun onStartTrackingTouch(bar: SeekBar?) { tracking = true; dragging = true }
+                    override fun onStopTrackingTouch(bar: SeekBar?) { tracking = false; dragging = false; save(bar?.progress ?: 0) }
                 })
             })
             addReverbLearnRow(row, controls, p)
@@ -837,7 +892,8 @@ class SettingsActivity : AppCompatActivity() {
     private fun label(value: String) = TextView(this).apply { text = value; textSize = 14f }
     private fun mappingDescription(m: EffectCcMapping): String {
         val name = parameters[m.effectId to m.parameterId]?.displayName ?: "Parameter ${m.parameterId}"
-        return "${m.source ?: "Any source"} · MIDI ch ${m.inputChannel?.plus(1) ?: "Any"} · CC ${m.controller}\nShared · all instrument sets · Reverb · $name\nRaw ${m.minRaw}–${m.maxRaw}${if (m.invert) " · Inverted" else ""} · Soft takeover · ${if (m.disposition == CcDisposition.PASS) "Pass-through" else "Consume"}"
+        val controller = if (m.controllerType == com.piano.sequencer.midi.EffectControllerType.PITCH_BEND) "PB" else "CC ${m.controller}"
+        return "${m.source ?: "Any source"} · MIDI ch ${m.inputChannel?.plus(1) ?: "Any"} · $controller\nShared · all instrument sets · Reverb · $name\nRaw ${m.minRaw}–${m.maxRaw}${if (m.invert) " · Inverted" else ""} · Soft takeover · ${if (m.disposition == CcDisposition.PASS) "Pass-through" else "Consume"}"
     }
 
     private fun learn(p: EffectParameter) {
@@ -886,7 +942,7 @@ class SettingsActivity : AppCompatActivity() {
             mapping != null && result.conflict != null -> confirmConflict(mapping, result.conflict.existing)
             mapping != null -> {
                 refresh()
-                AlertDialog.Builder(this).setTitle("MIDI CC captured").setMessage(mappingDescription(mapping) + ccWarning(mapping.controller))
+                AlertDialog.Builder(this).setTitle("MIDI controller captured").setMessage(mappingDescription(mapping) + if (mapping.controllerType == com.piano.sequencer.midi.EffectControllerType.CC) ccWarning(mapping.controller) else "")
                     .setPositiveButton("Edit mapping") { _, _ -> editMapping(mapping, parameters[mapping.effectId to mapping.parameterId]) }
                     .setNegativeButton("Done", null).show()
             }
