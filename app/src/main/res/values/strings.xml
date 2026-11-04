@@ -125,6 +125,8 @@
     <string name="ui_mode_chord">Mode: Chord</string>
     <string name="ui_learn">Learn</string>
     <string name="ui_unlearn">Unlearn</string>
+    <string name="settings_midi_unlearn_record_description">Unlearn Record MIDI assignment</string>
+    <string name="settings_midi_unlearn_panic_description">Unlearn Panic MIDI assignment</string>
     <string name="ui_test">▶ Test</string>
     <string name="ui_stop">■ Stop</string>
     <string name="ui_record">● Record</string>

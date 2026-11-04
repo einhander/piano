@@ -13,7 +13,7 @@ class ActionMidiMapperTest {
             override fun apply() {}
             override fun commit() = true
             override fun clear() = this
-            override fun remove(key: String) = this
+            override fun remove(key: String) = apply { data.remove(key) }
             override fun putStringSet(key: String, value: MutableSet<String>?) = this
             override fun putInt(key: String, value: Int) = this
             override fun putLong(key: String, value: Long) = this
@@ -35,7 +35,7 @@ class ActionMidiMapperTest {
         val prefs = Prefs(); val mapper = ActionMidiMapper(prefs)
         assertTrue(mapper.startLearn(MidiAction.RECORD))
         assertTrue(mapper.event(MidiTriggerType.NOTE_ON, 2, 60, 100).consumed)
-        assertEquals(ActionMidiMapping(MidiTriggerType.NOTE_ON, 2, 60), ActionMidiMapper(prefs).mapping(MidiAction.RECORD))
+        assertEquals(ActionMidiMapping(MidiTriggerType.NOTE_ON, 2, 60, "unknown"), ActionMidiMapper(prefs).mapping(MidiAction.RECORD))
         assertTrue(mapper.startLearn(MidiAction.PANIC))
         val conflict = mapper.event(MidiTriggerType.NOTE_ON, 2, 60, 1)
         assertEquals(MidiAction.RECORD, conflict.conflict)
@@ -72,5 +72,39 @@ class ActionMidiMapperTest {
         assertTrue(trigger.consumed)
         assertEquals(MidiAction.PANIC, trigger.action)
         assertNull(mapper.event(MidiTriggerType.PROGRAM, 4, 13, 0).action)
+    }
+
+    @Test fun sourceAndPortArePartOfBindingAndPersisted() {
+        val prefs = Prefs()
+        val mapper = ActionMidiMapper(prefs)
+        val pad = "SMK37|port=2"
+        val keyboard = "SMK37|port=0"
+        assertTrue(mapper.startLearn(MidiAction.PANIC))
+        mapper.event(MidiTriggerType.NOTE_ON, 0, 71, 100, pad)
+        assertEquals(MidiAction.PANIC, mapper.event(MidiTriggerType.NOTE_ON, 0, 71, 100, pad).action)
+        assertNull(mapper.event(MidiTriggerType.NOTE_ON, 0, 71, 100, keyboard).action)
+        assertTrue(mapper.consumesNoteOff(0, 71, pad))
+        assertFalse(mapper.consumesNoteOff(0, 71, keyboard))
+        assertEquals("SMK37|port=2", ActionMidiMapper(prefs).mapping(MidiAction.PANIC)?.source)
+    }
+
+    @Test fun legacyMappingsLoadWithoutInventedSourceAndCannotMatchIdentifiedInput() {
+        val prefs = Prefs().apply { data["midi_action_panic"] = "NOTE_ON:0:71" }
+        val mapper = ActionMidiMapper(prefs)
+        assertNull(mapper.mapping(MidiAction.PANIC)?.source)
+        assertNull(mapper.event(MidiTriggerType.NOTE_ON, 0, 71, 100, "SMK37|port=2").action)
+    }
+
+    @Test fun clearUnlearnsAndPersistsForEachAction() {
+        val prefs = Prefs()
+        val mapper = ActionMidiMapper(prefs)
+        for (action in MidiAction.entries) {
+            assertTrue(mapper.startLearn(action))
+            mapper.event(MidiTriggerType.NOTE_ON, 0, 71, 100, "pad|port=2")
+            assertNotNull(ActionMidiMapper(prefs).mapping(action))
+            mapper.clear(action)
+            assertNull(ActionMidiMapper(prefs).mapping(action))
+            assertFalse(prefs.data.containsKey("midi_action_${action.name.lowercase()}"))
+        }
     }
 }

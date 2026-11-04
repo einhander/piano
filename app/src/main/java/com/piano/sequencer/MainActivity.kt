@@ -1006,7 +1006,7 @@ class MainActivity : AppCompatActivity() {
         midiInputReceiver.setCallback(object : MidiInputReceiver.Callback {
             override fun onNoteOn(channel: Int, note: Int, velocity: Int, source: String) {
                 withMidiIngress {
-                    val result = actionMidiMapper.event(MidiTriggerType.NOTE_ON, channel, note, velocity)
+                    val result = actionMidiMapper.event(MidiTriggerType.NOTE_ON, channel, note, velocity, source)
                     if (result.captured != null || result.conflict != null) runOnUiThread {
                         (application as PianoApp).notifyActionMidiLearn(result)
                     }
@@ -1016,12 +1016,12 @@ class MainActivity : AppCompatActivity() {
             }
             override fun onNoteOff(channel: Int, note: Int, velocity: Int, source: String) {
                 withMidiIngress {
-                    if (!actionMidiMapper.consumesNoteOff(channel, note)) midiIngress.noteOff(channel, note, velocity, source)
+                    if (!actionMidiMapper.consumesNoteOff(channel, note, source)) midiIngress.noteOff(channel, note, velocity, source)
                 }
             }
             override fun onControlChange(channel: Int, controller: Int, value: Int, source: String) {
                 withMidiIngress {
-                val actionResult = actionMidiMapper.event(MidiTriggerType.CC, channel, controller, value)
+                val actionResult = actionMidiMapper.event(MidiTriggerType.CC, channel, controller, value, source)
                 if (actionResult.captured != null || actionResult.conflict != null) runOnUiThread { (application as PianoApp).notifyActionMidiLearn(actionResult) }
                 actionResult.action?.let(::dispatchActionMidi)
                 if (actionResult.consumed) return@withMidiIngress
@@ -1046,7 +1046,7 @@ class MainActivity : AppCompatActivity() {
             }
             override fun onProgramChange(channel: Int, program: Int, source: String) {
                 withMidiIngress {
-                val actionResult = actionMidiMapper.event(MidiTriggerType.PROGRAM, channel, program, 0)
+                val actionResult = actionMidiMapper.event(MidiTriggerType.PROGRAM, channel, program, 0, source)
                 if (actionResult.captured != null || actionResult.conflict != null) runOnUiThread { (application as PianoApp).notifyActionMidiLearn(actionResult) }
                 actionResult.action?.let(::dispatchActionMidi)
                 if (actionResult.consumed) return@withMidiIngress

@@ -58,6 +58,7 @@ class SettingsActivity : AppCompatActivity() {
     private val reverbMappingRows = mutableMapOf<String, LinearLayout>()
 
     override fun onPause() {
+        actionLearnGeneration++
         actionMapper.cancelLearn()
         learnTimeout.removeCallbacks(timeoutTask)
         (application as PianoApp).setActionMidiLearnListener(null)
@@ -90,9 +91,12 @@ class SettingsActivity : AppCompatActivity() {
 
     private lateinit var btnRecordMidiLearn: Button
     private lateinit var btnPanicMidiLearn: Button
+    private lateinit var btnRecordMidiUnlearn: Button
+    private lateinit var btnPanicMidiUnlearn: Button
     private lateinit var tvRecordMidiAssignment: TextView
     private lateinit var tvPanicMidiAssignment: TextView
     private var actionLearn: MidiAction? = null
+    @Volatile private var actionLearnGeneration = 0
 
     private fun refreshActionMidiLabels(message: String? = null, statusAction: MidiAction? = actionLearn) {
         tvRecordMidiAssignment.text = when {
@@ -107,9 +111,23 @@ class SettingsActivity : AppCompatActivity() {
         }
         btnRecordMidiLearn.text = if (actionLearn == MidiAction.RECORD) "Listening…" else getString(R.string.ui_learn)
         btnPanicMidiLearn.text = if (actionLearn == MidiAction.PANIC) "Listening…" else getString(R.string.ui_learn)
+        btnRecordMidiUnlearn.isEnabled = actionLearn == MidiAction.RECORD || actionMapper.mapping(MidiAction.RECORD) != null
+        btnPanicMidiUnlearn.isEnabled = actionLearn == MidiAction.PANIC || actionMapper.mapping(MidiAction.PANIC) != null
+    }
+
+    private fun unlearnAction(action: MidiAction) {
+        if (actionLearn == action) {
+            actionLearnGeneration++
+            actionMapper.cancelLearn()
+            actionLearn = null
+            learnTimeout.removeCallbacks(timeoutTask)
+        }
+        actionMapper.clear(action)
+        refreshActionMidiLabels()
     }
 
     private fun startActionLearn(action: MidiAction) {
+        actionLearnGeneration++
         if (actionLearn == action) { actionMapper.cancelLearn(); actionLearn = null; learnTimeout.removeCallbacks(timeoutTask); refreshActionMidiLabels("Learning cancelled.", action); return }
         if (actionLearn != null) { actionMapper.cancelLearn(); actionLearn = null; learnTimeout.removeCallbacks(timeoutTask) }
         if (ccController.isLearning() || MidiFileLearnState.getState() == MidiFileLearnState.State.LEARNING) {
@@ -249,8 +267,9 @@ class SettingsActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         (application as PianoApp).setActionMidiLearnListener { result ->
+            val generation = actionLearnGeneration
             runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (isFinishing || isDestroyed || generation != actionLearnGeneration) return@runOnUiThread
                 val completedAction = actionLearn ?: return@runOnUiThread
                 learnTimeout.removeCallbacks(timeoutTask)
                 actionLearn = null
@@ -278,10 +297,14 @@ class SettingsActivity : AppCompatActivity() {
         btnBrowse = findViewById(R.id.btnBrowse)
         btnRecordMidiLearn = findViewById(R.id.btnRecordMidiLearn)
         btnPanicMidiLearn = findViewById(R.id.btnPanicMidiLearn)
+        btnRecordMidiUnlearn = findViewById(R.id.btnRecordMidiUnlearn)
+        btnPanicMidiUnlearn = findViewById(R.id.btnPanicMidiUnlearn)
         tvRecordMidiAssignment = findViewById(R.id.tvRecordMidiAssignment)
         tvPanicMidiAssignment = findViewById(R.id.tvPanicMidiAssignment)
         btnRecordMidiLearn.setOnClickListener { startActionLearn(MidiAction.RECORD) }
         btnPanicMidiLearn.setOnClickListener { startActionLearn(MidiAction.PANIC) }
+        btnRecordMidiUnlearn.setOnClickListener { unlearnAction(MidiAction.RECORD) }
+        btnPanicMidiUnlearn.setOnClickListener { unlearnAction(MidiAction.PANIC) }
         refreshActionMidiLabels()
         tvRecordingFolder = findViewById(R.id.tvRecordingFolder)
         btnRecordingFolder = findViewById(R.id.btnRecordingFolder)

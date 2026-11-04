@@ -423,6 +423,17 @@
                         android:contentDescription="@string/settings_midi_learn_record_description"
                         android:text="@string/ui_learn"
                         android:textColor="@color/ui_control_text" />
+                    <Button
+                        android:id="@+id/btnRecordMidiUnlearn"
+                        style="@style/Widget.Piano.OutlinedControl"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:minWidth="48dp"
+                        android:minHeight="48dp"
+                        android:contentDescription="@string/settings_midi_unlearn_record_description"
+                        android:text="@string/ui_unlearn"
+                        android:textColor="@color/ui_control_text" />
                 </LinearLayout>
 
                 <LinearLayout
@@ -465,6 +476,17 @@
                         android:minHeight="48dp"
                         android:contentDescription="@string/settings_midi_learn_panic_description"
                         android:text="@string/ui_learn"
+                        android:textColor="@color/ui_control_text" />
+                    <Button
+                        android:id="@+id/btnPanicMidiUnlearn"
+                        style="@style/Widget.Piano.OutlinedControl"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:minWidth="48dp"
+                        android:minHeight="48dp"
+                        android:contentDescription="@string/settings_midi_unlearn_panic_description"
+                        android:text="@string/ui_unlearn"
                         android:textColor="@color/ui_control_text" />
                 </LinearLayout>
 
