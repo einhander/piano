@@ -105,12 +105,16 @@ class SettingsActivity : AppCompatActivity() {
             val p = parameters["fluidsynth.reverb" to id] ?: return@forEach
             ccController.mappings().filter { it.scope == EffectCcScope.GLOBAL &&
                 it.effectId == "fluidsynth.reverb" && it.parameterId == id }.forEach { m ->
-                row.addView(label("MIDI assigned"))
-                row.addView(Button(this).apply {
-                    text = "Edit / Unlearn mapping"
-                    com.piano.sequencer.ui.UiControlStyle.apply(this)
-                    setOnClickListener { editMapping(m, p) }
+                row.addView(label(com.piano.sequencer.ui.midiAssignmentLabel(m.source, m.inputChannel)).apply {
+                    setSingleLine(true)
+                    ellipsize = android.text.TextUtils.TruncateAt.END
                 })
+            }
+            reverbLearnButtons[id]?.apply {
+                val mapping = ccController.mappings().firstOrNull { it.scope == EffectCcScope.GLOBAL && it.effectId == "fluidsynth.reverb" && it.parameterId == id }
+                text = if (mapping == null) "MIDI Learn" else "Edit"
+                contentDescription = "$text: Global Reverb ${p.displayName}"
+                setOnClickListener { if (mapping == null) learn(p) else editMapping(mapping, p) }
             }
             if (row.childCount == 0) row.addView(label("No MIDI CC assigned · Shared across all instrument sets"))
         }
@@ -166,9 +170,12 @@ class SettingsActivity : AppCompatActivity() {
         learnTimeout.postDelayed(timeoutTask, 10_000L)
     }
 
+    private val reverbLearnButtons = mutableMapOf<String, Button>()
+
     private fun addReverbLearnRow(controls: LinearLayout, mappings: LinearLayout, p: EffectParameter) {
         parameters["fluidsynth.reverb" to p.stableId] = p
         controls.addView(Button(this).apply {
+            reverbLearnButtons[p.stableId] = this
             text = "MIDI Learn"
             com.piano.sequencer.ui.UiControlStyle.apply(this)
             contentDescription = "MIDI Learn: Global Reverb ${p.displayName}"
@@ -897,7 +904,7 @@ class SettingsActivity : AppCompatActivity() {
         return "${m.source ?: "Any source"} · MIDI ch ${m.inputChannel?.plus(1) ?: "Any"} · $controller\nShared · all instrument sets · Reverb · $name\nRaw ${m.minRaw}–${m.maxRaw}${if (m.invert) " · Inverted" else ""} · Soft takeover · ${if (m.disposition == CcDisposition.PASS) "Pass-through" else "Consume"}"
     }
 
-    private fun learn(p: EffectParameter) {
+    private fun learn(p: EffectParameter, old: EffectCcMapping? = null) {
         if (actionMapper.isLearning()) {
             Toast.makeText(this, "Finish current MIDI Learn first.", Toast.LENGTH_SHORT).show()
             return
@@ -907,9 +914,9 @@ class SettingsActivity : AppCompatActivity() {
             return
         }
         val owner = WeakReference(this)
-        val started = ccController.startLearn(globalReverbLearnTemplate(p)) { result ->
+        val started = ccController.startLearn(old ?: globalReverbLearnTemplate(p)) { result ->
             owner.get()?.runOnUiThread {
-                owner.get()?.takeUnless { it.isFinishing || it.isDestroyed || !it.learnUiActive }?.onLearnResult(result)
+                owner.get()?.takeUnless { it.isFinishing || it.isDestroyed || !it.learnUiActive }?.onLearnResult(result, old)
             }
         }
         if (!started) {
@@ -924,11 +931,17 @@ class SettingsActivity : AppCompatActivity() {
             .setOnCancelListener { ownsLearn = false; ccController.cancelLearn() }.show()
     }
 
-    private fun onLearnResult(result: EffectCcLearnResult) {
+    private fun onLearnResult(result: EffectCcLearnResult, old: EffectCcMapping? = null) {
         ownsLearn = false
         learnDialog?.dismiss()
         learnDialog = null
         val mapping = result.mapping
+        if (old != null && mapping != null) {
+            // Capture may auto-save; stage replacement until all conflicts are approved.
+            if (result.conflict == null && mapping != old) ccController.remove(mapping)
+            saveMapping(mapping, old)
+            return
+        }
         mapping?.source?.let { learnedSources[mapping.effectId to mapping.parameterId] = it }
         if (mapping != null && triggerConflicts(mapping).isNotEmpty()) {
             // Capture auto-adds when no effect conflict exists. Roll it back until
@@ -962,7 +975,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun saveMapping(mapping: EffectCcMapping, old: EffectCcMapping? = null, replacing: EffectCcMapping? = null,
                             approvedTriggers: List<SequencerCell>? = null) {
         // Check collisions before removing an edited mapping; Cancel preserves it.
-        val conflict = ccController.mappings().firstOrNull { it != old && it != replacing && it.controller == mapping.controller &&
+        val conflict = ccController.mappings().firstOrNull { it != old && it != replacing && it.controllerType == mapping.controllerType && it.controller == mapping.controller &&
             (it.source == null || mapping.source == null || it.source == mapping.source) &&
             (it.inputChannel == null || mapping.inputChannel == null || it.inputChannel == mapping.inputChannel) }
         if (conflict != null) { confirmConflict(mapping, conflict, old); return }
@@ -997,6 +1010,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun triggerConflicts(mapping: EffectCcMapping): List<SequencerCell> =
         MidiFileMappingStore.get(this).all().filter { cell ->
+            mapping.controllerType == com.piano.sequencer.midi.EffectControllerType.CC &&
             cell.triggerType == TRIGGER_CC && cell.ccNumber == mapping.controller &&
                 (cell.triggerSource == null || mapping.source == null || cell.triggerSource == mapping.source) &&
                 (cell.triggerChannel < 0 || mapping.inputChannel == null || cell.triggerChannel == mapping.inputChannel)
@@ -1038,6 +1052,12 @@ class SettingsActivity : AppCompatActivity() {
             .setView(ScrollView(this).apply { addView(form) }).setNegativeButton("Cancel", null)
             .setNeutralButton("Unlearn") { _, _ -> ccController.remove(m); refresh() }
             .setPositiveButton("Save", null).create()
+        form.addView(Button(this).apply {
+            text = "Learn"
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
+            isEnabled = p != null
+            setOnClickListener { if (p != null) { dialog.dismiss(); learn(p, m) } }
+        })
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val lo = minimum.text.toString().toFloatOrNull()

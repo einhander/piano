@@ -683,11 +683,9 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         addView(value)
         val mapped = ccController.mappings().filter { it.targetInstrumentSetId == setId && it.targetInstrumentChannel == channel && it.effectId == id && it.parameterId == p.stableId && it.scope == EffectCcScope.INSTRUMENT }
         mapped.forEach { mapping ->
-            addView(label("MIDI assigned"))
-            addView(Button(this@InstrumentEffectsActivity).apply {
-                com.piano.sequencer.ui.UiControlStyle.apply(this)
-                text = "Edit / Unlearn mapping"
-                setOnClickListener { editMapping(mapping, p) }
+            addView(label(com.piano.sequencer.ui.midiAssignmentLabel(mapping.source, mapping.inputChannel)).apply {
+                setSingleLine(true)
+                ellipsize = android.text.TextUtils.TruncateAt.END
             })
         }
         val controlRow = LinearLayout(this@InstrumentEffectsActivity).apply {
@@ -773,13 +771,13 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         }
         controlRow.addView(Button(this@InstrumentEffectsActivity).apply {
             com.piano.sequencer.ui.UiControlStyle.apply(this)
-            text = "MIDI Learn"
-            contentDescription = "MIDI Learn: ${p.displayName}"
+            text = if (mapped.isEmpty()) "MIDI Learn" else "Edit"
+            contentDescription = "$text: ${p.displayName}"
             minWidth = 0
             minimumWidth = 0
             maxWidth = dp(112)
             isEnabled = p.maximum > p.minimum
-            setOnClickListener { learn(id, p) }
+            setOnClickListener { mapped.firstOrNull()?.let { editMapping(it, p) } ?: learn(id, p) }
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
     }
 
@@ -792,11 +790,11 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         return "${m.source ?: "Any source"} · MIDI ch ${m.inputChannel?.plus(1) ?: "Any"} · $controller\n$target · $effect · $name\nRaw ${m.minRaw}–${m.maxRaw}${if (m.invert) " · Inverted" else ""} · Soft takeover · ${if (m.disposition == CcDisposition.PASS) "Pass-through" else "Consume"}"
     }
 
-    private fun learn(id: String, p: EffectParameter) {
+    private fun learn(id: String, p: EffectParameter, old: EffectCcMapping? = null) {
         val owner = WeakReference(this)
-        val started = ccController.startLearn(instrumentEffectsLearnTemplate(setId, channel, id, p)) { result ->
+        val started = ccController.startLearn(old ?: instrumentEffectsLearnTemplate(setId, channel, id, p)) { result ->
             owner.get()?.runOnUiThread {
-                owner.get()?.takeUnless { it.isFinishing || it.isDestroyed }?.onLearnResult(result)
+                owner.get()?.takeUnless { it.isFinishing || it.isDestroyed }?.onLearnResult(result, old)
             }
         }
         if (!started) {
@@ -811,11 +809,17 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             .setOnCancelListener { ownsLearn = false; ccController.cancelLearn() }.show()
     }
 
-    private fun onLearnResult(result: EffectCcLearnResult) {
+    private fun onLearnResult(result: EffectCcLearnResult, old: EffectCcMapping? = null) {
         ownsLearn = false
         learnDialog?.dismiss()
         learnDialog = null
         val mapping = result.mapping
+        if (old != null && mapping != null) {
+            // Capture may auto-save; stage replacement until all conflicts are approved.
+            if (result.conflict == null && mapping != old) ccController.remove(mapping)
+            saveMapping(mapping, old)
+            return
+        }
         mapping?.source?.let { learnedSources[mapping.effectId to mapping.parameterId] = it }
         if (mapping != null && triggerConflicts(mapping).isNotEmpty()) {
             // Capture auto-adds when no effect conflict exists. Roll it back until
@@ -849,7 +853,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     private fun saveMapping(mapping: EffectCcMapping, old: EffectCcMapping? = null, replacing: EffectCcMapping? = null,
                             approvedTriggers: List<SequencerCell>? = null) {
         // Check collisions before removing an edited mapping; Cancel preserves it.
-        val conflict = ccController.mappings().firstOrNull { it != old && it != replacing && it.controller == mapping.controller &&
+        val conflict = ccController.mappings().firstOrNull { it != old && it != replacing && it.controllerType == mapping.controllerType && it.controller == mapping.controller &&
             (it.source == null || mapping.source == null || it.source == mapping.source) &&
             (it.inputChannel == null || mapping.inputChannel == null || it.inputChannel == mapping.inputChannel) }
         if (conflict != null) { confirmConflict(mapping, conflict, old); return }
@@ -884,6 +888,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
 
     private fun triggerConflicts(mapping: EffectCcMapping): List<SequencerCell> =
         MidiFileMappingStore.get(this).all().filter { cell ->
+            mapping.controllerType == com.piano.sequencer.midi.EffectControllerType.CC &&
             cell.triggerType == TRIGGER_CC && cell.ccNumber == mapping.controller &&
                 (cell.triggerSource == null || mapping.source == null || cell.triggerSource == mapping.source) &&
                 (cell.triggerChannel < 0 || mapping.inputChannel == null || cell.triggerChannel == mapping.inputChannel)
@@ -941,6 +946,12 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             .setView(ScrollView(this).apply { addView(form) }).setNegativeButton("Cancel", null)
             .setNeutralButton("Unlearn") { _, _ -> ccController.remove(m); refresh() }
             .setPositiveButton("Save", null).create()
+        form.addView(Button(this).apply {
+            text = "Learn"
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
+            isEnabled = p != null
+            setOnClickListener { if (p != null) { dialog.dismiss(); learn(m.effectId, p, m) } }
+        })
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val lo = minimum.text.toString().toFloatOrNull()

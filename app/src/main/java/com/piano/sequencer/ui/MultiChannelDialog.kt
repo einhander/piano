@@ -49,11 +49,12 @@ object MultiChannelDialog {
         val handler = Handler(Looper.getMainLooper())
         var ownsLearn = false
         var closed = false
-        val status = TextView(context).apply { textSize = 13f }
+        val status = TextView(context).apply { textSize = 13f; setSingleLine(true); ellipsize = android.text.TextUtils.TruncateAt.END }
         val learn = Button(context).apply { text = "Learn"; UiControlStyle.apply(this) }
         val unlearn = Button(context).apply { text = "Unlearn"; UiControlStyle.apply(this) }
         fun refreshMapping(message: String? = null) {
-            status.text = message ?: if (ownsLearn) "Move a MIDI control…" else if (mapper.mapping(MidiAction.MULTI) != null) "MIDI assigned" else "No MIDI assignment"
+            val assignment = mapper.mapping(MidiAction.MULTI)?.let { midiAssignmentLabel(it.source, it.channel) }
+            status.text = if (ownsLearn) message ?: "Move a MIDI control…" else assignment ?: message ?: "No MIDI assignment"
             learn.text = if (ownsLearn) "Cancel Learn" else "Learn"
             unlearn.isEnabled = ownsLearn || mapper.mapping(MidiAction.MULTI) != null
         }
