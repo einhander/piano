@@ -110,7 +110,7 @@ class EffectMidiCoordinator {
         val cur = normalize(chosen, p, targetCurrent, lo, hi)
         val now = normalize(chosen, p, target, lo, hi)
         val prev = state.previous
-        if (!state.armed && (abs(now-cur) <= 1f/127f || (prev != null && (prev-cur)*(now-cur) <= 0f))) state.armed = true
+        if (!state.armed && (abs(now-cur) <= PICKUP_TOLERANCE || (prev != null && (prev-cur)*(now-cur) <= 0f))) state.armed = true
         state.previous = now
         if (!state.armed) return chosen.disposition == CcDisposition.CONSUME
         dispatch(chosen.effectId, chosen.parameterId, target)
@@ -134,7 +134,7 @@ class EffectMidiCoordinator {
         val now = normalize(chosen,p,mappedValue,lo,hi)
         val cur = normalize(chosen,p,curValue,lo,hi)
         val prev = state.previous
-        if (!state.armed && (kotlin.math.abs(now-cur) <= 1f/16383f || (prev != null && (prev-cur)*(now-cur) <= 0f))) state.armed = true
+        if (!state.armed && (kotlin.math.abs(now-cur) <= PICKUP_TOLERANCE || (prev != null && (prev-cur)*(now-cur) <= 0f))) state.armed = true
         state.previous = now
         if (state.armed) {
             val target=scale(chosen,p,value,16383)
@@ -145,6 +145,7 @@ class EffectMidiCoordinator {
     }
 
     companion object {
+        private const val PICKUP_TOLERANCE = 1f / 127f
         fun scale(m: EffectCcMapping, p: EffectParameter, raw: Int): Float {
             require(raw in 0..127)
             require(m.minRaw.isFinite() && m.maxRaw.isFinite() && m.maxRaw > m.minRaw)

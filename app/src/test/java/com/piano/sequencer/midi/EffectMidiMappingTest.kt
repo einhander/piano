@@ -99,6 +99,27 @@ class EffectMidiMappingTest {
         assertFalse(m.matches("dev|port=2",7,0))
     }
 
+    @Test fun pitchBendPickupUsesCcSizedToleranceButKeepsFourteenBitOutput() {
+        val c = EffectMidiCoordinator()
+        val m = mapping(source="dev", channel=0, max=.891251f).copy(controller=0, controllerType=EffectControllerType.PITCH_BEND)
+        assertNull(c.add(m))
+        val p = EffectParameter("1", "Feedback", EffectParameterValue(0f), 0f, .891251f, 0f, EffectParameterType.FLOAT, false)
+        val out = mutableListOf<Float>()
+        var current = 0f
+        fun event(v: Int) { c.onPitchBend("dev",0,v,{_,_->p},{_,_->current}) { _,_,x->out+=x; current=x } }
+        event(2048); assertTrue(out.isEmpty())
+        event(128); assertEquals(1,out.size)
+        assertEquals(128f/16383f*.891251f,out.last(),.000001f)
+        event(129); assertEquals(2,out.size)
+        assertEquals(129f/16383f*.891251f,out.last(),.000001f)
+
+        current=.891251f
+        val upper = EffectMidiCoordinator(); assertNull(upper.add(m)); val upperOut=mutableListOf<Float>()
+        upper.onPitchBend("dev",0,16383-128,{_,_->p},{_,_->current}) { _,_,x->upperOut+=x }
+        assertEquals(1,upperOut.size)
+        assertEquals((16383-128f)/16383f*.891251f,upperOut.single(),.000001f)
+    }
+
     @Test fun pitchBendAndCcMappingsAreDistinctAndLegacyCcJsonStaysCc() {
         val cc=mapping(channel=7); val pb=cc.copy(controller=0,controllerType=EffectControllerType.PITCH_BEND)
         val c=EffectMidiCoordinator(); assertNull(c.add(cc)); assertNull(c.add(pb))
