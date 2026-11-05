@@ -27,6 +27,7 @@ set(enable-ladspa OFF CACHE BOOL "")
 set(enable-native-dls OFF CACHE BOOL "")
 set(enable-network OFF CACHE BOOL "")
 set(enable-ipv6 OFF CACHE BOOL "")
+set(enable-threads ON CACHE BOOL "FluidSynth experimental mixer workers" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "")
 # Optional source-prepared GCEM headers for fully offline FluidSynth builds.
 if(DEFINED ENV{PIANO_GCEM_INCLUDE_DIR} AND EXISTS "$ENV{PIANO_GCEM_INCLUDE_DIR}/gcem.hpp")

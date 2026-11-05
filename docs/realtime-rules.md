@@ -91,6 +91,28 @@ Additionally, disable all tracked active notes in the engine.
 
 ## FluidSynth Integration
 
+### Opt-in experimental CPU diagnostics
+
+Audio Diagnostics can save fast-core affinity and FluidSynth core counts 1/2/4.
+Both are process-latched before initial engine creation, default to off/1, and
+require a full process restart. Multicore synthesis is an explicit experimental
+exception to the no-blocking-synchronization rule: FluidSynth coordinates render
+with internal mixer workers. It can worsen latency or underruns. App API calls
+remain serialized as before; this does not permit concurrent external synth calls.
+Each of the two slots owns `cores - 1` workers, including replacement slots.
+
+The callback publishes only its TID (a nonblocking `gettid`) and stream
+generation. Existing worker diagnostics discover topology and apply affinity;
+no sysfs I/O, affinity changes, JNI or logging run in the callback. Fast CPUs are
+the highest capacity group, falling back to maximum frequency metadata, intersected
+with allowed CPUs. Missing/homogeneous topology or permission failure is reported,
+not replaced with hardcoded CPU indices. Synth workers inherit a temporarily
+restricted creator mask; the creator's original mask is restored after creation.
+Diagnostics report requests, slot core settings, worker affinity setup and actual
+callback affinity. First callback after open/recovery may run unpinned until the
+worker observes its TID. Android may restrict/override affinity; device A/B tests
+are required before claiming any performance benefit.
+
 - Library mode only, NOT audio driver
 - Render PCM float buffer → Mixer → Oboe
 - No internal sequencer

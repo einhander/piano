@@ -98,6 +98,9 @@ object NativeEngineBridge {
     }
 
     external fun nativeInit(): Boolean
+
+    // Worker-only, process-latched before first engine init; restart to change.
+    external fun nativeConfigureAudioCpu(fastCores: Boolean, synthCores: Int)
     external fun nativeShutdown()
     external fun nativeGetVersion(): String
     external fun nativeInitCrashHandler(path: String)

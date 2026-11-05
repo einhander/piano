@@ -11,6 +11,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include "audio/OboeOutput.h"
+#include "audio/AudioCpuPolicy.h"
 #include "engine/NativeEngine.h"
 #include "midi/MidiFileTrackRoute.h"
 #include "model/TransportState.h"
@@ -130,6 +131,11 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeStopLogcatCapture(JNIEnv*, jcl
 }
 
 // Create the singleton instances. Must be called once before any other JNI function.
+JNIEXPORT void JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeConfigureAudioCpu(JNIEnv*, jclass, jboolean fast, jint cores) {
+    piano::audio::AudioCpuPolicy::instance().configure(fast == JNI_TRUE, cores);
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeInit(JNIEnv* env, jclass) {
     try {
@@ -578,7 +584,8 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetFramesPerBurst(JNIEnv* env,
 JNIEXPORT jstring JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeGetStreamDiagnostics(JNIEnv* env, jclass) {
     OboeOutput* output = OboeOutput::getInstance();
-    const std::string snapshot = output ? output->getStreamDiagnostics() : "unavailable";
+    const std::string snapshot = (output ? output->getStreamDiagnostics() + " " + output->updateCpuAffinityDiagnostics() : "unavailable")
+        + " " + piano::audio::AudioCpuPolicy::instance().diagnostics();
     return env->NewStringUTF(snapshot.c_str());
 }
 

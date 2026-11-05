@@ -352,6 +352,8 @@ class MainActivity : AppCompatActivity() {
                 if (prevMarker != null) {
                     AppLogger.error("MainActivity", "Previous launch LSP prepare marker:\n$prevMarker")
                 }
+                val cpuConfig = AudioCpuConfig.read(getSharedPreferences("piano_prefs", MODE_PRIVATE))
+                NativeEngineBridge.nativeConfigureAudioCpu(cpuConfig.fastCores, cpuConfig.synthCores)
                 if (!NativeEngineBridge.nativeInit()) {
                     AppLogger.error("MainActivity", "nativeInit() failed")
                     runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this@MainActivity, "Native init failed", Toast.LENGTH_LONG).show() }

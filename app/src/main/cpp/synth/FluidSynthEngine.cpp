@@ -1,5 +1,6 @@
 #include "FluidSynthEngine.h"
 #include "ReverbParameters.h"
+#include "../audio/AudioCpuPolicy.h"
 #include <fluidsynth/synth.h>
 #include <cstring>
 #include <algorithm>
@@ -9,6 +10,24 @@
 #include <omp.h>
 
 namespace {
+void configureCpuCores(fluid_settings_t* settings) {
+    auto& policy = piano::audio::AudioCpuPolicy::instance();
+    policy.ensureConfigured();
+    if (fluid_settings_setint(settings, "synth.cpu-cores", policy.cores()) != FLUID_OK)
+        fluid_settings_setint(settings, "synth.cpu-cores", 1);
+}
+
+fluid_synth_t* createCpuConfiguredSynth(fluid_settings_t* settings, int slot) {
+    piano::audio::SynthCreationAffinity affinity;
+    auto* synth = new_fluid_synth(settings);
+    int actual = 1;
+    fluid_settings_getint(settings, "synth.cpu-cores", &actual);
+    affinity.restore();
+    piano::audio::AudioCpuPolicy::instance().recordSynth(slot, synth ? actual : 0,
+                                                        affinity.applied, affinity.error, affinity.restoreError);
+    return synth;
+}
+
 bool setDrumChannels(fluid_synth_t* synth) {
     // Preserve General MIDI percussion channel at local channel 9 in every
     // 16-channel block (Main plus each absolute MIDI-file set).
@@ -122,7 +141,7 @@ bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
         // is mixed after dry channel buses; it is deliberately not attributed
         // to any individual MIDI channel.
         fluid_settings_setint(mSettings[i], "synth.effects-groups", 1);
-        fluid_settings_setint(mSettings[i], "synth.cpu-cores", 1);
+        configureCpuCores(mSettings[i]);
         fluid_settings_setint(mSettings[i], "audio.periods", 2);
 
         // Seed controls from FluidSynth's actual bundled defaults, not copied
@@ -139,7 +158,7 @@ bool FluidSynthEngine::init(int sampleRate, int bufferSize) {
             mAppliedReverbLevel.store(mReverbDesired.level);
         }
 
-        mSynth[i] = new_fluid_synth(mSettings[i]);
+        mSynth[i] = createCpuConfiguredSynth(mSettings[i], i);
         if (!mSynth[i]) {
             cleanup();
             return false;
@@ -330,9 +349,9 @@ bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
         fluid_settings_setint(newSettings, "synth.midi-channels", kInstrumentChannelCount);
         fluid_settings_setint(newSettings, "synth.audio-channels", kAudioGroups);
         fluid_settings_setint(newSettings, "synth.effects-groups", 1);
-        fluid_settings_setint(newSettings, "synth.cpu-cores", 1);
+        configureCpuCores(newSettings);
         fluid_settings_setint(newSettings, "audio.periods", 2);
-        newSynth = new_fluid_synth(newSettings);
+        newSynth = createCpuConfiguredSynth(newSettings, target);
         success = newSynth != nullptr;
         if (success && !setDrumChannels(newSynth)) success = false;
         if (success) {

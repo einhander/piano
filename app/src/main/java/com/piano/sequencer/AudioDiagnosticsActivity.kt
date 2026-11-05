@@ -8,6 +8,8 @@ import android.os.Bundle
 import android.os.IBinder
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
@@ -71,6 +73,59 @@ class AudioDiagnosticsActivity : AppCompatActivity() {
         label("Current process", true)
         active = label("Connecting to playback service…").apply { setTextIsSelectable(true) }
         refresh = button("Refresh current stream") { refreshSnapshot() }
+        label("Experimental CPU settings", true)
+        label("May worsen audio dropouts. FluidSynth multicore uses internal worker synchronization. Each of two synth slots creates cores − 1 workers (up to 6 workers total). Fast-core affinity requests the fast-core group; actual CPU status appears in the current stream report above.")
+        val prefs = getSharedPreferences("piano_prefs", Context.MODE_PRIVATE)
+        var savedCpu = AudioCpuConfig.read(prefs)
+        fun cpuSummary(config: AudioCpuConfig) =
+            "Fast-core affinity: ${if (config.fastCores) "On" else "Off"} · Synth cores: ${config.synthCores}"
+        val pending = label("").apply {
+            accessibilityLiveRegion = android.view.View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        label("Fast-core group affinity")
+        val affinity = RadioGroup(this).apply {
+            orientation = RadioGroup.HORIZONTAL
+            body.addView(this)
+        }
+        fun option(group: RadioGroup, title: String) = RadioButton(this).apply {
+            id = android.view.View.generateViewId()
+            text = title
+            setTextColor(getColor(R.color.ui_text))
+            minHeight = (48 * resources.displayMetrics.density).toInt()
+            group.addView(this)
+        }
+        val affinityOff = option(affinity, "Off")
+        val affinityOn = option(affinity, "On")
+        affinity.check(if (savedCpu.fastCores) affinityOn.id else affinityOff.id)
+        label("FluidSynth cores per slot")
+        val cores = RadioGroup(this).apply {
+            orientation = RadioGroup.HORIZONTAL
+            body.addView(this)
+        }
+        val coreOptions = listOf(1, 2, 4).associateWith { option(cores, "$it") }
+        cores.check(coreOptions.getValue(savedCpu.synthCores).id)
+        fun selection() = AudioCpuConfig(
+            fastCores = affinity.checkedRadioButtonId == affinityOn.id,
+            synthCores = coreOptions.entries.first { it.value.id == cores.checkedRadioButtonId }.key
+        )
+        val saveCpu = button("Save for next process restart") {}
+        fun updateCpuSelection() {
+            val changed = selection() != savedCpu
+            saveCpu.isEnabled = changed
+            pending.text = "Saved for next full process restart\n${cpuSummary(savedCpu)}" +
+                if (changed) "\nSelection not saved." else "\nRunning settings: see current stream report."
+        }
+        affinity.setOnCheckedChangeListener { _, _ -> updateCpuSelection() }
+        cores.setOnCheckedChangeListener { _, _ -> updateCpuSelection() }
+        saveCpu.setOnClickListener {
+            selection().persist(prefs)
+            savedCpu = AudioCpuConfig.read(prefs)
+            updateCpuSelection()
+            pending.append("\nNot applied to running audio.")
+        }
+        updateCpuSelection()
+        label("A full PROCESS restart is required: use Exit on the main screen, then relaunch, or Android Settings → Force stop, then relaunch. Back, reopening this screen, Stop and Close do not apply these settings.")
+        label("Stream stop / close tests", true)
         label("Lower your device volume before testing. Stop leaves the stream allocated; Close releases the stream. Both preserve loaded SoundFonts and channel settings and require a full process restart for audio. Audio focus is intentionally retained, if currently held.")
         stop = button("Stop our audio stream") { confirmAction(false) }
         close = button("Close our audio stream") { confirmAction(true) }

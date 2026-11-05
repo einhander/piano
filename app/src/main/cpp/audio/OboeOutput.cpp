@@ -1,5 +1,7 @@
 #include "OboeOutput.h"
 #include "StreamRecoveryPolicy.h"
+#include "AudioCpuPolicy.h"
+#include <sys/syscall.h>
 #include <cmath>
 #include <sstream>
 #ifndef PIANO_CALLBACK_DIAGNOSTICS
@@ -244,6 +246,11 @@ oboe::Result OboeOutput::stop() {
 }
 
 oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, void* data, int32_t numFrames) {
+    // A nonblocking identity syscall; no TLS initialization, affinity or IO here.
+    const uint32_t tid = static_cast<uint32_t>(syscall(SYS_gettid));
+    const auto generation = mStreamGeneration.load(std::memory_order_acquire);
+    if (mActiveStreamIdentity.load(std::memory_order_acquire) == reinterpret_cast<uintptr_t>(stream))
+        mCallbackThreadToken.store((static_cast<uint64_t>(generation) << 32) | tid, std::memory_order_release);
 #if PIANO_CALLBACK_DIAGNOSTICS
     mCallbackTiming.callbackEnterTotal.fetch_add(1, std::memory_order_relaxed);
     mCallbackTiming.publishStage(1); // ENTER: callback admitted; before engine call
@@ -309,6 +316,37 @@ oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, voi
 #endif
 
     return oboe::DataCallbackResult::Continue;
+}
+
+std::string OboeOutput::updateCpuAffinityDiagnostics() {
+    std::lock_guard<std::mutex> lock(mStreamMutex);
+    auto& policy = piano::audio::AudioCpuPolicy::instance();
+    const uint64_t token = mCallbackThreadToken.load(std::memory_order_acquire);
+    const uint32_t generation = mStreamGeneration.load(std::memory_order_acquire);
+    if (!mStream || !token || static_cast<uint32_t>(token >> 32) != generation)
+        return "callback_affinity=waiting-for-current-callback";
+    const auto tid = static_cast<pid_t>(token & 0xffffffffu);
+    if (mAppliedThreadToken != token) {
+        mAppliedThreadToken = token;
+        cpu_set_t desired, allowed;
+        if (!policy.mask(desired)) {
+            mCpuAffinityStatus = "off-or-topology-unavailable";
+        } else if (sched_getaffinity(tid, sizeof(allowed), &allowed) != 0) {
+            mCpuAffinityStatus = "read-error:" + std::to_string(errno);
+        } else {
+            for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+                if (!CPU_ISSET(cpu, &allowed)) CPU_CLR(cpu, &desired);
+            if (CPU_COUNT(&desired) == 0) mCpuAffinityStatus = "fast-group-not-allowed";
+            else if (sched_setaffinity(tid, sizeof(desired), &desired) != 0)
+                mCpuAffinityStatus = "apply-error:" + std::to_string(errno);
+            else mCpuAffinityStatus = "applied";
+        }
+    }
+    cpu_set_t effective;
+    const std::string mask = sched_getaffinity(tid, sizeof(effective), &effective) == 0
+        ? piano::audio::AudioCpuPolicy::maskText(effective) : "unavailable";
+    return "callback_affinity={generation=" + std::to_string(generation) + ",tid=" + std::to_string(tid)
+        + ",status=" + mCpuAffinityStatus + ",effective=" + mask + '}';
 }
 
 void OboeOutput::takeCallbackTiming(uint32_t* out) noexcept {

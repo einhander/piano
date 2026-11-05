@@ -55,6 +55,8 @@ public:
     oboe::PerformanceMode getPerformanceMode() const;
     // Snapshot negotiated stream properties. Worker thread only.
     std::string getStreamDiagnostics() const;
+    // Worker-only affinity application; callback only publishes identity.
+    std::string updateCpuAffinityDiagnostics();
 
     // ── Buffer size control (worker thread — NOT the audio callback) ──
     // autoTune=true (default): the LatencyTuner manages the buffer size
@@ -106,6 +108,9 @@ private:
     std::atomic<int32_t> mLastError{0};
     std::atomic<uint32_t> mStreamGeneration{0}, mLastClosedGeneration{0}, mLastErrorGeneration{0};
     std::atomic<uintptr_t> mActiveStreamIdentity{0};
+    std::atomic<uint64_t> mCallbackThreadToken{0};
+    uint64_t mAppliedThreadToken = 0; // guarded by mStreamMutex
+    std::string mCpuAffinityStatus = "waiting-for-callback";
     std::atomic<int32_t> mLastCloseResult{-1}, mLastCloseReason{0}, mLastErrorDeviceId{-1};
     std::atomic<bool> mLastErrorMatchesCurrent{false};
     int32_t mSampleRate = 0;

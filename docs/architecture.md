@@ -178,6 +178,27 @@ remainder of process; restart app to resume. Audio recording must be stopped fir
   user can override with a **fixed buffer size** (128–2048 frames), which
   disables auto-tune.
 
+### Experimental CPU diagnostics
+
+Audio Diagnostics offers independent fast-core-group affinity and FluidSynth
+synthesis core counts 1/2/4 (defaults off/1). Saved requests are latched at first
+engine startup and require full process restart. Both synth slots and sample-rate
+replacement slots use the latched count. Multicore rendering introduces internal
+worker synchronization and is not guaranteed to improve latency. Affinity is
+best-effort, worker-applied to the callback TID/generation and inherited by newly
+created synth workers. Stream reports include requested/actual CPU settings,
+topology/masks and failure status. See `realtime-rules.md` for the explicit
+experimental exception and device verification requirements.
+
+Device A/B procedure: replay the same passage/SoundFont/effects with off/1,
+on/1, off/2, then on/2, fully restarting the process after each saved change.
+Compare underrun deltas and callback timing over equal intervals, not cumulative
+totals. Verify `synth_actual`, `fast_mask`, `callback_affinity` status/effective
+mask and creator restoration errors in the App Log. Repeat after USB reconnect
+and audio stream recovery. Host tests cover mask selection and process latching;
+Android permission, topology, thermal and audible-latency behavior require device
+testing. Do not assume affinity or additional workers improve performance.
+
 ### Performance settings
 User-tunable synth/output settings (Settings screen), all applied by the audio
 thread from atomics and **persisted in `piano_prefs`**:
