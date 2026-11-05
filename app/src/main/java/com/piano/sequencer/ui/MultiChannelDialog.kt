@@ -8,6 +8,14 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
+import android.widget.Button
+import android.os.Handler
+import android.os.Looper
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
+import com.piano.sequencer.PianoApp
+import com.piano.sequencer.midi.MidiAction
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
 import com.piano.sequencer.R
@@ -35,6 +43,57 @@ object MultiChannelDialog {
             isChecked = enabled
         }
         content.addView(toggle)
+        val app = context.applicationContext as PianoApp
+        val mapper = app.actionMidiMapper
+        val prefs = context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE)
+        val handler = Handler(Looper.getMainLooper())
+        var ownsLearn = false
+        var closed = false
+        val status = TextView(context).apply { textSize = 13f }
+        val learn = Button(context).apply { text = "Learn"; UiControlStyle.apply(this) }
+        val unlearn = Button(context).apply { text = "Unlearn"; UiControlStyle.apply(this) }
+        fun refreshMapping(message: String? = null) {
+            status.text = message ?: if (ownsLearn) "Move a MIDI control…" else if (mapper.mapping(MidiAction.MULTI) != null) "MIDI assigned" else "No MIDI assignment"
+            learn.text = if (ownsLearn) "Cancel Learn" else "Learn"
+            unlearn.isEnabled = ownsLearn || mapper.mapping(MidiAction.MULTI) != null
+        }
+        fun finishLearn(message: String? = null) {
+            if (ownsLearn) {
+                mapper.cancelLearn()
+                app.setActionMidiLearnListener(null)
+                ownsLearn = false
+            }
+            handler.removeCallbacksAndMessages(null)
+            refreshMapping(message)
+        }
+        learn.setOnClickListener {
+            if (ownsLearn) finishLearn("Learning cancelled.")
+            else if (app.instrumentEffectCcController.isLearning() ||
+                com.piano.sequencer.midi.MidiFileLearnState.getState() == com.piano.sequencer.midi.MidiFileLearnState.State.LEARNING) {
+                refreshMapping("Finish current MIDI Learn first.")
+            }
+            else if (!mapper.startLearn(MidiAction.MULTI)) refreshMapping("Another MIDI Learn is active.")
+            else {
+                ownsLearn = true
+                app.setActionMidiLearnListener { result ->
+                    handler.post {
+                        if (!closed && ownsLearn && (result.captured == MidiAction.MULTI || result.conflict != null)) {
+                            finishLearn(if (result.captured == MidiAction.MULTI) "MIDI assignment saved." else "Already assigned to ${result.conflict?.name?.lowercase()}.")
+                        }
+                    }
+                }
+                refreshMapping()
+                handler.postDelayed({ if (!closed && ownsLearn) finishLearn("Learning timed out.") }, 10_000L)
+            }
+        }
+        unlearn.setOnClickListener {
+            finishLearn()
+            mapper.clear(MidiAction.MULTI)
+            refreshMapping()
+        }
+        content.addView(status)
+        content.addView(LinearLayout(context).apply { addView(learn); addView(unlearn) })
+        refreshMapping()
         val rows = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         val hint = TextView(context).apply {
             text = context.getString(R.string.ui_multi_summary)
@@ -105,16 +164,38 @@ object MultiChannelDialog {
             addView(rows)
         }
         content.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        var updating = false
         toggle.setOnCheckedChangeListener { _, checked ->
             enabled = checked
             checks.forEach { it.isEnabled = checked }
-            onChange(enabled, mask)
+            if (!updating) onChange(enabled, mask)
         }
         val dialog = AlertDialog.Builder(context)
             .setTitle(R.string.multi_title)
             .setView(content)
             .setPositiveButton(R.string.multi_close, null)
             .create()
+        val preferenceListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "multi_channel_enabled") handler.post {
+                if (!closed) {
+                    updating = true
+                    toggle.isChecked = prefs.getBoolean("multi_channel_enabled", enabled)
+                    updating = false
+                }
+            }
+        }
+        val lifecycle = (context as? LifecycleOwner)?.lifecycle
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) dialog.dismiss()
+        }
+        lifecycle?.addObserver(observer)
+        prefs.registerOnSharedPreferenceChangeListener(preferenceListener)
+        dialog.setOnDismissListener {
+            closed = true
+            finishLearn()
+            prefs.unregisterOnSharedPreferenceChangeListener(preferenceListener)
+            lifecycle?.removeObserver(observer)
+        }
         // Explanation scrolls with rows so landscape/large text still leaves usable list space.
         // Title, enable switch and Close stay fixed.
         dialog.setOnShowListener {

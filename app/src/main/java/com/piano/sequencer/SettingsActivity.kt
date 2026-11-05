@@ -105,7 +105,7 @@ class SettingsActivity : AppCompatActivity() {
             val p = parameters["fluidsynth.reverb" to id] ?: return@forEach
             ccController.mappings().filter { it.scope == EffectCcScope.GLOBAL &&
                 it.effectId == "fluidsynth.reverb" && it.parameterId == id }.forEach { m ->
-                row.addView(label(mappingDescription(m)))
+                row.addView(label("MIDI assigned"))
                 row.addView(Button(this).apply {
                     text = "Edit / Unlearn mapping"
                     com.piano.sequencer.ui.UiControlStyle.apply(this)
@@ -298,6 +298,7 @@ class SettingsActivity : AppCompatActivity() {
             runOnUiThread {
                 if (isFinishing || isDestroyed || generation != actionLearnGeneration) return@runOnUiThread
                 val completedAction = actionLearn ?: return@runOnUiThread
+                if (result.captured == null && result.conflict == null) return@runOnUiThread
                 learnTimeout.removeCallbacks(timeoutTask)
                 actionLearn = null
                 val message = if (result.captured != null) "MIDI assignment saved."

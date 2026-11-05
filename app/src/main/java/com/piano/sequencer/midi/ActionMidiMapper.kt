@@ -2,7 +2,7 @@ package com.piano.sequencer.midi
 
 import android.content.SharedPreferences
 
-enum class MidiAction { RECORD, PANIC }
+enum class MidiAction { RECORD, PANIC, MULTI }
 enum class MidiTriggerType { NOTE_ON, CC, PROGRAM }
 
 data class ActionMidiMapping(val type: MidiTriggerType, val channel: Int, val data1: Int, val source: String? = null) {

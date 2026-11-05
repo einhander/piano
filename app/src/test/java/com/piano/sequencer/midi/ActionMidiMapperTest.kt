@@ -95,6 +95,31 @@ class ActionMidiMapperTest {
         assertNull(mapper.event(MidiTriggerType.NOTE_ON, 0, 71, 100, "SMK37|port=2").action)
     }
 
+    @Test fun multiActionSupportsLearnToggleSourceMatchingAndUnlearn() {
+        val prefs = Prefs()
+        val mapper = ActionMidiMapper(prefs)
+        val source = "keyboard|port=1"
+        assertTrue(mapper.startLearn(MidiAction.MULTI))
+        assertEquals(MidiAction.MULTI, mapper.event(MidiTriggerType.CC, 3, 22, 0, source).captured)
+        val highWithoutEdge = mapper.event(MidiTriggerType.CC, 3, 22, 90, source)
+        assertTrue(highWithoutEdge.consumed)
+        assertNull(highWithoutEdge.action)
+        assertNull(mapper.event(MidiTriggerType.CC, 3, 22, 0, "keyboard|port=0").action)
+        assertNull(mapper.event(MidiTriggerType.CC, 3, 22, 90, source).action)
+        mapper.event(MidiTriggerType.CC, 3, 22, 0, source)
+        assertEquals(MidiAction.MULTI, mapper.event(MidiTriggerType.CC, 3, 22, 90, source).action)
+        assertNull(mapper.event(MidiTriggerType.CC, 3, 22, 100, source).action)
+        assertEquals(ActionMidiMapping(MidiTriggerType.CC, 3, 22, source), ActionMidiMapper(prefs).mapping(MidiAction.MULTI))
+
+        assertTrue(mapper.startLearn(MidiAction.MULTI))
+        mapper.event(MidiTriggerType.NOTE_ON, 3, 60, 100, source)
+        assertTrue(mapper.consumesNoteOff(3, 60, source))
+        assertFalse(mapper.consumesNoteOff(3, 60, "keyboard|port=0"))
+        assertNull(mapper.event(MidiTriggerType.NOTE_ON, 3, 60, 0, source).action)
+        mapper.clear(MidiAction.MULTI)
+        assertNull(mapper.mapping(MidiAction.MULTI))
+    }
+
     @Test fun clearUnlearnsAndPersistsForEachAction() {
         val prefs = Prefs()
         val mapper = ActionMidiMapper(prefs)

@@ -122,8 +122,24 @@ class MainActivity : AppCompatActivity() {
             when (action) {
                 MidiAction.RECORD -> toggleAudioRecording()
                 MidiAction.PANIC -> dispatchMidi { it.panic() }
+                MidiAction.MULTI -> {
+                    setMultiChannelEnabled(!multiChannelEnabled)
+                    (application as PianoApp).notifyActionMidiLearn(
+                        ActionMidiMapper.Result(consumed = true, action = MidiAction.MULTI)
+                    )
+                }
             }
         }
+    }
+
+    /** Toggle broadcast mode without changing the user's selected channel mask. */
+    private fun setMultiChannelEnabled(enabled: Boolean) {
+        multiChannelEnabled = enabled
+        getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+            .putBoolean("multi_channel_enabled", enabled)
+            .putInt("multi_channel_mask", multiChannelMask)
+            .apply()
+        if (::multiChannelButton.isInitialized) multiChannelButton.text = multiChannelLabel()
     }
 
     private fun toggleAudioRecording() {
@@ -875,13 +891,11 @@ class MainActivity : AppCompatActivity() {
                     ChannelVolumePreferences.snapshot(getSharedPreferences("piano_prefs", MODE_PRIVATE)),
                     onVolumeChange = ::queueChannelVolume
                 ) { enabled, mask ->
-                    multiChannelEnabled = enabled
                     multiChannelMask = mask
                     getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
-                        .putBoolean("multi_channel_enabled", enabled)
                         .putInt("multi_channel_mask", mask)
                         .apply()
-                    multiChannelButton.text = multiChannelLabel()
+                    setMultiChannelEnabled(enabled)
                 }
             }
         }
@@ -1007,9 +1021,7 @@ class MainActivity : AppCompatActivity() {
             override fun onNoteOn(channel: Int, note: Int, velocity: Int, source: String) {
                 withMidiIngress {
                     val result = actionMidiMapper.event(MidiTriggerType.NOTE_ON, channel, note, velocity, source)
-                    if (result.captured != null || result.conflict != null) runOnUiThread {
-                        (application as PianoApp).notifyActionMidiLearn(result)
-                    }
+                    if (result.captured != null || result.conflict != null) runOnUiThread { (application as PianoApp).notifyActionMidiLearn(result) }
                     result.action?.let(::dispatchActionMidi)
                     if (!result.consumed) midiIngress.noteOn(channel, note, velocity, source)
                 }

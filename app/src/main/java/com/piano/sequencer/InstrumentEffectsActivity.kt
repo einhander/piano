@@ -683,7 +683,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         addView(value)
         val mapped = ccController.mappings().filter { it.targetInstrumentSetId == setId && it.targetInstrumentChannel == channel && it.effectId == id && it.parameterId == p.stableId && it.scope == EffectCcScope.INSTRUMENT }
         mapped.forEach { mapping ->
-            addView(label(mappingDescription(mapping)))
+            addView(label("MIDI assigned"))
             addView(Button(this@InstrumentEffectsActivity).apply {
                 com.piano.sequencer.ui.UiControlStyle.apply(this)
                 text = "Edit / Unlearn mapping"
@@ -895,8 +895,12 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             AlertDialog.Builder(this).setTitle("MIDI CC mappings").setMessage("No mappings for this instrument channel. Use MIDI Learn on a parameter.").setPositiveButton("Done", null).show()
             return
         }
-        AlertDialog.Builder(this).setTitle("MIDI CC mappings · Ch ${channel + 1}")
-            .setItems(mappings.map(::mappingDescription).toTypedArray()) { _, index ->
+        AlertDialog.Builder(this).setTitle("MIDI mappings · Ch ${channel + 1}")
+            .setItems(mappings.map { m ->
+                val effect = EFFECTS.firstOrNull { it.first == m.effectId }?.second?.let { getString(it) } ?: m.effectId
+                val parameter = parameters[m.effectId to m.parameterId]?.displayName ?: if (m.parameterId == "-1") "Insert enabled" else "Parameter ${m.parameterId}"
+                "$effect · $parameter"
+            }.toTypedArray()) { _, index ->
                 val m = mappings[index]
                 editMapping(m, parameters[m.effectId to m.parameterId])
             }.setNegativeButton("Done", null).show()
