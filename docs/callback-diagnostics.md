@@ -46,3 +46,33 @@ describe the callback with the largest duration in the window, and remain
 unchanged if no new sample completes. A bounded reader returns zeros if it
 cannot obtain a stable sample. Instrumentation overhead is included, especially
 in unaccounted CPU; integer-microsecond rounding can affect stage sums.
+
+## Evidence-first investigation
+
+Use a short report: **observation → hypothesis → discriminating check → result**.
+Label a cause as confirmed only when the check distinguishes it from alternatives.
+
+1. Identify the newest relevant log by both file timestamp and event timestamps.
+   Record its filename, app build SHA/version, actual API/rate/callback frames,
+   buffer, controller/ports, SoundFont, effects, and CPU diagnostic settings when
+   available. A log from another build is historical evidence, not a regression
+   reproduction. State missing settings instead of guessing them.
+2. Compare underrun **deltas** over equal windows and correlate with interval
+   callback counts/frames and budget `actual frames / actual sample rate`.
+   Separate startup, stream recovery, settings changes, and steady playback.
+3. Distinguish measurements: wall time includes preemption; entry gap includes
+   processing and idle/scheduling time; thread CPU is sampled; paired `sample_*`
+   values describe one sampled callback, not the worst callback in the window.
+   Callback totals or frames-per-callback alone cannot establish throughput or
+   processor utilization without an elapsed interval.
+4. Keep alternatives explicit: excess synth voices, DSP cost, callback scheduling,
+   stream lifecycle, and duplicated MIDI delivery. Equal per-port input byte
+   counts do not prove duplicate synth dispatch; verify the post-policy path.
+5. For a regression, compare the known-good and failing builds with the same
+   passage, controller, SoundFont and settings. Change one variable per run.
+   Do not repeatedly recommend a buffer/callback setting the user already tested
+   unsuccessfully unless new evidence justifies a controlled retest.
+
+If current logs cannot distinguish the hypotheses, name the missing observation
+and smallest next capture. Obtain approval before adding persistent diagnostics;
+keep collection bounded and keep file I/O/logging outside the audio callback.

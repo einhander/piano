@@ -15,11 +15,17 @@ C++ native audio engine + Kotlin Android UI.
 ```bash
 ./build.sh debug    # → app/build/outputs/apk/debug/app-debug.apk
 ./build.sh release  # → app/build/outputs/apk/release/
+./build.sh check    # debug build + JVM tests + diff check; per-run verification logs
 ```
 
 Wraps `./gradlew :app:assembleDebug|Release --no-daemon --warning-mode none`.
 Requires JDK 17, Android SDK (API 34), NDK 26.1, CMake 3.22.1.
 `local.properties` is required (copy from `local.properties.template`).
+
+`check` runs the debug build, JVM tests and `git diff --check` sequentially,
+stops on failure, and prints commands, exit statuses and fresh per-run log paths
+under ignored `build/verification/`. It supplies the documented local toolchain
+paths when environment variables are unset. It never stages, commits or pushes.
 
 - **Automated checks:** `./build.sh debug` must print `BUILD SUCCESSFUL`, and the JVM
   unit tests must pass: `./gradlew :app:testDebugUnitTest` (MIDI parser regression
