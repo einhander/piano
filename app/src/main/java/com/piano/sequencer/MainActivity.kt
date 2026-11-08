@@ -36,6 +36,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.piano.sequencer.midi.ChordRecorder
 import com.piano.sequencer.midi.MidiDeviceManager
+import com.piano.sequencer.midi.MidiLoadingPolicy
 import com.piano.sequencer.midi.MidiFileMappingStore
 import com.piano.sequencer.midi.MidiInputReceiver
 import com.piano.sequencer.midi.MidiFileTriggerController
@@ -113,6 +114,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var projectRepo: ProjectRepository
 
     private lateinit var midiManager: MidiDeviceManager
+    private lateinit var midiLoadingPolicy: MidiLoadingPolicy
     private lateinit var midiInputReceiver: MidiInputReceiver
     private lateinit var midiIngress: MidiIngressRouter
     private val actionMidiMapper get() = (application as PianoApp).actionMidiMapper
@@ -172,6 +174,7 @@ class MainActivity : AppCompatActivity() {
     private val midiDeviceCallback = object : MidiManager.DeviceCallback() {
         override fun onDeviceAdded(deviceInfo: MidiDeviceInfo) {
             if (exitPending) return
+            if (!midiLoadingPolicy.allowAutomaticLoading()) return
             refreshMidiStatus()
             if (!midiManager.isConnected() && !userDisconnected) {
                 val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
@@ -189,7 +192,7 @@ class MainActivity : AppCompatActivity() {
             val active = midiManager.getCurrentDevice()
             if (active != null && midiManager.stableKey(active) == midiManager.stableKey(deviceInfo)) {
                 midiManager.disconnect()
-                if (!userDisconnected) {
+                if (midiLoadingPolicy.allowAutomaticLoading() && !userDisconnected) {
                     val devices = midiManager.listDevices()
                     val other = devices.firstOrNull {
                         midiManager.stableKey(it) != midiManager.stableKey(deviceInfo)
@@ -510,6 +513,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshMidiStatus() {
         if (isFinishing || isDestroyed) return
+        if (!midiLoadingPolicy.allowAutomaticLoading()) return
         val devices = midiManager.listDevices()
         when {
             devices.isEmpty() -> {
@@ -855,6 +859,7 @@ class MainActivity : AppCompatActivity() {
         midiDeviceButton = Button(this).apply {
             text = "MIDI: no devices"
             setOnClickListener {
+                midiLoadingPolicy.onChooserOpened()
                 val devices = midiManager.listDevices()
                 if (devices.isEmpty()) {
                     Toast.makeText(this@MainActivity, "No MIDI input devices", Toast.LENGTH_SHORT).show()
@@ -1101,6 +1106,9 @@ class MainActivity : AppCompatActivity() {
 
         // Setup MIDI device manager
         midiManager = MidiDeviceManager(this, midiInputReceiver)
+        midiLoadingPolicy = MidiLoadingPolicy(
+            getSharedPreferences("piano_prefs", MODE_PRIVATE).getBoolean("midi_lazy_loading", false)
+        )
         midiManager.setListener(object : MidiDeviceManager.Listener {
             override fun onDeviceConnected(device: MidiDeviceInfo) {
                 runOnUiThread {
@@ -1118,7 +1126,7 @@ class MainActivity : AppCompatActivity() {
         })
 
         // Auto-connect: try persisted device key first, fall back to devices[0].
-        val devices = midiManager.listDevices()
+        val devices = if (midiLoadingPolicy.allowAutomaticLoading()) midiManager.listDevices() else emptyList()
         if (devices.isNotEmpty()) {
             val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
             val persistedKey = prefs.getString("midi_device_key", null)
@@ -1132,7 +1140,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 connectToDevice(devices[0], persist = false)
             }
-        } else {
+        } else if (midiLoadingPolicy.allowAutomaticLoading()) {
             midiStatusText.text = "MIDI: no devices"
         }
 
@@ -1936,6 +1944,9 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (exitPending) return
+        midiLoadingPolicy.updateLazyLoading(
+            getSharedPreferences("piano_prefs", MODE_PRIVATE).getBoolean("midi_lazy_loading", false)
+        )
         // Re-read the pitch bend / mod / breath fallback mask — covers first
         // launch and returning from SettingsActivity.
         pitchBendChannelsMask = getSharedPreferences("piano_prefs", MODE_PRIVATE)
@@ -1947,7 +1958,7 @@ class MainActivity : AppCompatActivity() {
         // The button was created in onCreate (before the first restore) —
         // re-sync its label with the restored state.
         multiChannelButton.text = multiChannelLabel()
-        if (!midiManager.isConnected() && !userDisconnected) {
+        if (midiLoadingPolicy.allowAutomaticLoading() && !midiManager.isConnected() && !userDisconnected) {
             val devices = midiManager.listDevices()
             if (devices.isNotEmpty()) {
                 val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
