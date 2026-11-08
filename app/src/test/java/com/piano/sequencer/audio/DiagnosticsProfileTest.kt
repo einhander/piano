@@ -18,14 +18,15 @@ class DiagnosticsProfileTest {
 
     @Test fun profilePersistsChoicesUnderDedicatedPreferenceKeys() {
         val values = mutableMapOf<String, String>()
+        val ints = mutableMapOf<String, Int>()
         val editor = object : SharedPreferences.Editor {
             override fun putString(key: String, value: String?): SharedPreferences.Editor { values[key] = value!!; return this }
+            override fun putInt(key: String, value: Int): SharedPreferences.Editor { ints[key] = value; return this }
             override fun apply() {}
             override fun commit() = true
             override fun clear() = this
             override fun remove(key: String) = this
             override fun putStringSet(key: String, value: MutableSet<String>?) = this
-            override fun putInt(key: String, value: Int) = this
             override fun putLong(key: String, value: Long) = this
             override fun putFloat(key: String, value: Float) = this
             override fun putBoolean(key: String, value: Boolean) = this
@@ -35,7 +36,7 @@ class DiagnosticsProfileTest {
             override fun getString(key: String, defValue: String?) = values[key] ?: defValue
             override fun getAll(): MutableMap<String, *> = values
             override fun getStringSet(key: String, defValues: MutableSet<String>?) = null
-            override fun getInt(key: String, defValue: Int) = defValue
+            override fun getInt(key: String, defValue: Int) = ints[key] ?: defValue
             override fun getLong(key: String, defValue: Long) = defValue
             override fun getFloat(key: String, defValue: Float) = defValue
             override fun getBoolean(key: String, defValue: Boolean) = defValue
@@ -43,12 +44,26 @@ class DiagnosticsProfileTest {
             override fun registerOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener?) {}
             override fun unregisterOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener?) {}
         }
-        assertTrue(persistDiagnosticsProfile(prefs, DiagnosticsProfile(AudioApiChoice.AAUDIO, SampleRateChoice.HZ_44100)))
+        assertTrue(persistDiagnosticsProfile(prefs, DiagnosticsProfile(AudioApiChoice.AAUDIO, SampleRateChoice.HZ_44100, 192)))
         assertEquals("aaudio", values[DiagnosticsProfile.KEY_API])
         assertEquals("44100", values[DiagnosticsProfile.KEY_RATE])
-        assertEquals(DiagnosticsProfile(AudioApiChoice.AAUDIO, SampleRateChoice.HZ_44100), DiagnosticsProfile.load(prefs))
+        assertEquals(192, ints[DiagnosticsProfile.KEY_CALLBACK_FRAMES])
+        assertEquals(DiagnosticsProfile(AudioApiChoice.AAUDIO, SampleRateChoice.HZ_44100, 192), DiagnosticsProfile.load(prefs))
         assertEquals("Saved; apply after fully restarting app", profilePersistenceMessage(true))
         assertEquals("Could not save audio diagnostic profile", profilePersistenceMessage(false))
+    }
+
+    @Test fun callbackBlockDefaultsRoundTripsChoicesAndNormalizesInvalidValues() {
+        assertEquals(64, DiagnosticsProfile().callbackFrames)
+        assertEquals(listOf(0, 64, 128, 192, 256, 512), listOf(0, 64, 128, 192, 256, 512).map(::normalizeCallbackFrames))
+        assertEquals(64, normalizeCallbackFrames(-1))
+        assertEquals(64, normalizeCallbackFrames(65))
+    }
+
+    @Test fun settingsOutputSaveRetainsCallbackChoiceChangedElsewhere() {
+        val latest = DiagnosticsProfile(AudioApiChoice.OBOE_DEFAULT, SampleRateChoice.HZ_48000, 192)
+        assertEquals(DiagnosticsProfile(AudioApiChoice.AAUDIO, SampleRateChoice.HZ_44100, 192),
+            withSelectedOutput(latest, AudioApiChoice.AAUDIO, SampleRateChoice.HZ_44100))
     }
 
     @Test fun profilePersistenceFailureIsReported() {
@@ -98,21 +113,21 @@ class DiagnosticsProfileTest {
     @Test fun profileClaimsOncePerProcessAndManualCloseBlocksUntilProcessReset() {
         var configureCalls = 0
         val beforeOpen = ProfileActivation()
-        assertEquals(ProfileApplyResult.APPLIED, applyProfileBeforeFirstOpen(beforeOpen, DiagnosticsProfile()) { _, _ -> configureCalls++; true })
-        assertEquals(ProfileApplyResult.ALREADY_LATCHED, applyProfileBeforeFirstOpen(beforeOpen, DiagnosticsProfile(AudioApiChoice.AAUDIO, SampleRateChoice.HZ_44100)) { _, _ -> configureCalls++; true })
+        assertEquals(ProfileApplyResult.APPLIED, applyProfileBeforeFirstOpen(beforeOpen, DiagnosticsProfile(callbackFrames = 128)) { _, _, frames -> configureCalls++; assertEquals(128, frames); true })
+        assertEquals(ProfileApplyResult.ALREADY_LATCHED, applyProfileBeforeFirstOpen(beforeOpen, DiagnosticsProfile(AudioApiChoice.AAUDIO, SampleRateChoice.HZ_44100, 512)) { _, _, _ -> configureCalls++; true })
         assertTrue(isProfileConfigurationAccepted(ProfileApplyResult.ALREADY_LATCHED))
         assertFalse(isProfileConfigurationAccepted(ProfileApplyResult.NATIVE_REJECTED))
         assertEquals(1, configureCalls)
-        assertEquals(DiagnosticsProfile(), beforeOpen.activeProfile())
+        assertEquals(DiagnosticsProfile(callbackFrames = 128), beforeOpen.activeProfile())
 
         val retryAfterReject = ProfileActivation()
-        assertEquals(ProfileApplyResult.NATIVE_REJECTED, applyProfileBeforeFirstOpen(retryAfterReject, DiagnosticsProfile(AudioApiChoice.AAUDIO, SampleRateChoice.HZ_44100)) { _, _ -> false })
+        assertEquals(ProfileApplyResult.NATIVE_REJECTED, applyProfileBeforeFirstOpen(retryAfterReject, DiagnosticsProfile(AudioApiChoice.AAUDIO, SampleRateChoice.HZ_44100)) { _, _, _ -> false })
         assertFalse(retryAfterReject.isApplied())
-        assertEquals(ProfileApplyResult.APPLIED, applyProfileBeforeFirstOpen(retryAfterReject, DiagnosticsProfile(AudioApiChoice.OPENSL_ES, SampleRateChoice.SYSTEM)) { api, rate -> api == AudioApiChoice.OPENSL_ES.nativeValue && rate == SampleRateChoice.SYSTEM.nativeValue })
+        assertEquals(ProfileApplyResult.APPLIED, applyProfileBeforeFirstOpen(retryAfterReject, DiagnosticsProfile(AudioApiChoice.OPENSL_ES, SampleRateChoice.SYSTEM)) { api, rate, _ -> api == AudioApiChoice.OPENSL_ES.nativeValue && rate == SampleRateChoice.SYSTEM.nativeValue })
         assertEquals(DiagnosticsProfile(AudioApiChoice.OPENSL_ES, SampleRateChoice.SYSTEM), retryAfterReject.activeProfile())
 
         val nativeAlreadyOpen = ProfileActivation()
-        assertEquals(ProfileApplyResult.NATIVE_REJECTED, applyProfileBeforeFirstOpen(nativeAlreadyOpen, DiagnosticsProfile(AudioApiChoice.AAUDIO, SampleRateChoice.HZ_44100)) { _, _ -> false })
+        assertEquals(ProfileApplyResult.NATIVE_REJECTED, applyProfileBeforeFirstOpen(nativeAlreadyOpen, DiagnosticsProfile(AudioApiChoice.AAUDIO, SampleRateChoice.HZ_44100)) { _, _, _ -> false })
         assertFalse(nativeAlreadyOpen.isApplied())
         val close = ManualStreamCloseState()
         assertFalse(close.isClosedByUser())
@@ -143,6 +158,6 @@ class DiagnosticsProfileTest {
         assertFalse(allowRecovery(stoppedState, terminalBackendState = true))
         assertTrue(canStopOrCloseForDiagnostics(audioRecordingActive = false))
         assertFalse(canStopOrCloseForDiagnostics(audioRecordingActive = true))
-        assertEquals(ProfileApplyResult.APPLIED, applyProfileBeforeFirstOpen(ProfileActivation(), DiagnosticsProfile()) { _, _ -> true }) // new process state
+        assertEquals(ProfileApplyResult.APPLIED, applyProfileBeforeFirstOpen(ProfileActivation(), DiagnosticsProfile()) { _, _, _ -> true }) // new process state
     }
 }

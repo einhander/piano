@@ -18,7 +18,7 @@ public:
     OboeOutput& operator=(const OboeOutput&) = delete;
 
     oboe::Result open();
-    bool configureDiagnosticProfile(piano::audio::ApiChoice api, piano::audio::RateChoice rate);
+    bool configureDiagnosticProfile(piano::audio::ApiChoice api, piano::audio::RateChoice rate, int32_t callbackFrames);
     void closeForDiagnostics();
     void close();
     oboe::Result start();
@@ -100,6 +100,7 @@ private:
     oboe::AudioStream* mStream = nullptr;
     piano::audio::ApiChoice mRequestedApi = piano::audio::ApiChoice::OboeDefault;
     piano::audio::RateChoice mRequestedRate = piano::audio::RateChoice::Hz48000;
+    int32_t mRequestedCallbackFrames = 64;
     bool mProfileConfigured = false;
     // Serializes every non-callback stream dereference with close/open. Callback
     // accesses only callback-owned tuner state and never takes this lock.

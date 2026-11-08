@@ -18,6 +18,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.piano.sequencer.audio.AudioDiagnosticSnapshot
+import com.piano.sequencer.audio.DiagnosticsProfile
 import com.piano.sequencer.service.PlaybackService
 import java.util.concurrent.Executors
 
@@ -102,6 +103,57 @@ class AudioDiagnosticsActivity : AppCompatActivity() {
             }
         })
         label("When enabled, MIDI discovery and auto-reconnect wait until audio is running with a loaded SoundFont. Saved automatically; applies when the main screen next resumes or the app starts. Changing this does not disconnect devices already connected.")
+        label("Callback block size", true)
+        label("Requested frames per audio callback, separate from the output buffer size in Settings. Auto lets the audio backend choose; it does not guarantee the hardware burst size. Actual callback sizes may differ. See the current stream report above after restarting.")
+        run {
+            var savedFrames = DiagnosticsProfile.load(prefs).callbackFrames
+            val savedBlock = label("").apply {
+                accessibilityLiveRegion = android.view.View.ACCESSIBILITY_LIVE_REGION_POLITE
+            }
+            val blocks = RadioGroup(this).apply {
+                orientation = RadioGroup.VERTICAL
+                body.addView(this)
+            }
+            val blockOptions = listOf(0, 64, 128, 192, 256, 512).associateWith { frames ->
+                RadioButton(this).apply {
+                    id = android.view.View.generateViewId()
+                    text = if (frames == 0) "Auto (backend-selected)" else "$frames frames"
+                    setTextColor(getColor(R.color.ui_text))
+                    minHeight = (48 * resources.displayMetrics.density).toInt()
+                    blocks.addView(this)
+                }
+            }
+            blocks.check(blockOptions.getValue(savedFrames).id)
+            fun selectedFrames() = blockOptions.entries.first { it.value.id == blocks.checkedRadioButtonId }.key
+            fun frameSummary(frames: Int) = if (frames == 0) "Auto (backend-selected)" else "$frames frames"
+            val saveBlock = button("Save block size for next process restart") {}
+            fun updateBlockSelection() {
+                saveBlock.isEnabled = selectedFrames() != savedFrames
+                savedBlock.text = "Saved request: ${frameSummary(savedFrames)}" +
+                    if (selectedFrames() != savedFrames) "\nSelection not saved." else "\nApplies after a full process restart, not to running audio."
+            }
+            blocks.setOnCheckedChangeListener { _, _ -> updateBlockSelection() }
+            saveBlock.setOnClickListener {
+                val requestedFrames = selectedFrames()
+                saveBlock.isEnabled = false
+                blockOptions.values.forEach { it.isEnabled = false }
+                savedBlock.text = "Saving block size…"
+                worker.execute {
+                    val result = runCatching {
+                        // Reload before copying so other saved profile choices are preserved.
+                        DiagnosticsProfile.load(prefs).copy(callbackFrames = requestedFrames).persist(prefs)
+                    }
+                    onUi {
+                        blockOptions.values.forEach { it.isEnabled = true }
+                        if (result.getOrDefault(false)) savedFrames = requestedFrames
+                        updateBlockSelection()
+                        if (!result.getOrDefault(false)) savedBlock.append("\nCould not save block size. Try again.")
+                    }
+                }
+            }
+            updateBlockSelection()
+        }
+        label("A full process restart is required: use Exit on the main screen, then relaunch, or Android Settings → Force stop, then relaunch. Back, reopening this screen, Stop and Close do not apply the saved block size.")
         label("Experimental CPU settings", true)
         label("May worsen audio dropouts. FluidSynth multicore uses internal worker synchronization. Each of two synth slots creates cores − 1 workers (up to 6 workers total). Fast-core affinity requests the fast-core group; actual CPU status appears in the current stream report above.")
         var savedCpu = AudioCpuConfig.read(prefs)

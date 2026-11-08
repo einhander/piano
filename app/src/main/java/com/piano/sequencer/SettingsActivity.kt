@@ -22,6 +22,7 @@ import androidx.appcompat.widget.SwitchCompat
 import com.piano.sequencer.service.PlaybackService
 import com.piano.sequencer.audio.AudioApiChoice
 import com.piano.sequencer.audio.DiagnosticsProfile
+import com.piano.sequencer.audio.withSelectedOutput
 import com.piano.sequencer.audio.SampleRateChoice
 import java.io.File
 import java.io.FileOutputStream
@@ -654,8 +655,8 @@ class SettingsActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val previous = savedProfile ?: return
-                val selected = DiagnosticsProfile(AudioApiChoice.entries[api.selectedItemPosition],
-                    SampleRateChoice.entries[rate.selectedItemPosition])
+                val selected = previous.copy(api = AudioApiChoice.entries[api.selectedItemPosition],
+                    sampleRate = SampleRateChoice.entries[rate.selectedItemPosition])
                 if (selected != previous) status.text = "Unsaved selection. Press Save to use it at the next full process start."
             }
         }
@@ -669,24 +670,28 @@ class SettingsActivity : AppCompatActivity() {
             section.addView(this, LinearLayout.LayoutParams(-1, -2))
         }
         save.setOnClickListener {
-            val profile = DiagnosticsProfile(AudioApiChoice.entries[api.selectedItemPosition],
-                SampleRateChoice.entries[rate.selectedItemPosition])
+            val selectedApi = AudioApiChoice.entries[api.selectedItemPosition]
+            val selectedRate = SampleRateChoice.entries[rate.selectedItemPosition]
             save.isEnabled = false
             api.isEnabled = false
             rate.isEnabled = false
             status.text = "Saving…"
             mainExecutor.execute {
-                val error = runCatching {
+                val result = runCatching {
+                    // Child diagnostics screen may have changed callback choice since this screen loaded.
+                    val profile = withSelectedOutput(
+                        DiagnosticsProfile.load(getSharedPreferences("piano_prefs", MODE_PRIVATE)), selectedApi, selectedRate)
                     check(profile.persist(getSharedPreferences("piano_prefs", MODE_PRIVATE))) {
                         "Preference write failed"
                     }
-                }.exceptionOrNull()
+                    profile
+                }
                 runOnUiThread {
                     if (isDestroyed || isFinishing) return@runOnUiThread
-                    if (error == null) {
-                        showSaved(profile)
+                    result.onSuccess {
+                        showSaved(it)
                         status.text = "Saved for next process start. Current stream unchanged."
-                    } else {
+                    }.onFailure { error ->
                         status.text = "Could not save audio output: ${error.message}. Retry before restarting."
                     }
                     save.isEnabled = true

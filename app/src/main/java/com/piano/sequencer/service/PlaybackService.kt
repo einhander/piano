@@ -469,13 +469,13 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
     private fun configureFirstOpenProfile(): Boolean {
         val requested = DiagnosticsProfile.load(getSharedPreferences("piano_prefs", MODE_PRIVATE))
-        val result = applyProfileBeforeFirstOpen(profileActivation, requested) { api, rate ->
-            NativeEngineBridge.nativeConfigureDiagnosticAudioProfile(api, rate)
+        val result = applyProfileBeforeFirstOpen(profileActivation, requested) { api, rate, callbackFrames ->
+            NativeEngineBridge.nativeConfigureDiagnosticAudioProfile(api, rate, callbackFrames)
         }
         val active = profileActivation.activeProfile()
         val decision = com.piano.sequencer.audio.profileLogSnapshot(requested, active, result)
-        val activeProfileText = decision.active?.let { "${it.api.storedValue}/${it.sampleRate.storedValue}" } ?: "unknown"
-        AppLogger.info("PlaybackService", "Audio diagnostic profile requested_api=${decision.requested.api.storedValue} requested_rate=${decision.requested.sampleRate.storedValue} decision=${decision.decision} active_profile=$activeProfileText active_now=${com.piano.sequencer.audio.isProfileActuallyActive(decision.decision)}")
+        val activeProfileText = decision.active?.let { "${it.api.storedValue}/${it.sampleRate.storedValue}/callback=${it.callbackFrames}" } ?: "unknown"
+        AppLogger.info("PlaybackService", "Audio diagnostic profile requested_api=${decision.requested.api.storedValue} requested_rate=${decision.requested.sampleRate.storedValue} requested_callback=${decision.requested.callbackFrames} decision=${decision.decision} active_profile=$activeProfileText active_now=${com.piano.sequencer.audio.isProfileActuallyActive(decision.decision)}")
         return com.piano.sequencer.audio.isProfileConfigurationAccepted(result)
     }
 

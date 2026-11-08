@@ -176,11 +176,12 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeOpenAudio(JNIEnv* env, jclass)
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_piano_sequencer_NativeEngineBridge_nativeConfigureDiagnosticAudioProfile(JNIEnv*, jclass, jint api, jint rate) {
+Java_com_piano_sequencer_NativeEngineBridge_nativeConfigureDiagnosticAudioProfile(JNIEnv*, jclass, jint api, jint rate, jint callbackFrames) {
     OboeOutput* inst = OboeOutput::getInstance();
-    if (!inst || api < 0 || api > 2 || rate < 0 || rate > 2) return JNI_FALSE;
+    if (!inst || api < 0 || api > 2 || rate < 0 || rate > 2 ||
+        (callbackFrames != 0 && callbackFrames != 64 && callbackFrames != 128 && callbackFrames != 192 && callbackFrames != 256 && callbackFrames != 512)) return JNI_FALSE;
     return inst->configureDiagnosticProfile(static_cast<piano::audio::ApiChoice>(api),
-                                            static_cast<piano::audio::RateChoice>(rate)) ? JNI_TRUE : JNI_FALSE;
+                                            static_cast<piano::audio::RateChoice>(rate), callbackFrames) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL

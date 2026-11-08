@@ -33,24 +33,34 @@ enum class SampleRateChoice(val nativeValue: Int, val storedValue: String) {
 data class DiagnosticsProfile(
     val api: AudioApiChoice = AudioApiChoice.OBOE_DEFAULT,
     val sampleRate: SampleRateChoice = SampleRateChoice.HZ_48000,
+    val callbackFrames: Int = 64,
 ) {
     fun persist(preferences: SharedPreferences): Boolean {
         return preferences.edit()
             .putString(KEY_API, api.storedValue)
             .putString(KEY_RATE, sampleRate.storedValue)
+            .putInt(KEY_CALLBACK_FRAMES, normalizeCallbackFrames(callbackFrames))
             .commit()
     }
 
     companion object {
         const val KEY_API = "diagnostic_audio_api"
         const val KEY_RATE = "diagnostic_sample_rate"
+        const val KEY_CALLBACK_FRAMES = "diagnostic_callback_frames"
 
         fun load(preferences: SharedPreferences) = DiagnosticsProfile(
             AudioApiChoice.fromStored(preferences.getString(KEY_API, null)),
             SampleRateChoice.fromStored(preferences.getString(KEY_RATE, null)),
+            normalizeCallbackFrames(preferences.getInt(KEY_CALLBACK_FRAMES, 64)),
         )
     }
 }
+
+fun normalizeCallbackFrames(frames: Int): Int = if (frames in setOf(0, 64, 128, 192, 256, 512)) frames else 64
+
+/** Apply Settings-owned choices to freshly loaded preferences without clobbering child-screen changes. */
+fun withSelectedOutput(latest: DiagnosticsProfile, api: AudioApiChoice, rate: SampleRateChoice): DiagnosticsProfile =
+    latest.copy(api = api, sampleRate = rate)
 
 data class AudioDiagnosticSnapshot(
     val actualState: Int,
@@ -100,9 +110,9 @@ fun isProfileConfigurationAccepted(result: ProfileApplyResult): Boolean =
 fun applyProfileBeforeFirstOpen(
     activation: ProfileActivation,
     profile: DiagnosticsProfile,
-    nativeConfigure: (api: Int, rate: Int) -> Boolean,
+    nativeConfigure: (api: Int, rate: Int, callbackFrames: Int) -> Boolean,
 ): ProfileApplyResult {
-    return activation.applyOnce(profile) { nativeConfigure(profile.api.nativeValue, profile.sampleRate.nativeValue) }
+    return activation.applyOnce(profile) { nativeConfigure(profile.api.nativeValue, profile.sampleRate.nativeValue, normalizeCallbackFrames(profile.callbackFrames)) }
 }
 
 data class ProfileLogSnapshot(

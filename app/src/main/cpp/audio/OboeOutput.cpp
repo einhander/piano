@@ -59,11 +59,16 @@ oboe::StreamState OboeOutput::getActualState() {
     return actual;
 }
 
-bool OboeOutput::configureDiagnosticProfile(piano::audio::ApiChoice api, piano::audio::RateChoice rate) {
+bool OboeOutput::configureDiagnosticProfile(piano::audio::ApiChoice api, piano::audio::RateChoice rate, int32_t callbackFrames) {
     std::lock_guard<std::mutex> streamLock(mStreamMutex);
+    if ((callbackFrames != 0 && callbackFrames != 64 && callbackFrames != 128 &&
+         callbackFrames != 192 && callbackFrames != 256 && callbackFrames != 512) ||
+        static_cast<int32_t>(api) < 0 || static_cast<int32_t>(api) > 2 ||
+        static_cast<int32_t>(rate) < 0 || static_cast<int32_t>(rate) > 2) return false;
     if (mStream != nullptr || mProfileConfigured) return false;
     mRequestedApi = api;
     mRequestedRate = rate;
+    mRequestedCallbackFrames = callbackFrames;
     mProfileConfigured = true;
     return true;
 }
@@ -122,7 +127,7 @@ oboe::Result OboeOutput::open() {
             builder.setContentType(oboe::ContentType::Music);
             builder.setAllowedCapturePolicy(oboe::AllowedCapturePolicy::All);
             builder.setCallback(this);
-            builder.setFramesPerCallback(64);
+            if (mRequestedCallbackFrames != 0) builder.setFramesPerCallback(mRequestedCallbackFrames);
             builder.setErrorCallback(this);
             if (rate > 0) {
                 builder.setSampleRate(rate);
@@ -496,7 +501,8 @@ oboe::PerformanceMode OboeOutput::getPerformanceMode() const {
 std::string OboeOutput::getStreamDiagnostics() const {
     std::lock_guard<std::mutex> streamLock(mStreamMutex);
     std::ostringstream out;
-    out << "callback_policy=fixed64,callback_requested=64"
+    out << "callback_policy=" << (mRequestedCallbackFrames == 0 ? "auto" : "fixed")
+        << ",callback_requested=" << mRequestedCallbackFrames
         << ",generation=" << mStreamGeneration.load(std::memory_order_relaxed)
         << ",requested_api=" << static_cast<int>(mRequestedApi)
         << ",requested_rate=" << piano::audio::requestedRate(mRequestedRate)
