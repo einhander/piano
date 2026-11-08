@@ -7,6 +7,15 @@ Telegram, and selecting another MIDI device immediately restores it. Audio
 settings do not affect this symptom. The mechanism remains unconfirmed; changing
 synth DSP settings is not an established fix.
 
+Updated user evidence: Telegram audio itself is output through SMK-37's USB
+audio output. SMK is a composite audio/MIDI device, not an independent input.
+Distortion remains with Piano's stream Closed (verified), and the user reports
+it also remains after Exit. USB reconnection restores sound. The alternative
+selection is virtual FluidSynth/Volcano, which releases SMK rather than testing
+another physical controller. Force-stop behavior has not been established.
+Launching Piano can separately pause Telegram through its media audio-focus
+request; the reported corruption is distortion during ongoing playback.
+
 ## Evidence
 
 - `test_files/piano_log (6) (2).txt`, lines 71–90: SMK-37 Pro opens three output
@@ -30,6 +39,13 @@ MIDI resources when any client port is open. `openLocked()` calls
 `nativeOpen(card, device, subdeviceCount)`, creates streams for the returned
 descriptors, and starts a reader using blocking `Os.poll(..., -1)`.
 
+The corresponding JNI implementation loops over `subdevice_count` and opens
+the same `/dev/snd/midiC%dD%d` node with `O_RDWR` for each rawmidi subdevice.
+Consequently, an app receiving MIDI through the standard API does not control
+native read-only versus read/write activation. This establishes the activation
+boundary, not the cause of USB audio corruption; idle MIDI output traffic is
+not demonstrated.
+
 Opening only port 0 therefore does not establish that only one native USB/ALSA
 resource is active. Generic AOSP behavior does not prove a defect in the phone's
 OEM build, SMK firmware, USB controller, or kernel. No busy loop is demonstrated.
@@ -37,6 +53,7 @@ OEM build, SMK firmware, USB controller, or kernel. No busy loop is demonstrated
 Sources, Android 10 tag `android-10.0.0_r1`:
 - https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-10.0.0_r1/services/usb/java/com/android/server/usb/UsbMidiDevice.java
 - https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-10.0.0_r1/media/java/android/media/midi/MidiDevice.java
+- https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-10.0.0_r1/services/core/jni/com_android_server_UsbMidiDevice.cpp
 
 ## Discriminating checks
 

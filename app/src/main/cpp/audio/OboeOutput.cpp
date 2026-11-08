@@ -99,6 +99,7 @@ oboe::Result OboeOutput::open() {
         mLastCloseReason.store(1, std::memory_order_relaxed); // closed while reopening dead stream
         mActiveStreamIdentity.store(0, std::memory_order_release);
         mStream = nullptr;
+        mXRunCountSupported.store(false, std::memory_order_release);
     }
 
     // Diagnostics profile is fixed for process lifetime, set before first open.
@@ -143,6 +144,7 @@ oboe::Result OboeOutput::open() {
                 mActualFormat.store(static_cast<int32_t>(mStream->getFormat()), std::memory_order_relaxed);
                 mActualCallbackFrames.store(mStream->getFramesPerDataCallback(), std::memory_order_relaxed);
                 mStreamGeneration.fetch_add(1, std::memory_order_acq_rel);
+                mXRunCountSupported.store(mStream->isXRunCountSupported(), std::memory_order_release);
                 mActiveStreamIdentity.store(reinterpret_cast<uintptr_t>(mStream), std::memory_order_release);
                 mPhaseIncrement = kTestFrequency / mSampleRate;
                 mState.store(oboe::StreamState::Open);
@@ -204,6 +206,7 @@ void OboeOutput::close() {
         mLastCloseReason.store(2, std::memory_order_relaxed); // explicit OboeOutput::close
         mActiveStreamIdentity.store(0, std::memory_order_release);
         mStream = nullptr;
+        mXRunCountSupported.store(false, std::memory_order_release);
         mState.store(oboe::StreamState::Uninitialized);
         mLatencyTuner.reset();
     }
@@ -285,12 +288,16 @@ oboe::DataCallbackResult OboeOutput::onAudioReady(oboe::AudioStream* stream, voi
 #if PIANO_CALLBACK_DIAGNOSTICS
     mCallbackTiming.publishStage(3); // XRUN: querying stream underrun counter
 #endif
-    auto xrunResult = stream->getXRunCount();
-    int32_t current = xrunResult.value();
-    int32_t previous = mUnderrunCount.load();
-    while (current > previous) {
-        if (mUnderrunCount.compare_exchange_weak(previous, current)) {
-            break;
+    if (mXRunCountSupported.load(std::memory_order_acquire)) {
+        auto xrunResult = stream->getXRunCount();
+        if (xrunResult == oboe::Result::OK) {
+            int32_t current = xrunResult.value();
+            int32_t previous = mUnderrunCount.load(std::memory_order_relaxed);
+            while (current > previous) {
+                if (mUnderrunCount.compare_exchange_weak(previous, current, std::memory_order_relaxed)) {
+                    break;
+                }
+            }
         }
     }
 

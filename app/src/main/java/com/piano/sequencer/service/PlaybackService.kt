@@ -301,7 +301,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
 
         var line = "[perf] rate=${rate}Hz buf=${bufSize}/${bufCap}F lat=${latency}ms " +
             "share=${if (sharing == 0) "Excl" else "Shared"} audio_policy=shared-only perf=$perf stream={$stream} " +
-            "autoTune=$autoTune underruns=$underruns cb=$callbacks processed=$processed " +
+            "autoTune=$autoTune underruns=${if (underruns < 0) "unavailable" else underruns} cb=$callbacks processed=$processed " +
             "midiDrops=$midiDrops cmdDrops=$cmdDrops voices=$voices poly=$poly " +
             "gain=${gain} reverb=$reverb chorus=$chorus interps=$interps " +
             "clips=$clips midi_q=$midiQ gate_us=$gateHeldUs gated_cb=$gatedCallbacks " +
@@ -433,7 +433,7 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
                 }
                 logPerfSnapshot()
                 val underruns = NativeEngineBridge.nativeGetUnderrunCount()
-                if (underruns > lastUnderruns) {
+                if (underruns >= 0 && underruns > lastUnderruns) {
                     AppLogger.warn("PlaybackService", "[perf] UNDERRUN: total=$underruns")
                 }
                 lastUnderruns = underruns

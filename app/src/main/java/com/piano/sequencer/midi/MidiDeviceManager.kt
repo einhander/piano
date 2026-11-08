@@ -39,6 +39,7 @@ class MidiDeviceManager(
     // HandlerThread to drive the async openDevice callback off the UI thread.
     private val midiHandlerThread = HandlerThread("MidiInput").apply { start() }
     private val midiHandler = Handler(midiHandlerThread.looper)
+    private val usbAudioDiagnostics = UsbAudioDiagnostics(context.applicationContext, midiHandler)
     // Never quit: Android may deliver an open callback after lifecycle close.
     private val openCallbackHandler = Handler(Looper.getMainLooper())
 
@@ -96,6 +97,7 @@ class MidiDeviceManager(
 
     fun connect(deviceInfo: MidiDeviceInfo) {
         if (closed) return
+        usbAudioDiagnostics.transition("connect-request", deviceInfo)
         AppLogger.info("MidiDeviceManager", "Selected MIDI device id=${deviceInfo.id} name=${deviceName(deviceInfo)} type=${deviceInfo.type} outputPorts=${outputPortMetadata(deviceInfo)}")
         midiHandler.post {
             val current = snapshot
@@ -117,6 +119,7 @@ class MidiDeviceManager(
                         activeDevice = null
                         snapshot = ConnectionSnapshot(null, false, false, gen)
                         AppLogger.warn("MidiDeviceManager", "Failed to open device ${deviceInfo.id}")
+                        usbAudioDiagnostics.transition("open-failed", deviceInfo)
                         listener?.onDeviceDisconnected()
                     }
                     return
@@ -188,6 +191,7 @@ class MidiDeviceManager(
         connectedSnapshot = deviceInfo
         snapshot = ConnectionSnapshot(deviceInfo, true, false, gen)
         AppLogger.info("MidiDeviceManager", "Connected: device ${deviceInfo.id}")
+        usbAudioDiagnostics.transition("connected", deviceInfo)
         listener?.onDeviceConnected(deviceInfo)
     }
 
@@ -199,6 +203,7 @@ class MidiDeviceManager(
     }
 
     fun disconnect() {
+        usbAudioDiagnostics.transition("disconnect-request", snapshot.device)
         midiHandler.post { closeActiveOnHandler(notify = true) }
     }
 
@@ -228,6 +233,7 @@ class MidiDeviceManager(
             try { device?.close() } catch (e: Exception) {
                 AppLogger.warn("MidiDeviceManager", "Error closing MIDI device: ${e.message}")
             }
+            usbAudioDiagnostics.transition("disconnected", null)
         }
         if (wasActive && notify) listener?.onDeviceDisconnected()
     }
@@ -244,11 +250,12 @@ class MidiDeviceManager(
         closed = true
         midiHandler.post {
             closeActiveOnHandler(notify = true)
-            // Keep delivery handler alive: Android may deliver an already
-            // queued open callback after close. Its generation/closed guards
-            // must run so returned device resources are closed.
-            midiHandlerThread.quitSafely()
-            onClosed()
+            usbAudioDiagnostics.close {
+                // Complete diagnostics before Exit may terminate the process.
+                // The separate open callback handler remains alive for late callbacks.
+                midiHandlerThread.quitSafely()
+                onClosed()
+            }
         }
     }
 }

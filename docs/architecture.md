@@ -1,5 +1,26 @@
 # Architecture
 
+## Passive USB/audio diagnostics
+
+The bounded `UsbAudioDiagnostics` inventory is emitted to App Log at startup,
+MIDI connect/disconnect transitions, system audio-device add/remove events, and
+at +1 s/+3 s after MIDI transitions. Lines carry monotonic sequence and elapsed
+time; correlate those with existing `[perf]`, lifecycle, and focus records in
+App Log. Reproduce by opening App Log, connecting the USB MIDI keyboard,
+reproducing the audio issue, then disconnecting and copying the log.
+
+Inventory includes USB VID/PID, configuration/interface/alternate-setting and
+endpoint metadata, MIDI selected-device/port/open transitions, and Android's
+advertised output-device capabilities. USB enumeration is passive: no serial
+number, permission request, device open/claim, or transfer. Advertised outputs
+are not proof of Telegram's active route; focus/route are marked unknown here.
+Diagnostics cannot inspect Telegram's actual route or kernel USB transfers.
+Enumeration has fixed device/config/interface/endpoint/port limits and emits
+truncation notices. No recurring polling occurs; only delayed follow-ups are
+invalidated by newer transitions and close. Immediate transition records remain
+FIFO, and explicit Exit waits for the final snapshot and callback unregister.
+Unsupported backend xrun counts are shown as `unavailable`, not zero.
+
 ## Overview
 
 Two-level architecture — Kotlin Android on top, C++ native engine below.

@@ -29,7 +29,7 @@ public:
     bool isOpen() const;
     int32_t getSampleRate() const;
     int32_t getFramesPerBurst() const;
-    int32_t getUnderrunCount() const { return mUnderrunCount.load(); }
+    int32_t getUnderrunCount() const { return mXRunCountSupported.load(std::memory_order_acquire) ? mUnderrunCount.load(std::memory_order_relaxed) : -1; }
     oboe::StreamState getState() const { return mState.load(); }
     // Worker-only: queries backend directly and refreshes cached state.
     oboe::StreamState getActualState();
@@ -118,6 +118,7 @@ private:
     int32_t mFramesPerBurst = 0;
     std::atomic<int32_t> mActualApi{-1}, mActualFormat{-1}, mActualCallbackFrames{0};
     std::atomic<int32_t> mUnderrunCount{0};
+    std::atomic<bool> mXRunCountSupported{false};
 
     // Diagnostics (audio thread writes, worker thread reads).
     std::atomic<int64_t> mProcessedFrames{0};

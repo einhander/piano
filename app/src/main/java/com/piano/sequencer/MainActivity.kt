@@ -238,7 +238,7 @@ class MainActivity : AppCompatActivity() {
         val existing = statusText.text.toString()
         if (existing.startsWith("Piano Sequencer — running (underruns:") ||
             existing == "Piano Sequencer — audio start failed") {
-            if (running) statusText.text = "Piano Sequencer — running (underruns: $count)"
+            if (running) statusText.text = "Piano Sequencer — running (underruns: ${if (count < 0) "unavailable" else count})"
         }
     }
 
