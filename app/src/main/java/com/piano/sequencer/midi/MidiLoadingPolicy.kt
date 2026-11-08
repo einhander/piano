@@ -1,15 +1,15 @@
 package com.piano.sequencer.midi
 
-/** Tracks whether automatic MIDI discovery is permitted for the current screen visit. */
+/** Controls automatic MIDI discovery; lazy mode waits for a fully ready synth. */
 internal class MidiLoadingPolicy(lazyLoading: Boolean) {
     private var lazyLoading = lazyLoading
-    private var chooserOpened = false
+    private var synthReady = false
 
-    fun allowAutomaticLoading(): Boolean = !lazyLoading || chooserOpened
+    fun allowAutomaticLoading(): Boolean = !lazyLoading || synthReady
 
-    fun onChooserOpened() {
-        chooserOpened = true
-    }
+    fun chooserCanLoadExplicitly(): Boolean = allowAutomaticLoading()
+
+    fun setSynthReady(ready: Boolean) { synthReady = ready }
 
     fun updateLazyLoading(enabled: Boolean) {
         lazyLoading = enabled

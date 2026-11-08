@@ -93,7 +93,7 @@ class AudioDiagnosticsActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("piano_prefs", Context.MODE_PRIVATE)
         label("MIDI devices", true)
         body.addView(CheckBox(this).apply {
-            text = "Load MIDI devices only when opening the MIDI chooser"
+            text = "Load MIDI devices automatically when synthesizer is ready"
             setTextColor(getColor(R.color.ui_text))
             minHeight = (48 * resources.displayMetrics.density).toInt()
             isChecked = prefs.getBoolean("midi_lazy_loading", false)
@@ -101,7 +101,7 @@ class AudioDiagnosticsActivity : AppCompatActivity() {
                 prefs.edit().putBoolean("midi_lazy_loading", checked).apply()
             }
         })
-        label("When enabled, MIDI discovery is deferred until you open the MIDI chooser. Opening it enables subsequent hotplug handling and reconnects. Saved automatically; applies when the main screen next resumes or the app starts. Changing this does not disconnect devices already connected.")
+        label("When enabled, MIDI discovery and auto-reconnect wait until audio is running with a loaded SoundFont. Saved automatically; applies when the main screen next resumes or the app starts. Changing this does not disconnect devices already connected.")
         label("Experimental CPU settings", true)
         label("May worsen audio dropouts. FluidSynth multicore uses internal worker synchronization. Each of two synth slots creates cores − 1 workers (up to 6 workers total). Fast-core affinity requests the fast-core group; actual CPU status appears in the current stream report above.")
         var savedCpu = AudioCpuConfig.read(prefs)

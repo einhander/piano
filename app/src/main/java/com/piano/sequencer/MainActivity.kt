@@ -182,7 +182,7 @@ class MainActivity : AppCompatActivity() {
                 val keyMatches = persistedKey != null &&
                     midiManager.stableKey(deviceInfo) == persistedKey
                 if (persistedKey == null || keyMatches) {
-                    connectToDevice(deviceInfo)
+                    enumerateAndConnectMidi(deviceInfo)
                 }
             }
         }
@@ -192,15 +192,7 @@ class MainActivity : AppCompatActivity() {
             val active = midiManager.getCurrentDevice()
             if (active != null && midiManager.stableKey(active) == midiManager.stableKey(deviceInfo)) {
                 midiManager.disconnect()
-                if (midiLoadingPolicy.allowAutomaticLoading() && !userDisconnected) {
-                    val devices = midiManager.listDevices()
-                    val other = devices.firstOrNull {
-                        midiManager.stableKey(it) != midiManager.stableKey(deviceInfo)
-                    }
-                    if (other != null) {
-                        connectToDevice(other, persist = false)
-                    }
-                }
+                if (midiLoadingPolicy.allowAutomaticLoading() && !userDisconnected) enumerateAndConnectMidi()
             }
         }
     }
@@ -211,6 +203,8 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var exitPending = false
     private val exitLock = Any()
     @Volatile private var engineBootThread: Thread? = null
+    @Volatile private var midiSynthReady = false
+    @Volatile private var midiOpenPending = false
 
     // SAF folder picker for the crash log destination (crash.log)
     private val logFolderLauncher = registerForActivityResult(
@@ -403,6 +397,7 @@ class MainActivity : AppCompatActivity() {
                     svc.startAudio()
                 }
                 val playing = svc.isAudioPlaying() == true
+                publishMidiReadiness(svc.getSoundFontCount() > 0 && playing)
                 val underruns = svc.getUnderrunCount()
                 // Query only after nativeInit/open/init; binding and Activity
                 // recreation must reflect backend state, never a stale UI flag.
@@ -739,6 +734,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun publishMidiReadiness(ready: Boolean) {
+        runOnUiThread {
+            if (isFinishing || isDestroyed || exitPending) return@runOnUiThread
+            midiSynthReady = ready
+            midiLoadingPolicy.setSynthReady(ready)
+            if (ready) enumerateAndConnectMidi()
+        }
+    }
+
+    private fun enumerateAndConnectMidi(preferred: MidiDeviceInfo? = null) {
+        if (exitPending || !midiLoadingPolicy.allowAutomaticLoading() || userDisconnected || midiManager.isConnected() || midiOpenPending) return
+        val devices = midiManager.listDevices()
+        if (devices.isEmpty()) {
+            midiStatusText.text = "MIDI: no devices"
+            midiDeviceButton.text = "MIDI: no devices"
+            return
+        }
+        val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+        val key = prefs.getString("midi_device_key", null)
+        val target = preferred?.takeIf { candidate -> devices.any { midiManager.stableKey(it) == midiManager.stableKey(candidate) } }
+            ?: key?.let { saved -> devices.firstOrNull { midiManager.stableKey(it) == saved } }
+            ?: selectedDeviceName?.let { name -> devices.firstOrNull { midiManager.deviceName(it) == name } }
+            ?: devices[0]
+        val persist = key != null && midiManager.stableKey(target) == key
+        midiOpenPending = true
+        if (!userDisconnected && !midiManager.isConnected()) connectToDevice(target, persist)
+        else midiOpenPending = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         diagnosticNotes = DiagnosticNoteInput(
@@ -859,7 +883,10 @@ class MainActivity : AppCompatActivity() {
         midiDeviceButton = Button(this).apply {
             text = "MIDI: no devices"
             setOnClickListener {
-                midiLoadingPolicy.onChooserOpened()
+                if (!midiLoadingPolicy.chooserCanLoadExplicitly()) {
+                    Toast.makeText(this@MainActivity, "MIDI will load when the synthesizer is ready", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
                 val devices = midiManager.listDevices()
                 if (devices.isEmpty()) {
                     Toast.makeText(this@MainActivity, "No MIDI input devices", Toast.LENGTH_SHORT).show()
@@ -871,6 +898,7 @@ class MainActivity : AppCompatActivity() {
                     .setTitle("MIDI device")
                     .setItems(names.toTypedArray()) { _, which ->
                         if (which < devices.size) {
+                            if (!midiLoadingPolicy.chooserCanLoadExplicitly()) return@setItems
                             connectToDevice(devices[which])
                         } else {
                             midiManager.disconnect()
@@ -1111,6 +1139,7 @@ class MainActivity : AppCompatActivity() {
         )
         midiManager.setListener(object : MidiDeviceManager.Listener {
             override fun onDeviceConnected(device: MidiDeviceInfo) {
+                midiOpenPending = false
                 runOnUiThread {
                     val name = midiManager.deviceName(device)
                     midiStatusText.text = "MIDI: $name"
@@ -1118,6 +1147,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             override fun onDeviceDisconnected() {
+                midiOpenPending = false
                 runOnUiThread {
                     midiStatusText.text = "MIDI: disconnected"
                     midiDeviceButton.text = "MIDI: disconnected"
@@ -1125,24 +1155,7 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // Auto-connect: try persisted device key first, fall back to devices[0].
-        val devices = if (midiLoadingPolicy.allowAutomaticLoading()) midiManager.listDevices() else emptyList()
-        if (devices.isNotEmpty()) {
-            val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
-            val persistedKey = prefs.getString("midi_device_key", null)
-            val targetDevice = if (persistedKey != null) {
-                devices.firstOrNull { midiManager.stableKey(it) == persistedKey }
-            } else {
-                null
-            }
-            if (targetDevice != null) {
-                connectToDevice(targetDevice)
-            } else {
-                connectToDevice(devices[0], persist = false)
-            }
-        } else if (midiLoadingPolicy.allowAutomaticLoading()) {
-            midiStatusText.text = "MIDI: no devices"
-        }
+        // Automatic discovery begins only after successful synth readiness.
 
         // Start (not just bind) so the service survives activity re-creation —
         // no audio gap on rotation/back-forward (always-on).
@@ -1958,28 +1971,22 @@ class MainActivity : AppCompatActivity() {
         // The button was created in onCreate (before the first restore) —
         // re-sync its label with the restored state.
         multiChannelButton.text = multiChannelLabel()
-        if (midiLoadingPolicy.allowAutomaticLoading() && !midiManager.isConnected() && !userDisconnected) {
-            val devices = midiManager.listDevices()
-            if (devices.isNotEmpty()) {
-                val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
-                val persistedKey = prefs.getString("midi_device_key", null)
-                val targetDevice = if (persistedKey != null) {
-                    devices.firstOrNull { midiManager.stableKey(it) == persistedKey }
-                } else {
-                    selectedDeviceName?.let { name ->
-                        devices.firstOrNull { midiManager.deviceName(it) == name }
-                    }
-                }
-                if (targetDevice != null) {
-                    connectToDevice(targetDevice)
-                } else {
-                    connectToDevice(devices[0], persist = false)
-                }
-            } else {
-                midiStatusText.text = "MIDI: no devices"
-                midiDeviceButton.text = "MIDI: no devices"
-            }
+        val lazy = getSharedPreferences("piano_prefs", MODE_PRIVATE).getBoolean("midi_lazy_loading", false)
+        midiLoadingPolicy.updateLazyLoading(lazy)
+        if (lazy) {
+            midiSynthReady = false
+            midiLoadingPolicy.setSynthReady(false)
         }
+        val bootThread = engineBootThread
+        if (bootThread == null || !bootThread.isAlive) playbackService?.let { svc -> midiWorker.execute {
+            val ready = svc.isAudioPlaying() == true && svc.getSoundFontCount() > 0
+            runOnUiThread {
+                if (exitPending || engineBootThread?.isAlive == true) return@runOnUiThread
+                midiSynthReady = ready
+                midiLoadingPolicy.setSynthReady(ready)
+                if (ready || !lazy) enumerateAndConnectMidi()
+            }
+        } }
     }
 
     override fun onPause() {

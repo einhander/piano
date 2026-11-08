@@ -11,20 +11,21 @@ class MidiLoadingPolicyTest {
         assertTrue(policy.allowAutomaticLoading())
     }
 
-    @Test fun lazyPolicyDefersAutomaticDiscoveryUntilChooserIsOpened() {
+    @Test fun lazyPolicyDefersAutomaticDiscoveryUntilSynthReady() {
         val policy = MidiLoadingPolicy(lazyLoading = true)
 
         assertFalse(policy.allowAutomaticLoading()) // startup / resume / hotplug
-        policy.onChooserOpened()
-        assertTrue(policy.allowAutomaticLoading()) // chooser and subsequent reconnects
+        policy.setSynthReady(true)
+        assertTrue(policy.allowAutomaticLoading()) // startup / resume / hotplug
     }
 
-    @Test fun lazyPolicyNeverDisablesExplicitChooser() {
+    @Test fun chooserCannotBypassLazyReadinessGate() {
         val policy = MidiLoadingPolicy(lazyLoading = true)
 
-        policy.onChooserOpened()
-        assertTrue(policy.allowAutomaticLoading())
-        policy.onChooserOpened() // reopening chooser remains valid
+        assertFalse(policy.chooserCanLoadExplicitly())
+        assertFalse(policy.allowAutomaticLoading())
+        policy.setSynthReady(true)
+        assertTrue(policy.chooserCanLoadExplicitly())
         assertTrue(policy.allowAutomaticLoading())
     }
 
@@ -33,10 +34,12 @@ class MidiLoadingPolicyTest {
         assertTrue(policy.allowAutomaticLoading())
         policy.updateLazyLoading(true)
         assertFalse(policy.allowAutomaticLoading())
-        policy.onChooserOpened()
+        policy.setSynthReady(true)
         policy.updateLazyLoading(false)
         assertTrue(policy.allowAutomaticLoading())
         policy.updateLazyLoading(true)
         assertTrue(policy.allowAutomaticLoading())
+        policy.setSynthReady(false)
+        assertFalse(policy.allowAutomaticLoading())
     }
 }
