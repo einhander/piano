@@ -202,6 +202,57 @@ class MainActivity : AppCompatActivity() {
     private var serviceBound = false
     @Volatile private var exitPending = false
     private val exitLock = Any()
+    private val underrunHandler = Handler(Looper.getMainLooper())
+    private val underrunWorker = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "UnderrunPoll").apply { isDaemon = true }
+    }
+    @Volatile private var underrunPollActive = false
+    @Volatile private var underrunPollInFlight = false
+    private var audioStatusRunning: Boolean? = null
+    private var underrunCount: Int? = null
+    private val underrunPoll = object : Runnable {
+        override fun run() {
+            if (!underrunPollActive || exitPending || isFinishing || isDestroyed) return
+            val target = playbackService
+            if (serviceBound && target != null && !underrunPollInFlight) {
+                underrunPollInFlight = true
+                underrunWorker.execute {
+                    val count = runCatching { target.getUnderrunCount() }.getOrNull()
+                    runOnUiThread {
+                        underrunPollInFlight = false
+                        if (underrunPollActive && !exitPending && !isFinishing && !isDestroyed &&
+                            serviceBound && playbackService === target && count != null) {
+                            underrunCount = count
+                            updateAudioStatus()
+                        }
+                    }
+                }
+            }
+            if (underrunPollActive && !exitPending) underrunHandler.postDelayed(this, 1_000)
+        }
+    }
+
+    private fun updateAudioStatus() {
+        val running = audioStatusRunning ?: return
+        val count = underrunCount ?: return
+        val existing = statusText.text.toString()
+        if (existing.startsWith("Piano Sequencer — running (underruns:") ||
+            existing == "Piano Sequencer — audio start failed") {
+            if (running) statusText.text = "Piano Sequencer — running (underruns: $count)"
+        }
+    }
+
+    private fun startUnderrunPolling() {
+        if (exitPending || isFinishing || isDestroyed) return
+        underrunPollActive = true
+        underrunHandler.removeCallbacks(underrunPoll)
+        underrunHandler.post(underrunPoll)
+    }
+
+    private fun stopUnderrunPolling() {
+        underrunPollActive = false
+        underrunHandler.removeCallbacks(underrunPoll)
+    }
     @Volatile private var engineBootThread: Thread? = null
     @Volatile private var midiSynthReady = false
     @Volatile private var midiOpenPending = false
@@ -398,7 +449,6 @@ class MainActivity : AppCompatActivity() {
                 }
                 val playing = svc.isAudioPlaying() == true
                 publishMidiReadiness(svc.getSoundFontCount() > 0 && playing)
-                val underruns = svc.getUnderrunCount()
                 // Query only after nativeInit/open/init; binding and Activity
                 // recreation must reflect backend state, never a stale UI flag.
                 val audioRecordingState = svc.audioRecordingState()
@@ -408,7 +458,8 @@ class MainActivity : AppCompatActivity() {
 
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
-                    statusText.text = if (playing) "Piano Sequencer — running (underruns: $underruns)"
+                    audioStatusRunning = playing
+                    statusText.text = if (playing) "Piano Sequencer — running (underruns: ${underrunCount ?: "…"})"
                                       else "Piano Sequencer — audio start failed"
                     setAudioRecordingState(audioRecordingState)
                 }
@@ -1175,6 +1226,7 @@ class MainActivity : AppCompatActivity() {
             if (::diagnosticNotes.isInitialized) diagnosticNotes.releaseHeld()
             exitPending = true
         }
+        stopUnderrunPolling()
         disableActions(layout)
         val mainDrain = CountDownLatch(1)
         val repoDrain = CountDownLatch(1)
@@ -1957,6 +2009,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (exitPending) return
+        startUnderrunPolling()
         midiLoadingPolicy.updateLazyLoading(
             getSharedPreferences("piano_prefs", MODE_PRIVATE).getBoolean("midi_lazy_loading", false)
         )
@@ -1990,6 +2043,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        stopUnderrunPolling()
         if (::diagnosticNotes.isInitialized) diagnosticNotes.releaseHeld()
         super.onPause()
     }
@@ -2003,6 +2057,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        stopUnderrunPolling()
+        underrunWorker.shutdownNow()
         playbackService?.let { (application as PianoApp).instrumentEffectCcController.detach(this@MainActivity, it) }
         midiWorker.shutdown()
         projectIoWorker.shutdown()
