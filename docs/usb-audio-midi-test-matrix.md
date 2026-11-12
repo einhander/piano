@@ -10,7 +10,7 @@ default. Keys and pads must remain usable together.
 
 ## Live port comparison
 
-Open **Audio diagnostics** directly from the main screen. Record the selected
+Open **Settings → Audio diagnostics**. Record the selected
 device, actual Android MIDI port numbers/names, per-port results and timings.
 Compare **No ports**, **Ports 0 + 2**, and **ALL ports** using Apply. No ports may
 retain a MIDI device handle: the report distinguishes an open handle from open
@@ -35,9 +35,9 @@ its active order remains visible across Activity recreation in that process.
 | MIDI_ONLY | MIDI connection only; no PlaybackService/native/audio-stream startup |
 | AUDIO_ONLY | Audio initialization without opening MIDI ports |
 
-MIDI_ONLY reports stream not created, not merely stopped or closed. Use the main
-screen's direct diagnostics entry, not Settings, to avoid creating unrelated
-services during this experiment. Missing devices and failures must be recorded,
+MIDI_ONLY reports stream not created, not merely stopped or closed. Settings and
+Audio diagnostics skip audio-service binding in this mode, preserving the
+experiment. Missing devices and failures must be recorded,
 not treated as successful port activation.
 
 ## Audio lifecycle comparison

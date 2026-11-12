@@ -925,7 +925,7 @@ class MainActivity : AppCompatActivity(), RuntimeDiagnosticsDelegate {
         settingsButton = Button(this).apply {
             text = getString(R.string.ui_settings)
             setOnClickListener {
-                if (allowAudioDiagnosticAction()) startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+                startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
             }
         }
         instrumentsButton = Button(this).apply {
@@ -1099,12 +1099,6 @@ class MainActivity : AppCompatActivity(), RuntimeDiagnosticsDelegate {
         layout.addView(View(this).apply { setBackgroundColor(getColor(R.color.ui_outline)) },
             LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(8); bottomMargin = dp(4) })
         layout.addView(row(projectsButton, settingsButton))
-        layout.addView(Button(this).apply {
-            text = "Audio diagnostics"
-            isAllCaps = false
-            com.piano.sequencer.ui.UiControlStyle.apply(this)
-            setOnClickListener { startActivity(Intent(this@MainActivity, AudioDiagnosticsActivity::class.java)) }
-        })
         layout.addView(row(aboutButton, exitButton))
         panicButton.background = getDrawable(R.drawable.ui_action_frame)
         panicButton.backgroundTintList = android.content.res.ColorStateList.valueOf(getColor(R.color.ui_danger))

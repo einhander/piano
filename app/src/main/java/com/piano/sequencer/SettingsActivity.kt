@@ -222,6 +222,7 @@ class SettingsActivity : AppCompatActivity() {
     private val interpsValues = intArrayOf(0, 1, 4)
 
     private var service: PlaybackService? = null
+    private var serviceBound = false
     // m3: true while loadCurrentValues() restores the switch state — suppresses
     // the switch listener so a programmatic state change doesn't re-apply the
     // (already-current) auto-tune setting.
@@ -595,8 +596,11 @@ class SettingsActivity : AppCompatActivity() {
             }
         })
 
-        Intent(this, PlaybackService::class.java).also { intent ->
-            bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        val startupState = (application as PianoApp).runtimeDiagnosticsCoordinator.startupDiagnosticState
+        if (startupState?.plan?.order != StartupOrder.MIDI_ONLY) {
+            Intent(this, PlaybackService::class.java).also { intent ->
+                serviceBound = bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+            }
         }
     }
 
@@ -604,11 +608,7 @@ class SettingsActivity : AppCompatActivity() {
         service?.let { ccController.detach(this, it) }
         mainExecutor.shutdown()
         super.onDestroy()
-        try {
-            unbindService(serviceConnection)
-        } catch (_: Exception) {
-            // ignore if not bound
-        }
+        if (serviceBound) unbindService(serviceConnection)
     }
 
     private fun addAudioOutputSection() {
