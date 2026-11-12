@@ -1,93 +1,82 @@
 #include "MasterBus.h"
+#include <algorithm>
 #include <cmath>
-#include <cstring>
+#include <limits>
 
-MasterBus::MasterBus() {}
-MasterBus::~MasterBus() {
-    if (mBuffer) {
-        delete[] mBuffer;
-        mBuffer = nullptr;
-    }
-}
+static_assert(std::atomic<float>::is_always_lock_free, "audio meters require lock-free float atomics");
+static_assert(std::atomic<uint32_t>::is_always_lock_free, "audio counters require lock-free 32-bit atomics");
+
+MasterBus::MasterBus() = default;
+MasterBus::~MasterBus() { delete[] mBuffer; }
 
 void MasterBus::init(int maxFramesPerBuffer) {
-    if (maxFramesPerBuffer < 1) {
-        maxFramesPerBuffer = 512;
-    }
-    mMaxFrames = maxFramesPerBuffer;
-    mBuffer = new float[maxFramesPerBuffer * 2];
-    std::memset(mBuffer, 0, maxFramesPerBuffer * 2 * sizeof(float));
+    delete[] mBuffer;
+    mMaxFrames = std::max(maxFramesPerBuffer, 1);
+    mBuffer = new float[static_cast<size_t>(mMaxFrames) * 2]{};
 }
 
 void MasterBus::setVolume(float volume) {
-    if (volume < 0.0f) volume = 0.0f;
-    if (volume > 1.0f) volume = 1.0f;
-    mVolume.store(volume);
+    if (!std::isfinite(volume)) volume = 0.0f;
+    mVolume.store(std::clamp(volume, 0.0f, 1.0f));
 }
 
-// Fast tanh approximation for the soft clipper (Fix #6). Replaces the two
-// std::tanh calls per frame (each uses exp internally) with a cheap rational
-// approximation: tanh(x) ≈ x*(1 + b*x^2)/(1 + c*x^2), fit so that the value
-// and slope match at x=0 and the value matches at x=1 and x=2. Measured max
-// error ~0.006 at x=2.5 (≤0.001 for |x|≤1.5, the actual input range after the
-// ×1.5 clip factor). The result is clamped to [-1, 1] BEFORE the ×normalize
-// gain (1.10479 = 1/tanh(1.5)), so the final output can reach ~1.1048 (0.87
-// dB); the HAL hard-clips at ±1.0.
 static inline float fastTanh(float x) {
-    float x2 = x * x;
-    float r = x * (1.0f + 0.0582f * x2) / (1.0f + 0.3895f * x2);
-    if (r > 1.0f) return 1.0f;
-    if (r < -1.0f) return -1.0f;
-    return r;
+    // Bound before squaring: avoids overflow for huge finite inputs. Non-finite
+    // inputs are handled by process() and never reach this approximation.
+    x = std::clamp(x, -4.0f, 4.0f);
+    const float x2 = x * x;
+    const float r = x * (1.0f + 0.0582f * x2) / (1.0f + 0.3895f * x2);
+    return std::clamp(r, -1.0f, 1.0f);
+}
+
+static void publishMax(std::atomic<float>& target, float value) {
+    float old = target.load(std::memory_order_relaxed);
+    while (value > old && !target.compare_exchange_weak(old, value, std::memory_order_relaxed)) {}
+}
+static void addSaturating(std::atomic<uint32_t>& target, uint32_t amount) {
+    uint32_t old = target.load(std::memory_order_relaxed);
+    while (old != UINT32_MAX) {
+        const uint32_t next = amount > UINT32_MAX - old ? UINT32_MAX : old + amount;
+        if (target.compare_exchange_weak(old, next, std::memory_order_relaxed)) break;
+    }
 }
 
 void MasterBus::process(float* output, int numFrames) {
-    if (numFrames > mMaxFrames) {
-        numFrames = mMaxFrames;
-    }
-    if (numFrames <= 0) return;
-
-    float vol = mVolume.load();
-    float peakRms = 0.0f;
-
-    // Soft clipper constant: tanh(1.5) normalized
-    // output = tanh(input * 1.5) / tanh(1.5)
-    constexpr float clipFactor = 1.5f;
-    // 1.0f / tanh(1.5f) — precomputed (tanh(1.5) = 0.905148211).
-    constexpr float normalize = 1.10479f;
-
-    for (int i = 0; i < numFrames; i++) {
-        // Process left channel
-        float left = output[i * 2] * vol;
-        left = fastTanh(left * clipFactor) * normalize;
-
-        // Process right channel
-        float right = output[i * 2 + 1] * vol;
-        right = fastTanh(right * clipFactor) * normalize;
-
-        // RMS peak calculation. Fix #7: decimate every 4th frame (metering
-        // only — does not affect the audio output).
-        if ((i & 3) == 0) {
-            peakRms += left * left + right * right;
+    if (!output || numFrames <= 0) return;
+    const float vol = mVolume.load(std::memory_order_relaxed);
+    float peak = 0.0f;
+    double sumSquares = 0.0;
+    uint32_t clips = 0, nonFinite = 0;
+    for (int i = 0; i < numFrames * 2; ++i) {
+        float sample = output[i];
+        if (!std::isfinite(sample)) {
+            ++nonFinite;
+            output[i] = 0.0f;
+            continue;
         }
-
-        output[i * 2] = left;
-        output[i * 2 + 1] = right;
+        sample *= vol;
+        if (!std::isfinite(sample)) { ++nonFinite; output[i] = 0.0f; continue; }
+        if (std::fabs(sample) > 1.0f) ++clips;
+        const float softened = fastTanh(sample * 1.5f);
+        sample = std::isfinite(softened) ? std::clamp(softened, -1.0f, 1.0f) : 0.0f;
+        output[i] = sample;
+        peak = std::max(peak, std::fabs(sample));
+        sumSquares += static_cast<double>(sample) * sample;
     }
-
-    // Store peak RMS. Decimated: only ~numFrames/4 frames were summed, so
-    // scale by the decimation factor (4) to estimate the full sum.
-    peakRms = std::sqrt((4.0f * peakRms) / (numFrames * 2));
-    float currentPeak = mPeakMeter.load();
-    if (peakRms > currentPeak) {
-        mPeakMeter.store(peakRms);
-    }
+    const float rms = static_cast<float>(std::sqrt(sumSquares / (numFrames * 2.0)));
+    publishMax(mSamplePeak, peak);
+    publishMax(mBlockRms, rms);
+    addSaturating(mPreLimiterClipSamples, clips);
+    addSaturating(mNonFiniteSamples, nonFinite);
 }
 
-float MasterBus::getPeakMeter() const {
-    return mPeakMeter.load();
-}
-
+float MasterBus::getPeakMeter() const { return mSamplePeak.load(std::memory_order_relaxed); }
+float MasterBus::getBlockRms() const { return mBlockRms.load(std::memory_order_relaxed); }
+uint32_t MasterBus::getPreLimiterClipSamples() const { return mPreLimiterClipSamples.load(std::memory_order_relaxed); }
+uint32_t MasterBus::getNonFiniteSamples() const { return mNonFiniteSamples.load(std::memory_order_relaxed); }
 void MasterBus::resetMeter() {
-    mPeakMeter.store(0.0f);
+    mSamplePeak.store(0.0f, std::memory_order_relaxed);
+    mBlockRms.store(0.0f, std::memory_order_relaxed);
+    mPreLimiterClipSamples.store(0, std::memory_order_relaxed);
+    mNonFiniteSamples.store(0, std::memory_order_relaxed);
 }

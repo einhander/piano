@@ -864,7 +864,6 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
 
     // Reset meters at start of playback
     mMixer.resetMeters();
-    mMasterBus.resetMeter();
 
     // Mix all tracks through Mixer into stereo output
     measureStageCpu(stageCpuNs[4], [&] { mMixer.mix(output, safeFrames); });

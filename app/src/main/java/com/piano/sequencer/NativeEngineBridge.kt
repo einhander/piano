@@ -278,6 +278,9 @@ object NativeEngineBridge {
     // Master bus controls
     external fun nativeSetMasterVolume(volume: Float)
     external fun nativeGetMasterPeakMeter(): Float
+    /** [samplePeak*1e6, blockRms*1e6, unsigned clip count, unsigned non-finite count]. */
+    external fun nativeGetMasterAudioMetrics(): LongArray?
+    external fun nativeResetMasterDiagnostics(): Boolean
 
     // ── Master effect chain (LSP) — worker thread only ──
     // Loads the LSP LADSPA bundle and prepares the fixed 3-effect chain

@@ -153,6 +153,10 @@ public:
     // Master bus controls
     void setMasterVolume(float volume);
     float getMasterPeakMeter() const;
+    float getMasterBlockRms() const { return mMasterBus.getBlockRms(); }
+    uint32_t getMasterPreLimiterClipSamples() const { return mMasterBus.getPreLimiterClipSamples(); }
+    uint32_t getMasterNonFiniteSamples() const { return mMasterBus.getNonFiniteSamples(); }
+    void resetMasterDiagnostics() { mMasterBus.resetMeter(); }
 
     // ── Master effect chain (LSP) ──
     // All calls are service-owned and must run on a worker thread per

@@ -25,15 +25,22 @@ public:
     // output: stereo float buffer (interleaved L/R), numFrames * 2 elements
     void process(float* output, int numFrames);
 
-    // Get peak meter (RMS) — atomic read, safe for UI thread
+    // Max sample peak and max per-block stereo RMS, held until explicit reset.
     float getPeakMeter() const;
+    float getBlockRms() const;
+    uint32_t getPreLimiterClipSamples() const;
+    uint32_t getNonFiniteSamples() const;
 
     // Reset peak meter
     void resetMeter();
 
 private:
     std::atomic<float> mVolume{1.0f};
-    std::atomic<float> mPeakMeter{0.0f};
+    std::atomic<float> mSamplePeak{0.0f};
+    std::atomic<float> mBlockRms{0.0f};
+    // Saturating lifetime counts since reset; UINT32_MAX means saturated.
+    std::atomic<uint32_t> mPreLimiterClipSamples{0};
+    std::atomic<uint32_t> mNonFiniteSamples{0};
     float* mBuffer = nullptr;
     int mMaxFrames = 0;
 };

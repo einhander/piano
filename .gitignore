@@ -72,6 +72,7 @@ app/local.properties
 # CI/CD
 !build/
 build/*.apk
+build/verification/
 
 # Deepwork state (git-local, OpenCode-readable)
 .slim/deepwork/

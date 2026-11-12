@@ -48,8 +48,10 @@ class RuntimeDiagnosticsCoordinator {
         val report = ("Runtime diagnostics: MIDI device=${snapshot.midi.deviceName ?: "none"} key=${snapshot.midi.deviceKey ?: "none"} " +
             "mode=${snapshot.midi.mode} handleOpen=${snapshot.midi.deviceHandleOpen} connected=${snapshot.midi.connected} ports=[$ports]; " +
             "audio=${audio?.actualState ?: "unavailable"} focus=${snapshot.audioFocusGranted} deviceId=${audio?.actualDeviceId ?: -1} " +
-            "rate=${audio?.sampleRate ?: 0} capacity=${audio?.bufferCapacityFrames ?: 0} underruns=${audio?.underrunCount ?: -1} stream={${audio?.streamDiagnostics ?: "unavailable"}}; " +
-            "Android device enumeration does not prove Telegram's active audio route; route attribution unavailable. P1 metrics not implemented.").take(4000)
+            "rate=${audio?.sampleRate ?: 0} capacity=${audio?.bufferCapacityFrames ?: 0} underruns=${audio?.underrunCount?.takeIf { it >= 0 } ?: "unavailable"} stream={${audio?.streamDiagnostics ?: "unavailable"}}; " +
+            "master_sample_peak=${audio?.masterSamplePeak ?: "unavailable"} master_max_block_rms=${audio?.masterBlockRms ?: "unavailable"} " +
+            "pre_limiter_clip_samples=${audio?.preLimiterClipSamples ?: "unavailable"} non_finite_samples=${audio?.nonFiniteSamples ?: "unavailable"}; " +
+            "Android device enumeration does not prove Telegram's active audio route; route attribution unavailable.").take(4000)
         AppLogger.info("RuntimeDiagnostics", report)
         callback(report)
     }

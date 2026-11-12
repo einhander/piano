@@ -251,3 +251,22 @@ atomics on a worker thread — never the audio callback:
 All file I/O on worker thread. Never in audio callback.
 Project files stored in user-selected directory via SAF.
 SoundFont loading on asset loading worker thread.
+# Master output safety and meters (P1)
+
+MasterBus applies persisted master volume, then its existing tanh-shaped soft
+clipper, with a final finite-safe [-1, 1] ceiling. The former 1.10479
+normalization boost is removed; the linear-region gain and maximum output are
+about 0.87 dB lower, without changing master-volume defaults or preferences. Mixer and
+master effects remain upstream intentional gain stages; no additional
+normalization or hidden gain compensation is applied.
+
+MasterBus reports held maximum sample peak and maximum full-block stereo RMS,
+plus cumulative saturating counts of pre-limiter channel samples above unity
+after master volume and non-finite channel samples replaced with silence.
+Counters saturate at UINT32_MAX. Metrics persist until explicit reset or
+process lifetime end; callback does not reset them. Host coverage is in
+`app/src/test/cpp/master_bus_test.cpp` (compile with the command in its header).
+The Audio diagnostics screen and exported runtime report expose numeric values
+when native engine exists; values remain unavailable before engine initialization.
+Reset action executes through PlaybackService audio worker and resets held meters
+and counters; it is never called from the callback.

@@ -976,6 +976,27 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterPeakMeter(
     return 0.0f;
 }
 
+JNIEXPORT jlongArray JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMasterAudioMetrics(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (!inst || !inst->isEngineInitialized()) return nullptr;
+    const jlong values[] = {static_cast<jlong>(inst->getMasterPeakMeter() * 1000000.0f),
+        static_cast<jlong>(inst->getMasterBlockRms() * 1000000.0f),
+        static_cast<jlong>(inst->getMasterPreLimiterClipSamples()),
+        static_cast<jlong>(inst->getMasterNonFiniteSamples())};
+    jlongArray result = env->NewLongArray(4);
+    if (result) env->SetLongArrayRegion(result, 0, 4, values);
+    return result;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeResetMasterDiagnostics(JNIEnv*, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (!inst || !inst->isEngineInitialized()) return JNI_FALSE;
+    inst->resetMasterDiagnostics();
+    return JNI_TRUE;
+}
+
 // ── Master effect chain (LSP) ──
 // Worker-thread only (touches the LADSPA bundle / dlopen).
 JNIEXPORT jint JNICALL

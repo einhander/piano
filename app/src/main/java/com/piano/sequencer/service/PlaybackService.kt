@@ -544,13 +544,22 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         AudioStreamCloseResult(stopped, if (stopped) "Audio stopped; stream and app state retained" else "Audio stop failed: result=$stop state=$actual", snapshot)
     }
 
-    private fun diagnosticSnapshot(): AudioDiagnosticSnapshot = AudioDiagnosticSnapshot(
+    private fun diagnosticSnapshot(): AudioDiagnosticSnapshot {
+        val metrics = NativeEngineBridge.nativeGetMasterAudioMetrics()
+        return AudioDiagnosticSnapshot(
         NativeEngineBridge.nativeGetActualAudioState(), audioFocusGranted,
         manualStreamCloseState.isClosedByUser(), NativeEngineBridge.nativeGetStreamDiagnostics(),
         manualStreamCloseState.isStoppedByUser(),
         NativeEngineBridge.nativeGetSampleRate(), NativeEngineBridge.nativeGetBufferCapacityInFrames(), NativeEngineBridge.nativeGetDeviceId(),
         NativeEngineBridge.nativeGetUnderrunCount(),
-    )
+        masterSamplePeak = metrics?.getOrNull(0)?.div(1_000_000.0)?.toFloat(),
+        masterBlockRms = metrics?.getOrNull(1)?.div(1_000_000.0)?.toFloat(),
+        preLimiterClipSamples = metrics?.getOrNull(2),
+        nonFiniteSamples = metrics?.getOrNull(3),
+        )
+    }
+
+    fun resetMasterDiagnostics(): Boolean = onAudioWorkerSync { NativeEngineBridge.nativeResetMasterDiagnostics() }
 
     fun getAudioDiagnosticStreamSnapshot(): AudioDiagnosticSnapshot = onAudioWorkerSync {
         diagnosticSnapshot()

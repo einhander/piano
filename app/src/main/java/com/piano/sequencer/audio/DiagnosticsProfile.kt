@@ -72,6 +72,10 @@ data class AudioDiagnosticSnapshot(
     val bufferCapacityFrames: Int = 0,
     val actualDeviceId: Int = -1,
     val underrunCount: Int = -1,
+    val masterSamplePeak: Float? = null,
+    val masterBlockRms: Float? = null,
+    val preLimiterClipSamples: Long? = null,
+    val nonFiniteSamples: Long? = null,
 )
 
 data class DiagnosticResumeDecision(val allowed: Boolean, val reason: String)

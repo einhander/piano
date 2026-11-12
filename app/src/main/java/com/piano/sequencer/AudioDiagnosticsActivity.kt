@@ -109,6 +109,14 @@ class AudioDiagnosticsActivity : AppCompatActivity() {
         label("Updates about once a second while this screen is open. Counter is for the current audio stream.")
         active = label("Connecting to playback service…").apply { setTextIsSelectable(true) }
         refresh = button("Refresh current stream") { refreshSnapshot() }
+        button("Reset master meters/counters") {
+            val target = service
+            if (target == null) status.text = "Playback service unavailable; counters not reset."
+            else runTask("Resetting master diagnostic counters…") {
+                val reset = target.resetMasterDiagnostics()
+                onUi { status.text = if (reset) "Master meters/counters reset." else "Audio engine unavailable; counters not reset."; refreshSnapshot() }
+            }
+        }
         val prefs = getSharedPreferences("piano_prefs", Context.MODE_PRIVATE)
         label("Runtime MIDI and audio", true)
         runtime = label("Reading runtime state…").apply { setTextIsSelectable(true) }
@@ -185,7 +193,7 @@ class AudioDiagnosticsActivity : AppCompatActivity() {
                 }
             } }
         }
-        label("Clipping and detailed xrun metrics: unavailable in this diagnostic version.")
+        label("Master-bus numeric meters and clipping counters are included in the exported native runtime report when engine is initialized. These do not identify Telegram's active route.")
         label("MIDI devices", true)
         body.addView(CheckBox(this).apply {
             text = "Load MIDI devices automatically when synthesizer is ready"
@@ -387,7 +395,9 @@ class AudioDiagnosticsActivity : AppCompatActivity() {
             append("Audio focus granted: ${snapshot.audioFocusGranted}\n")
             val audio = snapshot.audio
             if (audio == null) append("Audio snapshot unavailable; no audio service snapshot.\n")
-            else append("Actual Oboe output ID: ${audio.actualDeviceId}\nActual sample rate: ${audio.sampleRate} Hz\nBuffer capacity: ${audio.bufferCapacityFrames} frames\n${audio.streamDiagnostics}")
+            else append("Actual Oboe output ID: ${audio.actualDeviceId}\nActual sample rate: ${audio.sampleRate} Hz\nBuffer capacity: ${audio.bufferCapacityFrames} frames\n" +
+                "Master sample peak: ${audio.masterSamplePeak ?: "unavailable"}\nMax block RMS: ${audio.masterBlockRms ?: "unavailable"}\n" +
+                "Pre-limiter clip samples: ${audio.preLimiterClipSamples ?: "unavailable"}\nNon-finite samples: ${audio.nonFiniteSamples ?: "unavailable"}\n${audio.streamDiagnostics}")
         }
     }
 
