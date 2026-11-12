@@ -217,7 +217,7 @@ class MidiFilesPanel @JvmOverloads constructor(
                 if (n > 0) "♪ Chord: $n note" + (if (n == 1) "" else "s") else "♪ Chord: empty"
             } else if (cell.filePath.isNotEmpty()) {
                 val name = File(cell.filePath).name
-                name
+                if (cell.isMp3) "MP3 · $name" else name
             } else "—"
             textSize = 16f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -350,6 +350,15 @@ class MidiFilesPanel @JvmOverloads constructor(
 
         // In chord mode hide file-only controls; channel selection stays available.
         val isChord = cell.mode == MODE_CHORD
+        if (cell.isMp3) {
+            tempoGroup.visibility = android.view.View.GONE
+            container.addView(TextView(context).apply {
+                text = context.getString(R.string.ui_mp3_help)
+                textSize = 12f
+                setTextColor(context.getColor(R.color.ui_muted))
+                setPadding(0, 0, 0, dpToPx(8, context))
+            })
+        }
         if (isChord) {
             loopCheck.visibility = android.view.View.GONE
             tempoEdit.visibility = android.view.View.GONE
@@ -485,6 +494,10 @@ class MidiFilesPanel @JvmOverloads constructor(
             addView(channelSpinner, LayoutParams(0, -2, 1f))
         }
         container.addView(channelRow, LayoutParams(-1, -2))
+        if (cell.isMp3) {
+            channelRow.visibility = android.view.View.GONE
+            recordBtn.visibility = android.view.View.GONE
+        }
         container.addView(row1)
         row3.addView(importBtn)
         row3.addView(exportBtn)
@@ -513,7 +526,7 @@ class MidiFilesPanel @JvmOverloads constructor(
             tracksBtn.visibility = android.view.View.GONE
         }
 
-        if (!isChord && cell.filePath.isNotEmpty()) {
+        if (!isChord && !cell.isMp3 && cell.filePath.isNotEmpty()) {
             val path = cell.filePath
             var trackNames: List<String>? = null
             MidiFileTriggerController.get(context).fetchTrackNames(path) { names ->
@@ -626,7 +639,8 @@ class MidiFilesPanel @JvmOverloads constructor(
                 Toast.makeText(context, "No file assigned", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            val updated = cur.copy(loop = getLoop(), tempo = getTempo(), channel = getChannel())
+            val updated = if (cur.isMp3) cur.copy(loop = getLoop())
+                else cur.copy(loop = getLoop(), tempo = getTempo(), channel = getChannel())
             store.set(updated)
             if (updated.hasTrigger()) {
                 onSettingChange(updated)
@@ -661,6 +675,7 @@ class MidiFilesPanel @JvmOverloads constructor(
         tempoEdit.setOnFocusChangeListener { _, hasFocus ->
             if (!hasFocus) {
                 val cur = store.get(cell.id) ?: return@setOnFocusChangeListener
+                if (cur.isMp3) return@setOnFocusChangeListener
                 val updated = cur.copy(tempo = getTempo())
                 store.set(updated)
                 if (updated.hasTrigger()) {
@@ -672,6 +687,7 @@ class MidiFilesPanel @JvmOverloads constructor(
         channelSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
                 val cur = store.get(cell.id) ?: return@onItemSelected
+                if (cur.isMp3) return@onItemSelected
                 val updated = cur.copy(channel = getChannel())
                 store.set(updated)
                 if (updated.hasTrigger()) {

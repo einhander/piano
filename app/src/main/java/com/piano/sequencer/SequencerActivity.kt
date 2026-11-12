@@ -8,7 +8,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
 import android.provider.DocumentsContract
-import android.provider.OpenableColumns
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,7 +21,13 @@ import com.piano.sequencer.midi.MidiFileTriggerController
 import com.piano.sequencer.midi.MidiRecordSession
 import com.piano.sequencer.midi.FileInstrumentSetStore
 import com.piano.sequencer.midi.MODE_CHORD
+import com.piano.sequencer.midi.MODE_FILE
+import com.piano.sequencer.midi.ASSET_MIDI
+import com.piano.sequencer.midi.RecordCellIdentity
+import com.piano.sequencer.midi.recordTargetUnchanged
+import com.piano.sequencer.midi.replacementAllowed
 import com.piano.sequencer.midi.SequencerCell
+import com.piano.sequencer.midi.SequencerAssetImporter
 import com.piano.sequencer.service.PlaybackService
 import com.piano.sequencer.ui.MidiFilesPanel
 import java.io.File
@@ -94,7 +99,7 @@ class SequencerActivity : AppCompatActivity() {
 
     // ── SAF file picker for MIDI import ──
     private val midiFileImportLauncher = registerForActivityResult(
-        ActivityResultContracts.GetContent()
+        ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri?.let { sourceUri -> importMidiFile(sourceUri, pendingImportCellId) }
     }
@@ -221,7 +226,7 @@ class SequencerActivity : AppCompatActivity() {
     private fun setupPanelCallbacks() {
         panel.onImportClick = { cellId ->
             pendingImportCellId = cellId
-            midiFileImportLauncher.launch("audio/midi")
+            midiFileImportLauncher.launch(arrayOf("audio/midi", "audio/x-midi", "audio/mpeg", "audio/mp3", "application/octet-stream"))
         }
 
         panel.onCellRecordClick = cell@{ cellId ->
@@ -236,7 +241,7 @@ class SequencerActivity : AppCompatActivity() {
                 stopRecordingFlow()
             } else {
                 val cell = MidiFileMappingStore.get(this).get(cellId)
-                if (cell == null) {
+                if (cell == null || cell.isMp3) {
                     recordBusy.set(false)
                     return@cell
                 }
@@ -334,7 +339,7 @@ class SequencerActivity : AppCompatActivity() {
                 Toast.makeText(this, "Stop recording first", Toast.LENGTH_SHORT).show()
             } else {
                 val mappings = MidiFileMappingStore.get(this)
-                val setId = cell.instrumentSetId
+                val setId = if (cell.isMp3) null else cell.instrumentSetId
                 val lastSetReference = setId != null && mappings.all().none { it.id != cell.id && it.instrumentSetId == setId }
                 if (lastSetReference) {
                     if (!pendingFileSetRemovals.add(setId!!)) return@removeCell
@@ -366,80 +371,29 @@ class SequencerActivity : AppCompatActivity() {
     private fun importMidiFile(sourceUri: Uri, cellId: Int?) {
         executor.execute {
             try {
-                val midiDir = File(this@SequencerActivity.getExternalFilesDir(null), "midi_files")
-                if (!midiDir.exists()) midiDir.mkdirs()
-                // Deduplicate: find a unique name
-                var baseName = try {
-                    contentResolver.query(sourceUri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                        if (cursor.moveToFirst()) cursor.getString(0) else null
-                    } ?: "imported.mid"
-                } catch (_: Exception) {
-                    "imported.mid"
-                }
-                if (!baseName.endsWith(".mid", ignoreCase = true)) baseName += ".mid"
-                var destFile = File(midiDir, baseName)
-                var counter = 1
-                while (destFile.exists()) {
-                    destFile = File(midiDir, "${baseName.removeSuffix(".mid")}_$counter.mid")
-                    counter++
-                }
-                contentResolver.openInputStream(sourceUri)?.use { input ->
-                    FileOutputStream(destFile).use { output ->
-                        input.copyTo(output)
-                    }
-                } ?: throw IOException("Could not open input stream for $sourceUri")
-                // The file's initial tempo (worker thread — blocking parse on a
-                // cache miss). Unreadable file / service not bound → -1 → the cell
-                // keeps its current tempo (today's behavior).
-                val fileTempo = service?.getMidiFileTempo(destFile.absolutePath) ?: -1f
-                val initialPrograms = com.piano.sequencer.midi.MidiInitialPrograms.fromFile(destFile)
-                val sourceName = destFile.name
-                runOnUiThread {
-                    if (cellId != null) {
-                        val store = MidiFileMappingStore.get(this@SequencerActivity)
-                        val cur = store.get(cellId)
-                        if (cur != null) {
-                            // New file: reset the per-track selection AND the cell
-                            // channel — both are file-specific. A carried selection
-                            // would point at out-of-range tracks (silence) or remap
-                            // the wrong ones; a carried channel would silently remap
-                            // every track of the new file (legacy fallback) with no
-                            // UI left to undo it (the spinner is hidden for
-                            // multi-track cells). The tempo is set from the file
-                            // (its initial tempo meta) so the cell plays at the
-                            // file's speed.
-                             val imported = cur.copy(
-                                 filePath = destFile.absolutePath,
-                                 selectedTracks = null,
-                                 trackChannels = emptyMap(),
-                                 trackInstrumentSets = emptyMap(),
-                                 channel = -1,
-                                 tempo = if (fileTempo > 0f) fileTempo.toDouble() else cur.tempo
-                             )
-                              val instrumentSets = FileInstrumentSetStore.get(this@SequencerActivity)
-                               val oldSetId = cur.instrumentSetId
-                              val otherReferences = store.all().filter { it.id != cur.id }.mapNotNull { it.instrumentSetId }.toSet()
-                              instrumentSets.removeUnreferenced(otherReferences + listOfNotNull(cur.instrumentSetId))
-                              val withSet = instrumentSets.replaceForCell(imported, cur.instrumentSetId, otherReferences, initialPrograms, "${destFile.name} instruments")
-                               if (withSet == null) {
-                                   Toast.makeText(this@SequencerActivity, "Import failed: file instrument-set capacity full.", Toast.LENGTH_LONG).show()
-                                   return@runOnUiThread
-                                } else {
-                                    store.set(withSet)
-                                    val revision = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "?" } catch (_: Exception) { "?" }
-                                    val compactPrograms = initialPrograms.mapIndexed { channel, packed -> "$channel:${packed shr 8}/${packed and 0xff}" }.joinToString(",")
-                                    AppLogger.info("FILESET", "import cell=$cellId file=$sourceName rev=$revision set=$oldSetId->${withSet.instrumentSetId} base=${oldSetId?.let { id -> instrumentSets.all().firstOrNull { it.id == id }?.channelBase } ?: "?"}->${instrumentSets.all().firstOrNull { it.id == withSet.instrumentSetId }?.channelBase} parsed={$compactPrograms} selected=${withSet.selectedTracks} channels=${withSet.trackChannels} choices=${withSet.trackInstrumentSets}")
-                                }
+                val prepared = SequencerAssetImporter.import(this@SequencerActivity, sourceUri)
+                // Controller owns assignment and cleanup after validation, including
+                // ordered shutdown of the previous trigger slot and test preview.
+                MidiFileTriggerController.get(this).replaceCellAsset(cellId, prepared) { cell, error ->
+                    if (!isFinishing && !isDestroyed) {
+                        if (cell != null) {
+                            Toast.makeText(this, "Imported: ${prepared.file.name}", Toast.LENGTH_SHORT).show()
+                            refreshPanel()
+                        } else {
+                            Toast.makeText(this, "Import failed: ${error ?: "Cell is no longer available"}", Toast.LENGTH_LONG).show()
                         }
                     }
-                    Toast.makeText(this@SequencerActivity, "Imported: ${destFile.name}", Toast.LENGTH_SHORT).show()
-                    refreshPanel()
+                    if (cell == null) {
+                        AppLogger.warn("SequencerActivity", "File import failed: ${error ?: "Cell is no longer available"}")
+                    }
                 }
             } catch (e: Exception) {
+                AppLogger.warn("SequencerActivity", "File import failed: ${e.message}")
                 runOnUiThread {
-                    Toast.makeText(this@SequencerActivity, "Import failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    if (!isFinishing && !isDestroyed) {
+                        Toast.makeText(this, "Import failed: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
                 }
-                AppLogger.warn("SequencerActivity", "MIDI import failed: ${e.message}")
             }
         }
     }
@@ -450,6 +404,11 @@ class SequencerActivity : AppCompatActivity() {
     private fun startRecordingFlow(cellId: Int) {
         executor.execute {
             try {
+                val target = MidiFileMappingStore.get(this).get(cellId)
+                if (target == null || target.isMp3) {
+                    recordBusy.set(false)
+                    return@execute
+                }
                 val svc = service ?: run {
                     runOnUiThread {
                         Toast.makeText(this, "Service not connected", Toast.LENGTH_SHORT).show()
@@ -462,9 +421,30 @@ class SequencerActivity : AppCompatActivity() {
                 // F5: stop all active file slots + test-play; their pass-start events
                 // (timestamp == 0) would otherwise leak into the recording
                 MidiFileTriggerController.get(this).stopAllForRecording()
-                val cell = MidiFileMappingStore.get(this).get(cellId)
-                val isChord = cell?.mode == MODE_CHORD
-                MidiRecordSession.inFlight = true
+                val store = MidiFileMappingStore.get(this)
+                var isChord = false
+                // Claim the cell and mark in-flight atomically against a concurrent
+                // MP3 import (which also takes this gate). Re-read under the gate so an
+                // import landing between the outer read and the claim cannot slip past:
+                // once inFlight is set under the gate, the import's own gate-check blocks it.
+                val accepted = synchronized(MidiRecordSession.gate) {
+                    if (replacementAllowed(MidiRecordSession.inFlight, MidiRecordSession.cellId, MidiRecordSession.pendingSave)) {
+                        val current = store.get(cellId)
+                        if (current == null || current.isMp3) {
+                            false
+                        } else {
+                            isChord = current.mode == MODE_CHORD
+                            MidiRecordSession.inFlight = true
+                            MidiRecordSession.target = RecordCellIdentity(cellId, current.filePath, current.assetType, current.mode)
+                            true
+                        }
+                    } else false
+                }
+                if (!accepted) {
+                    recordBusy.set(false)
+                    runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this, "Recording unavailable while the file is changing", Toast.LENGTH_SHORT).show() }
+                    return@execute
+                }
                 try {
                     if (isChord) {
                         // Chord mode: collect notes in Kotlin (no engine MIDI
@@ -480,7 +460,13 @@ class SequencerActivity : AppCompatActivity() {
                         .putInt("recording_cell_id", cellId)
                         .apply()
                 } finally {
-                    MidiRecordSession.inFlight = false
+                    // In-flight closes the claim→cellId window while the engine starts.
+                    // On success cellId (already set) blocks imports on its own; on
+                    // failure both are clear, so imports are allowed again and inFlight
+                    // is never left wedged.
+                    synchronized(MidiRecordSession.gate) {
+                        MidiRecordSession.inFlight = false
+                    }
                 }
                 runOnUiThread {
                     panel.updateCellRecordState(cellId)
@@ -509,9 +495,14 @@ class SequencerActivity : AppCompatActivity() {
                     }
                     return@execute
                 }
+                val store = MidiFileMappingStore.get(this)
                 MidiRecordSession.inFlight = true
+                // Hold the save gate through stop + write + commit so a concurrent MP3
+                // import cannot change the target cell underneath the save.
+                MidiRecordSession.pendingSave = true
+                val original = MidiRecordSession.target
                 val recCellId = MidiRecordSession.cellId
-                val cell = recCellId?.let { MidiFileMappingStore.get(this).get(it) }
+                val cell = recCellId?.let { store.get(it) }
                 val isChord = cell?.mode == MODE_CHORD
                 try {
                     if (!isChord) {
@@ -528,14 +519,15 @@ class SequencerActivity : AppCompatActivity() {
                 if (isChord && recCellId != null) {
                     val chordNotes = ChordRecorder.stop()
                     if (chordNotes.isNotEmpty() && cell != null) {
+                        val saved = recordTargetUnchanged(original, store.get(recCellId))
                         runOnUiThread {
-                            val store = MidiFileMappingStore.get(this)
                             val cur = store.get(recCellId)
-                            if (cur != null) {
+                            if (cur != null && saved) {
                                 store.set(cur.copy(chordNotes = chordNotes))
                                 refreshPanel()
                                 Toast.makeText(this, "Chord recorded: ${chordNotes.size} notes", Toast.LENGTH_SHORT).show()
                             } else {
+                                ChordRecorder.cancel()
                                 panel.updateCellRecordState(null)
                             }
                             recordBusy.set(false)
@@ -548,65 +540,67 @@ class SequencerActivity : AppCompatActivity() {
                             recordBusy.set(false)
                         }
                     }
-                    return@execute
-                }
-
-                val eventCount = if (!isChord) svc.getRecordedEventCount() else 0
-                if (eventCount > 0 && recCellId != null) {
-                    val midiDir = File(getExternalFilesDir(null), "midi_files")
-                    if (!midiDir.exists()) midiDir.mkdirs()
-                    // F6: add milliseconds to recorded file name
-                    val name = "recorded_" +
-                        SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date()) + ".mid"
-                    val destFile = File(midiDir, name)
-                    val bpm = svc.getBPM()
-                    val ppq = svc.getPpq()
-                    val tempoUs = (60_000_000.0 / bpm).toInt()
-                    val ok = svc.writeRecordedMidiFile(destFile.absolutePath, ppq, tempoUs)
-                    if (ok) {
-                        runOnUiThread {
-                            val store = MidiFileMappingStore.get(this)
-                            val cell = store.get(recCellId)
-                            if (cell != null) {
-                                // New file: reset the per-track selection AND the cell
-                                // channel (both file-specific — a carried selection would
-                                // silence or remap the fresh recording; a carried channel
-                                // would remap it via the legacy fallback with no UI left
-                                // to undo it).
-                                store.set(cell.copy(
-                                    filePath = destFile.absolutePath,
-                                    selectedTracks = null,
-                                    trackChannels = emptyMap(),
-                                    channel = -1
-                                ))
-                                // Force slot reload of the new file (same pattern as onNoteLearned)
-                                if (cell.hasTrigger()) {
-                                    val c = MidiFileTriggerController.get(this)
-                                    c.getSlotForKey(cell.triggerKey())?.let { c.clearLoadedFile(it) }
+                } else {
+                    val eventCount = svc.getRecordedEventCount()
+                    if (eventCount > 0 && recCellId != null) {
+                        val midiDir = File(getExternalFilesDir(null), "midi_files")
+                        if (!midiDir.exists()) midiDir.mkdirs()
+                        // F6: add milliseconds to recorded file name
+                        val name = "recorded_" +
+                            SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date()) + ".mid"
+                        val destFile = File(midiDir, name)
+                        val bpm = svc.getBPM()
+                        val ppq = svc.getPpq()
+                        val tempoUs = (60_000_000.0 / bpm).toInt()
+                        val ok = svc.writeRecordedMidiFile(destFile.absolutePath, ppq, tempoUs)
+                        if (ok) {
+                            // Refuse to stamp the fresh .mid onto a cell that changed hands
+                            // (removed / replaced / converted to MP3) while recording.
+                            val latest = store.get(recCellId)
+                            val intact = latest != null && recordTargetUnchanged(original, latest)
+                            if (intact && latest != null) {
+                                runOnUiThread {
+                                    store.set(latest.copy(
+                                        filePath = destFile.absolutePath,
+                                        // A saved SMF is by definition a MIDI FILE cell — never
+                                        // inherit a changed assetType or mode from a concurrent import.
+                                        assetType = ASSET_MIDI,
+                                        mode = MODE_FILE,
+                                        selectedTracks = null,
+                                        trackChannels = emptyMap(),
+                                        channel = -1
+                                    ))
+                                    if (latest.hasTrigger()) {
+                                        val c = MidiFileTriggerController.get(this)
+                                        c.getSlotForKey(latest.triggerKey())?.let { c.clearLoadedFile(it) }
+                                    }
+                                    refreshPanel()
+                                    Toast.makeText(this, "Recorded: ${destFile.name} ($eventCount events)", Toast.LENGTH_SHORT).show()
                                 }
-                                refreshPanel()
-                                Toast.makeText(this, "Recorded: ${destFile.name} ($eventCount events)", Toast.LENGTH_SHORT).show()
                             } else {
-                                // Cell was removed while recording — no row to refresh; just reset button states
-                                panel.updateCellRecordState(null)
+                                // Target changed: drop the orphaned file, keep the new assignment.
+                                destFile.delete()
+                                runOnUiThread {
+                                    panel.updateCellRecordState(null)
+                                    refreshPanel()
+                                }
                             }
-                            // F10: release the double-tap guard only after the UI update is posted
-                            recordBusy.set(false)
+                            runOnUiThread { recordBusy.set(false) }
+                        } else {
+                            runOnUiThread {
+                                Toast.makeText(this, "Record save failed", Toast.LENGTH_SHORT).show()
+                                panel.updateCellRecordState(null)
+                                recordBusy.set(false)
+                            }
                         }
                     } else {
                         runOnUiThread {
-                            Toast.makeText(this, "Record save failed", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this,
+                                if (eventCount == 0) "Nothing recorded" else "Recording lost",
+                                Toast.LENGTH_SHORT).show()
                             panel.updateCellRecordState(null)
                             recordBusy.set(false)
                         }
-                    }
-                } else {
-                    runOnUiThread {
-                        Toast.makeText(this,
-                            if (eventCount == 0) "Nothing recorded" else "Recording lost",
-                            Toast.LENGTH_SHORT).show()
-                        panel.updateCellRecordState(null)
-                        recordBusy.set(false)
                     }
                 }
             } catch (e: Exception) {
@@ -615,6 +609,9 @@ class SequencerActivity : AppCompatActivity() {
                     panel.updateCellRecordState(null)
                     recordBusy.set(false)
                 }
+            } finally {
+                MidiRecordSession.pendingSave = false
+                MidiRecordSession.target = null
             }
         }
     }
@@ -656,7 +653,7 @@ class SequencerActivity : AppCompatActivity() {
                 DocumentsContract.getTreeDocumentId(destUri)
             )
             val childUri = DocumentsContract.createDocument(
-                contentResolver, docFile, "audio/midi", fileName
+                contentResolver, docFile, if (sourceFile.extension.equals("mp3", true)) "audio/mpeg" else "audio/midi", fileName
             ) ?: throw IOException("Could not create document in SAF folder")
             contentResolver.openOutputStream(childUri)?.use { out ->
                 sourceFile.inputStream().use { input ->

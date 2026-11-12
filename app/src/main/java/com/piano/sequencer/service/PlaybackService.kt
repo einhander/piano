@@ -893,6 +893,18 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun loadMidiFileSlot(slot: Int, filePath: String, tempo: Double, loop: Boolean, selectedTracks: IntArray, trackChannels: IntArray, startAfterLoad: Boolean): Int =
         NativeEngineBridge.nativeLoadMidiFileSlot(slot, filePath, tempo, loop, selectedTracks, trackChannels, startAfterLoad)
 
+    /** MP3 decode and native upload are blocking; caller must use worker thread. */
+    fun loadMp3Slot(slot: Int, path: String): String? = try {
+        val decoded = com.piano.sequencer.audio.Mp3Decoder.decode(java.io.File(path))
+        NativeEngineBridge.nativeLoadPcmSlot(slot, decoded.pcm, decoded.frames, decoded.sourceRate)
+    } catch (e: Exception) { e.message ?: "MP3 decode failed" }
+    fun startPcmSlot(slot: Int, loop: Boolean): Boolean = NativeEngineBridge.nativeStartPcmSlot(slot, loop)
+    fun setPcmSlotLoop(slot: Int, loop: Boolean): Boolean = NativeEngineBridge.nativeSetPcmSlotLoop(slot, loop)
+    fun stopPcmSlot(slot: Int): Boolean = NativeEngineBridge.nativeStopPcmSlot(slot)
+    fun freePcmSlot(slot: Int): Boolean = NativeEngineBridge.nativeFreePcmSlot(slot)
+    fun stopAllPcmSlots(): Boolean = NativeEngineBridge.nativeStopAllPcmSlots()
+    fun isPcmSlotPlaying(slot: Int): Boolean = NativeEngineBridge.nativeIsPcmSlotPlaying(slot)
+
     fun getMidiFileTracks(filePath: String): Array<String>? = NativeEngineBridge.nativeGetMidiFileTracks(filePath)
 
     fun getMidiFileTempo(filePath: String): Float = NativeEngineBridge.nativeGetMidiFileTempo(filePath)

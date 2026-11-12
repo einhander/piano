@@ -868,6 +868,8 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     // Mix all tracks through Mixer into stereo output
     measureStageCpu(stageCpuNs[4], [&] { mMixer.mix(output, safeFrames); });
 
+    mPcmSlotPlayer.renderAdd(output, safeFrames, mPublishedSampleRate.load(std::memory_order_relaxed));
+
     // ── LSP master effect chain (EQ → Compressor → Limiter) ──
     // Inserted AFTER the Mixer and BEFORE the MasterBus, per plan Phase 6/17:
     //   Mixer → EQ → Compressor → Limiter → MasterBus → Oboe
@@ -1492,6 +1494,17 @@ MidiFilePlayer::SlotInfo NativeEngine::getMidiFileSlotInfo(int slot) const {
 void NativeEngine::freeMidiFileSlot(int slot) {
     mMidiFilePlayer.freeSlot(slot);
 }
+
+bool NativeEngine::loadPcmSlot(int slot, const int16_t* pcm, int64_t frames, int32_t rate,
+                               std::string* error, uint64_t uploadCapacity) {
+    return mPcmSlotPlayer.load(slot, pcm, frames, rate, error, uploadCapacity);
+}
+bool NativeEngine::startPcmSlot(int slot, bool loop) { return mPcmSlotPlayer.start(slot, loop); }
+bool NativeEngine::setPcmSlotLoop(int slot, bool loop) { return mPcmSlotPlayer.setLoop(slot, loop); }
+bool NativeEngine::stopPcmSlot(int slot) { return mPcmSlotPlayer.stop(slot); }
+bool NativeEngine::freePcmSlot(int slot) { return mPcmSlotPlayer.free(slot); }
+bool NativeEngine::stopAllPcmSlots() { return mPcmSlotPlayer.stopAll(); }
+bool NativeEngine::isPcmSlotPlaying(int slot) const { return mPcmSlotPlayer.isPlaying(slot); }
 
 int64_t NativeEngine::getMidiFileSlotLoadFrame(int slot) const {
     return mMidiFilePlayer.getLoadConsumeFrame(slot);

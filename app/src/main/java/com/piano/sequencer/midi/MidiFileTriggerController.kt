@@ -24,7 +24,7 @@ import org.json.JSONObject
  *
  * Holds: triggerSlotMap (encoded trigger key → slot), loadedFilePerSlot (filePath+channel),
  * nextSlotIndex, NoteToggleStateMachine (reused for CC/pitch-bend presses via press()),
- * test-play state (slot 15, generation counter, 3s auto-stop).
+ * test-play state (slot 15, generation counter, playback status polling).
  * Never holds a strong Activity reference — uses applicationContext for Toasts.
  */
 class MidiFileTriggerController private constructor(appContext: Context) {
@@ -70,6 +70,57 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     fun awaitIdle(onIdle: () -> Unit) = trackedSlotExecutor.awaitIdle(onIdle)
     fun resumeAfterAbortedExit() = trackedSlotExecutor.resume()
 
+    /** Replace a cell's media atomically with respect to slot commands. */
+    fun replaceCellAsset(cellId: Int?, prepared: PreparedSequencerAsset, onComplete: (SequencerCell?, String?) -> Unit) {
+        trackedSlotExecutor.execute {
+            var result: SequencerCell? = null
+            var error: String? = null
+            try {
+                synchronized(MidiRecordSession.gate) {
+                    if (!replacementAllowed(MidiRecordSession.inFlight, MidiRecordSession.cellId, MidiRecordSession.pendingSave))
+                        throw IllegalStateException("Cannot replace asset while recording or saving")
+                }
+                val s = store ?: throw IllegalStateException("Sequencer store unavailable")
+                val old = cellId?.let { s.get(it) }
+                if (cellId != null && old == null) throw IllegalStateException("Cell no longer exists")
+                val current = old ?: SequencerCell(id = s.nextId())
+                val key = current.triggerKey()
+                val slot = triggerSlotMap[key]
+                cancelTestPlayAutoStop()
+                testPlayGeneration++
+                synchronized(slotLocks[testPlaySlot]) {
+                    val svc = service
+                    if (svc != null) {
+                        svc.stopMidiFileSlot(testPlaySlot)
+                        svc.freeMidiFileSlot(testPlaySlot)
+                        val ok = svc.stopPcmSlot(testPlaySlot) && svc.freePcmSlot(testPlaySlot)
+                        if (!ok) throw IllegalStateException("Audio slot busy; retry asset replacement")
+                    }
+                    testPlayPlaying = false
+                    testPlayCellId = null
+                    loadedFilePerSlot.remove(testPlaySlot)
+                }
+                if (slot != null) synchronized(slotLocks[slot]) {
+                    val svc = service
+                    if (svc != null) {
+                        svc.stopMidiFileSlot(slot)
+                        svc.freeMidiFileSlot(slot)
+                        val ok = svc.stopPcmSlot(slot) && svc.freePcmSlot(slot)
+                        if (!ok) throw IllegalStateException("Audio slot busy; retry asset replacement")
+                    }
+                    loadedFilePerSlot.remove(slot)
+                }
+                noteStateMachine.stopPlaying(key)
+                result = applyImportedAsset(current, prepared)
+                s.set(result!!)
+            } catch (failure: Exception) {
+                prepared.file.delete()
+                error = failure.message ?: "Unable to replace asset"
+            }
+            mainHandler.post { onComplete(result, error) }
+        }
+    }
+
     /** Per-slot mutex: prevents the 4-thread pool from interleaving tasks on the same slot.
      *  The C++ workerBusy CAS only guards load() (I/O + buffer copy); the Kotlin
      *  read→decide→JNI→write-map sequence is not atomic per slot. Without this lock,
@@ -107,7 +158,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     private var service: PlaybackService? = null
         private var store: MidiFileMappingStore? = null
 
-    // Test-play state (slot 15, generation counter, 3s auto-stop)
+    // Test-play state (slot 15, generation counter, UI-only status polling)
     @Volatile
     private var testPlayGeneration = 0
     @Volatile
@@ -140,7 +191,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
             this.store = MidiFileMappingStore.get(activity.applicationContext)
         }
         // Preload files when cells are saved
-        store?.onCellSaved = { cell -> if (cell.filePath.isNotEmpty()) preloadFile(cell.filePath) }
+        store?.onCellSaved = { cell -> if (cell.filePath.isNotEmpty() && !cell.isMp3) preloadFile(cell.filePath) }
     }
 
 
@@ -354,30 +405,23 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         // MINOR-2: stale in-flight guard — re-check the store before allocating a slot.
         // The cell came from a store lookup at press time (MIDI thread or main thread);
         // by the time this runs the mapping may have been deleted or the file changed.
-        val current = store?.findByTrigger(
-            cell.triggerType,
-            cell.triggerData(),
-            cell.triggerSource,
-            cell.triggerChannel
-        )
-        val exactCurrent = if (cell.triggerType == TRIGGER_SYSEX) {
-            store?.findBySysEx(cell.sysexBytes.map { it.toByte() }.toByteArray(), cell.triggerSource)
-        } else current
-        if (exactCurrent == null || exactCurrent.filePath != cell.filePath) return
-
         trackedSlotExecutor.execute {
+            val current = store?.get(cell.id) ?: return@execute
+            if (current.triggerType != cell.triggerType || current.triggerData() != cell.triggerData() ||
+                current.triggerSource != cell.triggerSource || current.triggerChannel != cell.triggerChannel ||
+                current.filePath != cell.filePath || current.assetType != cell.assetType || current.mode != cell.mode) return@execute
             val svc = service ?: return@execute
-            val cell = ensureFileSet(exactCurrent) ?: return@execute
+            val cell = if (current.isMp3) current else ensureFileSet(current) ?: return@execute
             val key = cell.triggerKey()
             val slot = allocateSlot(key)
             synchronized(slotLocks[slot]) {
                 val t1 = SystemClock.uptimeMillis()
-                val isPlaying = svc.isMidiFileSlotPlaying(slot)
+                val isPlaying = if (cell.isMp3) svc.isPcmSlotPlaying(slot) else svc.isMidiFileSlotPlaying(slot)
 
                 AppLogger.info("TRIG", "press key=$key slot=$slot qwait=${t1 - t0}ms")
 
                 if (isPlaying) {
-                    svc.stopMidiFileSlot(slot)
+                    if (cell.isMp3) svc.stopPcmSlot(slot) else svc.stopMidiFileSlot(slot)
                     if (cell.loop) {
                         // Loop mode: second press interrupts playback (toggle-off).
                         noteStateMachine.stopPlaying(key)
@@ -387,6 +431,26 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     // notes now; the C++ START handler resets tick/index when
                     // !playing, and the FIFO command queue guarantees this STOP is
                     // processed before the START below.
+                }
+                // A slot has one active backend. Tear down opposite backend before loading.
+                if (cell.isMp3) {
+                    svc.stopMidiFileSlot(slot)
+                    val loaded = loadedFilePerSlot[slot]
+                    if (loaded == null || loaded.first != cell.filePath || loaded.second != cell.channel || loaded.third != "MP3") {
+                        svc.freePcmSlot(slot)
+                        svc.freeMidiFileSlot(slot)
+                        val error = svc.loadMp3Slot(slot, cell.filePath)
+                        if (error != null) { showToast(error); AppLogger.warn("TRIG", "MP3 load failed slot=$slot: $error"); return@synchronized }
+                        loadedFilePerSlot[slot] = Triple(cell.filePath, cell.channel, "MP3")
+                    }
+                    if (!svc.startPcmSlot(slot, cell.loop)) {
+                        showToast("MP3 playback could not start")
+                        loadedFilePerSlot.remove(slot)
+                        return@synchronized
+                    }
+                    return@synchronized
+                } else {
+                    svc.stopPcmSlot(slot)
                 }
                 val loaded = loadedFilePerSlot[slot]
                 val routeFingerprint = "${cell.trackChannels}|${cell.trackInstrumentSets}|${cell.instrumentSetId}|${cell.selectedTracks}"
@@ -457,7 +521,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
             trackedSlotExecutor.execute {
                 synchronized(slotLocks[slot]) {
                     val svc = service
-                    if (svc != null) svc.freeMidiFileSlot(slot)
+                    if (svc != null) { svc.stopMidiFileSlot(slot); svc.stopPcmSlot(slot); svc.freeMidiFileSlot(slot); svc.freePcmSlot(slot) }
                     loadedFilePerSlot.remove(slot)
                 }
             }
@@ -476,7 +540,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         trackedSlotExecutor.execute {
             synchronized(slotLocks[slot]) {
                 val svc = service
-                if (svc != null) svc.stopMidiFileSlot(slot)
+                if (svc != null) { svc.stopMidiFileSlot(slot); svc.stopPcmSlot(slot) }
                 noteStateMachine.stopPlaying(key)
             }
         }
@@ -559,7 +623,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     }
 
     /**
-     * Test-play: slot 15, generation counter, 3s auto-stop.
+     * Test-play: slot 15, generation counter, status polling.
      * [selectedTracks]/[trackChannels] are the cell's per-track selection —
      * test play must preview exactly what the trigger plays, so the same
      * [resolveSelection] path as the trigger load is used. null/empty = all
@@ -582,6 +646,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 testPlayGeneration = gen
                 if (testPlayPlaying) {
                     svc.stopMidiFileSlot(testPlaySlot)
+                    svc.stopPcmSlot(testPlaySlot)
                     testPlayPlaying = false
                     testPlayCellId = null
                     mainHandler.post { onTestPlayStateChanged?.invoke(null, false) }
@@ -589,7 +654,26 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     return@synchronized
                 }
                 val storedCell = store?.get(cellId)
-                val cell = storedCell?.let { ensureFileSet(it) } ?: if (storedCell == null) null else return@synchronized
+                if (storedCell == null || storedCell.filePath != filePath ||
+                    (storedCell.assetType != ASSET_MIDI && storedCell.assetType != ASSET_MP3)) return@synchronized
+                val cell = storedCell?.let { if (it.isMp3) it else ensureFileSet(it) } ?: if (storedCell == null) null else return@synchronized
+                if (cell?.isMp3 == true) {
+                    svc.stopMidiFileSlot(testPlaySlot)
+                    svc.stopPcmSlot(testPlaySlot)
+                    svc.freePcmSlot(testPlaySlot)
+                    svc.freeMidiFileSlot(testPlaySlot)
+                    val error = svc.loadMp3Slot(testPlaySlot, filePath)
+                    if (error != null || !svc.startPcmSlot(testPlaySlot, loop)) {
+                        showToast(error ?: "MP3 playback could not start")
+                        return@synchronized
+                    }
+                    testPlayPlaying = true
+                    testPlayCellId = cellId
+                    mainHandler.post { onTestPlayStateChanged?.invoke(cellId, true) }
+                    schedulePcmTestPlayPoll(svc, gen)
+                    return@synchronized
+                }
+                svc.stopPcmSlot(testPlaySlot)
                 if (cell != null && !applyFileSetPrograms(svc, cell)) return@synchronized
                 val selection = resolveSelection(svc, filePath, selectedTracks, trackChannels, channel, cell)
                 logFileSetSnapshot(svc, "test-before", cellId, filePath, cell, selection)
@@ -637,6 +721,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                                 // after the outer check (which only avoids queueing no-ops).
                                 if (testPlayGeneration == gen) {
                                     svc.stopMidiFileSlot(testPlaySlot)
+                                    svc.stopPcmSlot(testPlaySlot)
                                     testPlayPlaying = false
                                     testPlayCellId = null
                                     mainHandler.post { onTestPlayStateChanged?.invoke(null, false) }
@@ -648,6 +733,28 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 mainHandler.postDelayed(testPlayRunnable!!, durationMs)
             }
         }
+    }
+
+    /** UI-only poll; never stops audio. PCM playback ends itself at decoded EOF or loops. */
+    private fun schedulePcmTestPlayPoll(svc: PlaybackService, gen: Int) {
+        testPlayRunnable = Runnable {
+            trackedSlotExecutor.execute {
+                synchronized(slotLocks[testPlaySlot]) {
+                    if (testPlayGeneration != gen || !testPlayPlaying) return@synchronized
+                    // Command may still be queued: only mark natural completion once audio
+                    // callback has advanced past the submitted start frame.
+                    if (svc.isPcmSlotPlaying(testPlaySlot) || svc.getProcessedFrames() == 0L) {
+                        mainHandler.postDelayed({ schedulePcmTestPlayPoll(svc, gen) }, 200L)
+                    } else {
+                        testPlayPlaying = false
+                        testPlayCellId = null
+                        testPlayRunnable = null
+                        mainHandler.post { onTestPlayStateChanged?.invoke(null, false) }
+                    }
+                }
+            }
+        }
+        mainHandler.postDelayed(testPlayRunnable!!, 200L)
     }
 
     private fun cancelTestPlayAutoStop() {
@@ -667,9 +774,8 @@ class MidiFileTriggerController private constructor(appContext: Context) {
             for (key in triggerSlotMap.keys) {
                 val slot = triggerSlotMap[key] ?: continue
                 synchronized(slotLocks[slot]) {
-                    if (svc.isMidiFileSlotPlaying(slot)) {
-                        svc.stopMidiFileSlot(slot)
-                    }
+                    if (svc.isMidiFileSlotPlaying(slot)) svc.stopMidiFileSlot(slot)
+                    svc.stopPcmSlot(slot)
                     noteStateMachine.stopPlaying(key)
                 }
             }
@@ -678,6 +784,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
             synchronized(slotLocks[testPlaySlot]) {
                 if (testPlayPlaying) {
                     svc.stopMidiFileSlot(testPlaySlot)
+                    svc.stopPcmSlot(testPlaySlot)
                     testPlayPlaying = false
                     testPlayCellId = null
                     mainHandler.post { onTestPlayStateChanged?.invoke(null, false) }
@@ -702,8 +809,17 @@ class MidiFileTriggerController private constructor(appContext: Context) {
             val cell = store?.all()?.firstOrNull { it.triggerKey() == key } ?: return@execute
             synchronized(slotLocks[slot]) {
                 // Live loop/tempo
-                svc.setMidiFileSlotLoop(slot, loop)
-                svc.setMidiFileSlotTempo(slot, tempo)
+                if (cell.isMp3) {
+                    if (!svc.setPcmSlotLoop(slot, loop)) AppLogger.warn("MidiFileTriggerController", "Unable to update MP3 loop setting for slot $slot")
+                    if (testPlayPlaying && testPlayCellId == cell.id) {
+                        synchronized(slotLocks[testPlaySlot]) {
+                            if (!svc.setPcmSlotLoop(testPlaySlot, loop)) AppLogger.warn("MidiFileTriggerController", "Unable to update MP3 test-play loop setting")
+                        }
+                    }
+                } else {
+                    svc.setMidiFileSlotLoop(slot, loop)
+                    svc.setMidiFileSlotTempo(slot, tempo)
+                }
 
                 // Any setting change resets the toggle state. The panel persists the new
                 // cell (store.set) before this callback runs, so comparing against
@@ -714,8 +830,10 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 // it (correct toggle-off).
                 noteStateMachine.stopPlaying(key)
 
-                // Channel change → reload slot
-                if (channel != loadedFilePerSlot[slot]?.second || routeFingerprint(cell) != loadedFilePerSlot[slot]?.third) {
+                // Channel change → reload slot. MP3 has no MIDI channel/route to remap;
+                // its loop was already propagated above, so skip the MIDI reload path.
+                if (!cell.isMp3 &&
+                    (channel != loadedFilePerSlot[slot]?.second || routeFingerprint(cell) != loadedFilePerSlot[slot]?.third)) {
                     val wasPlaying = svc.isMidiFileSlotPlaying(slot)
                     if (wasPlaying) svc.stopMidiFileSlot(slot)
                     reloadSlotLocked(svc, slot, cell, channel, wasPlaying)
@@ -793,10 +911,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
 
     /** D6: 16 slots; round-robin for 17th+ mapping. Reserve slot 15 for test-play. */
     private fun allocateSlot(key: Int): Int {
-        return triggerSlotMap.getOrPut(key) {
-            val slot = nextSlotIndex.getAndIncrement() % 15
-            slot
-        }
+        return allocateSlotForKey(key)
     }
 
     /**
@@ -805,10 +920,23 @@ class MidiFileTriggerController private constructor(appContext: Context) {
      * cells and 128+cc / 256 for CC / PITCH_BEND cells (see SequencerCell.triggerKey).
      */
     fun allocateSlotForKey(key: Int): Int {
-        return triggerSlotMap.getOrPut(key) {
-            val slot = nextSlotIndex.getAndIncrement() % 15
-            slot
+        triggerSlotMap[key]?.let { return it }
+        val slot = nextSlotIndex.getAndIncrement() % 15
+        val previousKey = triggerSlotMap.entries.firstOrNull { it.value == slot }?.key
+        if (previousKey != null && triggerSlotMap.remove(previousKey, slot)) {
+            noteStateMachine.stopPlaying(previousKey)
+            trackedSlotExecutor.execute {
+                synchronized(slotLocks[slot]) {
+                    service?.let { svc ->
+                        svc.stopMidiFileSlot(slot); svc.stopPcmSlot(slot)
+                        svc.freeMidiFileSlot(slot); svc.freePcmSlot(slot)
+                    }
+                    loadedFilePerSlot.remove(slot)
+                }
+            }
         }
+        triggerSlotMap[key] = slot
+        return slot
     }
 
     /** Get the slot assigned to an encoded trigger key, or null. */
@@ -835,7 +963,9 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                             val slot = triggerSlotMap[cell.triggerKey()] ?: continue
                             synchronized(slotLocks[slot]) {
                                 svc.stopMidiFileSlot(slot)
+                                svc.stopPcmSlot(slot)
                                 svc.freeMidiFileSlot(slot)
+                                svc.freePcmSlot(slot)
                                 loadedFilePerSlot.remove(slot)
                             }
                         }
@@ -880,7 +1010,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     fun preloadAll() {
         val s = store ?: return
         for (cell in s.all()) {
-            if (cell.filePath.isNotEmpty()) preloadFile(cell.filePath)
+            if (cell.filePath.isNotEmpty() && !cell.isMp3) preloadFile(cell.filePath)
         }
     }
 
@@ -962,7 +1092,7 @@ class MidiFileTriggerController private constructor(appContext: Context) {
 
     /** Repair legacy FILE ownership on worker before route selection or synth commands. */
     private fun ensureFileSet(cell: SequencerCell): SequencerCell? {
-        if (cell.mode != MODE_FILE || cell.filePath.isEmpty()) return cell
+        if (cell.mode != MODE_FILE || cell.filePath.isEmpty() || cell.isMp3) return cell
         val sets = FileInstrumentSetStore.get(appContext)
         if (cell.instrumentSetId?.let { id -> sets.all().any { it.id == id } } == true) return cell
         val file = java.io.File(cell.filePath)

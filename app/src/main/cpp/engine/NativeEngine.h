@@ -30,6 +30,7 @@
 #include "effects/SharedStereoDelay.h"
 #include "effects/InstrumentDelayBank.h"
 #include "audio/Mp3AudioRecorder.h"
+#include "audio/PcmSlotPlayer.h"
 
 class OboeOutput;
 
@@ -273,6 +274,16 @@ public:
     MidiFilePlayer::SlotInfo getMidiFileSlotInfo(int slot) const;
     void freeMidiFileSlot(int slot);
 
+    // PCM slots are loaded and controlled from a worker thread.
+    bool loadPcmSlot(int slot, const int16_t* pcm, int64_t frames, int32_t rate,
+                     std::string* error, uint64_t uploadCapacity);
+    bool startPcmSlot(int slot, bool loop);
+    bool setPcmSlotLoop(int slot, bool loop);
+    bool stopPcmSlot(int slot);
+    bool freePcmSlot(int slot);
+    bool stopAllPcmSlots();
+    bool isPcmSlotPlaying(int slot) const;
+
     // Timing trace: frame position when LOAD/START were consumed
     int64_t getMidiFileSlotLoadFrame(int slot) const;
     int64_t getMidiFileSlotStartFrame(int slot) const;
@@ -466,4 +477,5 @@ private:
 
     // MIDI file playback (16 pre-allocated slots)
     MidiFilePlayer mMidiFilePlayer;
+    PcmSlotPlayer mPcmSlotPlayer;
 };

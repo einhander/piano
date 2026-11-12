@@ -143,6 +143,13 @@ object NativeEngineBridge {
     // NativeEngine
     external fun nativeInitEngine(sampleRate: Int, bufferSize: Int): Boolean
     external fun nativeLoadSoundFont(filePath: String): Int
+    external fun nativeLoadPcmSlot(slot: Int, pcm: java.nio.ByteBuffer, frames: Long, rate: Int): String?
+    external fun nativeStartPcmSlot(slot: Int, loop: Boolean): Boolean
+    external fun nativeSetPcmSlotLoop(slot: Int, loop: Boolean): Boolean
+    external fun nativeStopPcmSlot(slot: Int): Boolean
+    external fun nativeFreePcmSlot(slot: Int): Boolean
+    external fun nativeStopAllPcmSlots(): Boolean
+    external fun nativeIsPcmSlotPlaying(slot: Int): Boolean
     external fun nativeNoteOn(channel: Int, note: Int, velocity: Int)
     external fun nativeNoteOff(channel: Int, note: Int)
     external fun nativePanic()

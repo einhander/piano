@@ -1431,6 +1431,29 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeSetOverdub(
 }
 
 // ── MIDI file slot playback ──
+
+JNIEXPORT jstring JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeLoadPcmSlot(
+    JNIEnv* env, jclass, jint slot, jobject buffer, jlong frames, jint rate) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (!inst) return env->NewStringUTF("engine unavailable");
+    if (!buffer || frames <= 0 || frames > INT64_MAX / 4 || rate <= 0 || rate > 768000)
+        return env->NewStringUTF("invalid PCM dimensions or rate");
+    const jlong capacity = env->GetDirectBufferCapacity(buffer);
+    const jlong required = frames * 4;
+    if (capacity < required || capacity < 0) return env->NewStringUTF("PCM buffer is not direct or is too small");
+    auto* address = static_cast<const int16_t*>(env->GetDirectBufferAddress(buffer));
+    if (!address) return env->NewStringUTF("PCM buffer address unavailable");
+    std::string error;
+    if (!inst->loadPcmSlot(slot, address, frames, rate, &error, static_cast<uint64_t>(capacity)))
+        return env->NewStringUTF(error.c_str());
+    return nullptr;
+}
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeStartPcmSlot(JNIEnv*, jclass, jint slot, jboolean loop) { auto* e=NativeEngine::getInstance(); return e && e->startPcmSlot(slot, loop); }
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeSetPcmSlotLoop(JNIEnv*, jclass, jint slot, jboolean loop) { auto* e=NativeEngine::getInstance(); return e && e->setPcmSlotLoop(slot, loop); }
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeStopPcmSlot(JNIEnv*, jclass, jint slot) { auto* e=NativeEngine::getInstance(); return e && e->stopPcmSlot(slot); }
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeFreePcmSlot(JNIEnv*, jclass, jint slot) { auto* e=NativeEngine::getInstance(); return e && e->freePcmSlot(slot); }
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeStopAllPcmSlots(JNIEnv*, jclass) { auto* e=NativeEngine::getInstance(); return e && e->stopAllPcmSlots(); }
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeIsPcmSlotPlaying(JNIEnv*, jclass, jint slot) { auto* e=NativeEngine::getInstance(); return e && e->isPcmSlotPlaying(slot); }
 // Worker-thread functions: call from a worker thread, never the main thread.
 // loadMidiFileSlot does blocking file I/O + parse (tens of ms).
 

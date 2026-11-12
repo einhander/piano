@@ -158,4 +158,5 @@
     <string name="ui_show_cell_actions">Show cell actions</string>
     <string name="ui_hide_cell_actions">Hide cell actions</string>
     <string name="ui_multi_channel_short">Ch %1$d</string>
+    <string name="ui_mp3_help">MP3 plays at its original speed (no BPM stretching). Limit: 64 MiB decoded per file, about 5.8 minutes at 48 kHz stereo. Load errors appear in a message and App Log.</string>
 </resources>
