@@ -2,10 +2,32 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
 #include <iostream>
 #include <thread>
 #include <atomic>
 #include <vector>
+
+static PcmCacheHeader makeHeader(uint32_t version, uint32_t channels, uint32_t rate, int64_t frames) {
+    PcmCacheHeader h{};
+    std::memcpy(h.magic, "PCMC", 4);
+    h.version = version;
+    h.channels = channels;
+    h.sampleRate = rate;
+    h.frames = frames;
+    h.reserved = 0;
+    return h;
+}
+
+static bool writePcmFile(const char* path, PcmCacheHeader h, const int16_t* pcm, int64_t samples) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f) return false;
+    f.write(reinterpret_cast<const char*>(&h), static_cast<std::streamsize>(sizeof(h)));
+    if (samples > 0) f.write(reinterpret_cast<const char*>(pcm), static_cast<std::streamsize>(samples * sizeof(int16_t)));
+    return static_cast<bool>(f);
+}
 
 int main() {
     PcmSlotPlayer p;
@@ -71,6 +93,64 @@ int main() {
     int16_t fullAsset[32]{};
     assert(uploadLimit.load(0, fullAsset, 16, 48000, nullptr, 64));
     assert(!uploadLimit.load(1, constant, 1, 48000, nullptr, 64));
+
+    // Disk-cache path: header validated, content identical to an in-memory
+    // load, and corruption/budget/size violations rejected.
+    {
+        const char* path = "/tmp/piano_pcm_slot_disk_test.pcm";
+        int16_t clip[8] = {1000, -1000, 2000, 2000, -3000, 3000, 4096, -4096};
+        PcmCacheHeader okHdr = makeHeader(kPcmCacheVersion, kPcmCacheChannels, 48000, 4);
+        assert(writePcmFile(path, okHdr, clip, 8));
+        assert(p.loadFromDisk(7, path));
+        assert(p.start(7, false));
+        float fromDisk[8]{}; p.renderAdd(fromDisk, 4, 48000);
+        assert(p.load(8, clip, 4, 48000));
+        assert(p.start(8, false));
+        float mem[8]{}; p.renderAdd(mem, 4, 48000);
+        for (int i = 0; i < 8; ++i) assert(std::abs(fromDisk[i] - mem[i]) < 1e-6f);
+        assert(p.stopAll());
+
+        assert(!p.loadFromDisk(7, "/tmp/piano_pcm_slot_missing_never_exists.pcm"));
+
+        PcmCacheHeader badMagic = makeHeader(kPcmCacheVersion, kPcmCacheChannels, 48000, 4);
+        badMagic.magic[0] = 'X';
+        assert(writePcmFile(path, badMagic, clip, 8));
+        assert(!p.loadFromDisk(7, path));
+        PcmCacheHeader wrongVersion = makeHeader(2, kPcmCacheChannels, 48000, 4);
+        assert(writePcmFile(path, wrongVersion, clip, 8));
+        assert(!p.loadFromDisk(7, path)); // wrong version
+        PcmCacheHeader mono = makeHeader(kPcmCacheVersion, 1, 48000, 4);
+        assert(writePcmFile(path, mono, clip, 8));
+        assert(!p.loadFromDisk(7, path)); // mono
+        PcmCacheHeader zeroRate = makeHeader(kPcmCacheVersion, kPcmCacheChannels, 0, 4);
+        assert(writePcmFile(path, zeroRate, clip, 8));
+        assert(!p.loadFromDisk(7, path)); // zero rate
+        PcmCacheHeader zeroFrames = makeHeader(kPcmCacheVersion, kPcmCacheChannels, 48000, 0);
+        assert(writePcmFile(path, zeroFrames, clip, 8));
+        assert(!p.loadFromDisk(7, path)); // zero frames
+        PcmCacheHeader lieBig = makeHeader(kPcmCacheVersion, kPcmCacheChannels, 48000, 100);
+        assert(writePcmFile(path, lieBig, clip, 8));
+        assert(!p.loadFromDisk(7, path)); // payload shorter than claimed
+        PcmCacheHeader lieSmall = makeHeader(kPcmCacheVersion, kPcmCacheChannels, 48000, 2);
+        assert(writePcmFile(path, lieSmall, clip, 8));
+        assert(!p.loadFromDisk(7, path)); // payload longer than claimed
+        std::ofstream trunc(path, std::ios::binary | std::ios::trunc);
+        trunc.write("PCMC", 4);
+        trunc.close();
+        assert(!p.loadFromDisk(7, path)); // header truncated
+        PcmCacheHeader validAgain = makeHeader(kPcmCacheVersion, kPcmCacheChannels, 48000, 4);
+        assert(writePcmFile(path, validAgain, clip, 8));
+        assert(!p.loadFromDisk(16, path)); // invalid slot even with valid file
+        assert(!p.loadFromDisk(7, nullptr));
+
+        PcmSlotPlayer tiny(16, 32);
+        int16_t bigClip[16] = {1000, -1000, 2000, 2000, -3000, 3000, 4096, -4096,
+                               100, 200, 300, 400, 500, 600, 700, 800};
+        PcmCacheHeader bigFile = makeHeader(kPcmCacheVersion, kPcmCacheChannels, 48000, 8);
+        assert(writePcmFile(path, bigFile, bigClip, 16));
+        assert(!tiny.loadFromDisk(0, path)); // 32 B payload > 16 B asset budget
+        std::remove(path);
+    }
 
     // Serialized worker replacement/free while audio callback concurrently renders.
     std::atomic<bool> done{false};

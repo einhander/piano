@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <new>
 
@@ -48,6 +49,19 @@ bool PcmSlotPlayer::enqueue(const Command& c) {
     return true;
 }
 
+// Moves `asset` into the command queue; deletes it if enqueue fails.
+// Admission preconditions must already hold (caller checked them).
+bool PcmSlotPlayer::adoptQueued(int slot, Asset* asset, std::string* error) {
+    if (!enqueue({Op::Replace, slot, asset, false})) {
+        delete asset;
+        if (error) *error = "command queue full";
+        return false;
+    }
+    residentBytes_ += asset->bytes;
+    if (error) error->clear();
+    return true;
+}
+
 bool PcmSlotPlayer::load(int slot, const int16_t* input, int64_t frames, int32_t rate, std::string* error, uint64_t uploadCapacity) {
     std::lock_guard<std::mutex> guard(workerMutex_);
     drainRetired();
@@ -70,10 +84,54 @@ bool PcmSlotPlayer::load(int slot, const int16_t* input, int64_t frames, int32_t
     if (!asset->samples) { delete asset; return fail("PCM allocation failed"); }
     asset->frames = frames; asset->rate = rate; asset->bytes = bytes;
     std::memcpy(asset->samples.get(), input, static_cast<size_t>(bytes));
-    if (!enqueue({Op::Replace, slot, asset, false})) { delete asset; return fail("command queue full"); }
-    residentBytes_ += bytes;
-    if (error) error->clear();
-    return true;
+    return adoptQueued(slot, asset, error);
+}
+
+bool PcmSlotPlayer::loadFromDisk(int slot, const char* path, std::string* error) {
+    // Worker-thread only: opening the file and reading it here block the
+    // caller, never the audio callback. The callback side only adopts the
+    // finished buffer through the command queue (Render path, unchanged).
+    std::lock_guard<std::mutex> guard(workerMutex_);
+    drainRetired();
+    auto fail = [&](const char* why) { if (error) *error = why; return false; };
+    if (!validSlot(slot)) return fail("invalid slot");
+    if (!path || !*path) return fail("missing PCM cache path");
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return fail("unable to open PCM cache");
+    PcmCacheHeader header{};
+    in.read(reinterpret_cast<char*>(&header), static_cast<std::streamsize>(sizeof(header)));
+    if (!in) return fail("truncated PCM cache header");
+    if (std::memcmp(reinterpret_cast<const unsigned char*>(header.magic), kPcmCacheMagic, 4) != 0)
+        return fail("PCM cache magic mismatch");
+    if (header.version != kPcmCacheVersion) return fail("PCM cache version mismatch");
+    if (header.channels != kPcmCacheChannels) return fail("PCM cache must be interleaved stereo");
+    if (header.sampleRate <= 0 || header.sampleRate > 768000) return fail("invalid PCM dimensions or rate");
+    if (header.frames <= 0) return fail("invalid PCM dimensions or rate");
+    if (uint64_t(header.frames) > (std::numeric_limits<uint64_t>::max() / 4)) return fail("PCM size overflow");
+    const uint64_t bytes = uint64_t(header.frames) * 4;
+    if (bytes > maxAssetBytes_) return fail("asset budget exceeded");
+    in.seekg(0, std::ios::end);
+    const std::streamoff size = in.tellg();
+    if (size < 0 || uint64_t(size) != static_cast<uint64_t>(sizeof(header)) + bytes) return fail("PCM cache size mismatch");
+    // Same admission rules as load(); on-disk bytes are the upload footprint.
+    if (bytes > maxResidentBytes_ || residentBytes_ > maxResidentBytes_ - bytes ||
+        bytes > maxResidentBytes_ - bytes - residentBytes_)
+        return fail("resident budget exceeded (copy allowance)");
+    const uint32_t w = write_.load(std::memory_order_relaxed);
+    if (w - read_.load(std::memory_order_acquire) >= kQueueCapacity) return fail("command queue full");
+    if (header.frames > static_cast<int64_t>(std::numeric_limits<size_t>::max() / (2 * sizeof(int16_t)))) return fail("allocation size overflow");
+    Asset* asset = new (std::nothrow) Asset{};
+    if (!asset) return fail("PCM allocation failed");
+    asset->samples.reset(new (std::nothrow) int16_t[static_cast<size_t>(header.frames) * 2]);
+    if (!asset->samples) { delete asset; return fail("PCM allocation failed"); }
+    asset->frames = header.frames; asset->rate = header.sampleRate; asset->bytes = bytes;
+    in.seekg(static_cast<std::streamoff>(sizeof(header)));
+    in.read(reinterpret_cast<char*>(asset->samples.get()), static_cast<std::streamsize>(bytes));
+    if (in.gcount() < 0 || uint64_t(in.gcount()) != bytes) {
+        delete asset;
+        return fail("PCM cache read failed");
+    }
+    return adoptQueued(slot, asset, error);
 }
 
 bool PcmSlotPlayer::start(int slot, bool loop) {

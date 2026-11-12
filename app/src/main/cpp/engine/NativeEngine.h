@@ -277,6 +277,9 @@ public:
     // PCM slots are loaded and controlled from a worker thread.
     bool loadPcmSlot(int slot, const int16_t* pcm, int64_t frames, int32_t rate,
                      std::string* error, uint64_t uploadCapacity);
+    // Worker thread (blocking file I/O): adopt a normalized PCM cache file
+    // (PcmCacheHeader) without re-decode and without a Java heap copy.
+    bool loadPcmSlotFromDisk(int slot, const char* path, std::string* error);
     bool startPcmSlot(int slot, bool loop);
     bool setPcmSlotLoop(int slot, bool loop);
     bool stopPcmSlot(int slot);

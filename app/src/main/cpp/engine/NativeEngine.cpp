@@ -1499,6 +1499,11 @@ bool NativeEngine::loadPcmSlot(int slot, const int16_t* pcm, int64_t frames, int
                                std::string* error, uint64_t uploadCapacity) {
     return mPcmSlotPlayer.load(slot, pcm, frames, rate, error, uploadCapacity);
 }
+
+bool NativeEngine::loadPcmSlotFromDisk(int slot, const char* path, std::string* error) {
+    return mPcmSlotPlayer.loadFromDisk(slot, path, error);
+}
+
 bool NativeEngine::startPcmSlot(int slot, bool loop) { return mPcmSlotPlayer.start(slot, loop); }
 bool NativeEngine::setPcmSlotLoop(int slot, bool loop) { return mPcmSlotPlayer.setLoop(slot, loop); }
 bool NativeEngine::stopPcmSlot(int slot) { return mPcmSlotPlayer.stop(slot); }

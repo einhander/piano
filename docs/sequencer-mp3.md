@@ -28,20 +28,42 @@ Native decoded-frame progress, not a UI timer, controls MP3 duration and looping
 ## Limits and errors
 
 - Compressed import is limited to 256 MiB.
-- Decoded stereo PCM16 is limited to 64 MiB per asset: approximately 5.8 minutes
-  at 48 kHz, or 6.3 minutes at 44.1 kHz. Duration depends on the source rate.
-- Native PCM accounting has a 128 MiB budget, including pending/retired assets
-  and a conservative upload-copy allowance. The decoder also uses a bounded
-  64 MiB direct buffer; codec-internal allocations are outside these PCM limits.
-- Assets are loaded on demand, not eagerly decoded for every stored cell.
-  Unsupported formats, malformed data, queue pressure and memory limits must be
-  reported rather than silently truncating audio.
+- Decoded stereo PCM16 is limited to 128 MiB per asset: approximately 12.7
+  minutes at 44.1 kHz or 11.6 minutes at 48 kHz. Duration depends on the
+  source rate; the decoder's direct buffer is sized from the container
+  duration and capped at this limit.
+- Native PCM accounting has a 256 MiB resident budget, covering all slots,
+  pending/retired assets and a conservative upload-copy allowance. Two copies
+  of a full-size asset (a prewarmed pad slot plus the test-play slot) sit at
+  that boundary; the test-play borrows the pad slot's idle copy of the same
+  file so a preview always fits.
+- Unsupported formats, malformed data, queue pressure and memory limits must
+  be reported rather than silently truncating audio.
+
+## PCM cache and prewarming
+
+Import decodes each MP3 once (for validation) and persists the normalized
+PCM, content-addressed by the file's SHA-256, under `<filesDir>/mp3_pcm_cache/`
+(512 MiB cap, oldest entries evicted first). Slot loads read that file
+natively on a worker thread (single copy, no Java heap, no MediaCodec) and
+fall back to a live decode — re-caching afterwards — only when the cache is
+missing or stale, so the first press, a test-play, and a startup prewarm are
+all cheap: decode cost is paid exactly once, at import.
+
+At engine boot (`preloadAll`) and after each MP3 import/replace, every
+assigned MP3 cell with a usable trigger is prewarmed into its own slot on the
+worker executor, filling the resident budget in cell order. A press then only
+flips a resident buffer, like a MIDI cell. A cell whose prewarm did not fit
+simply falls back to the on-demand load path (a cache read, not a decode).
 
 ## Validation
 
 Run `app/src/test/cpp/run_pcm_slot_test.sh` for native slot rendering and
-concurrent replacement/free tests with ASan/UBSan. JVM tests cover legacy asset
-types, import validation/cleanup and preview-state policy. `./build.sh check`
+concurrent replacement/free tests with ASan/UBSan, including the PCM cache
+file reader (header validation, corruption and budget rejection). JVM tests
+cover legacy asset types, import validation/cleanup, preview-state policy,
+and the content-addressed PCM cache (round-trip, corruption detection,
+trimming). `./build.sh check`
 builds both ARM ABIs and runs the JVM suite.
 
 Device checks still required: import real MP3s (mono/stereo, 44.1/48 kHz), play

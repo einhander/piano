@@ -28,6 +28,8 @@ import com.piano.sequencer.audio.ProfileActivation
 import com.piano.sequencer.audio.ManualStreamCloseState
 import com.piano.sequencer.audio.AudioDiagnosticSnapshot
 import com.piano.sequencer.audio.AudioStreamCloseResult
+import com.piano.sequencer.audio.Mp3Decoder
+import com.piano.sequencer.audio.Mp3PcmCache
 import com.piano.sequencer.audio.applyProfileBeforeFirstOpen
 import com.piano.sequencer.audio.allowAudioOpen
 import com.piano.sequencer.audio.markManualCloseBeforeNativeClose
@@ -893,11 +895,31 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun loadMidiFileSlot(slot: Int, filePath: String, tempo: Double, loop: Boolean, selectedTracks: IntArray, trackChannels: IntArray, startAfterLoad: Boolean): Int =
         NativeEngineBridge.nativeLoadMidiFileSlot(slot, filePath, tempo, loop, selectedTracks, trackChannels, startAfterLoad)
 
-    /** MP3 decode and native upload are blocking; caller must use worker thread. */
-    fun loadMp3Slot(slot: Int, path: String): String? = try {
-        val decoded = com.piano.sequencer.audio.Mp3Decoder.decode(java.io.File(path))
-        NativeEngineBridge.nativeLoadPcmSlot(slot, decoded.pcm, decoded.frames, decoded.sourceRate)
-    } catch (e: Exception) { e.message ?: "MP3 decode failed" }
+    /**
+     * Load a slot's PCM, preferring the on-disk cache written at import
+     * (native file read — no MediaCodec, no Java heap copy). Missing or stale
+     * cache falls back to a live decode and re-caches best-effort.
+     * Decode/upload are blocking; caller must use a worker thread.
+     */
+    fun loadMp3Slot(slot: Int, path: String): String? {
+        val mp3 = java.io.File(path)
+        val cached = Mp3PcmCache.candidateFor(filesDir, mp3)
+        if (cached != null) {
+            val err = NativeEngineBridge.nativeLoadPcmSlotFromDisk(slot, cached.absolutePath)
+            if (err == null) {
+                AppLogger.info("TRIG", "MP3 slot=$slot from PCM cache ${cached.name} (${cached.length() / (1024 * 1024)} MiB)")
+                return null
+            }
+            AppLogger.warn("TRIG", "MP3 slot=$slot PCM cache rejected ($err); decoding live")
+        }
+        return try {
+            val decoded = Mp3Decoder.decode(mp3)
+            NativeEngineBridge.nativeLoadPcmSlot(slot, decoded.pcm, decoded.frames, decoded.sourceRate)
+            if (Mp3PcmCache.write(filesDir, mp3, decoded) == null)
+                AppLogger.warn("TRIG", "MP3 slot=$slot decoded live; PCM cache not written")
+            null
+        } catch (e: Exception) { e.message ?: "MP3 decode failed" }
+    }
     fun startPcmSlot(slot: Int, loop: Boolean): Boolean = NativeEngineBridge.nativeStartPcmSlot(slot, loop)
     fun setPcmSlotLoop(slot: Int, loop: Boolean): Boolean = NativeEngineBridge.nativeSetPcmSlotLoop(slot, loop)
     fun stopPcmSlot(slot: Int): Boolean = NativeEngineBridge.nativeStopPcmSlot(slot)

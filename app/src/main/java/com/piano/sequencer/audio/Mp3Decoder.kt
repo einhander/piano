@@ -12,7 +12,7 @@ data class DecodedMp3(val pcm: ByteBuffer, val frames: Long, val sourceRate: Int
 
 /** Synchronous Android platform MP3 decoder. Call only from a worker thread. */
 object Mp3Decoder {
-    const val MAX_PCM_BYTES = 64 * 1024 * 1024
+    const val MAX_PCM_BYTES = 128 * 1024 * 1024
     private const val TIMEOUT_US = 10_000L
     private const val MAX_STALL_MS = 5_000L
     private const val MAX_DECODE_MS = 120_000L
@@ -38,9 +38,19 @@ object Mp3Decoder {
             var inputEos = false
             var outputEos = false
             var size = 0
-            // Fixed-capacity buffer prevents old/new growth buffers from exceeding
-            // the decoder's bounded 64 MiB PCM allowance during reallocation.
-            var data = ByteBuffer.allocateDirect(MAX_PCM_BYTES).order(ByteOrder.LITTLE_ENDIAN)
+            // Fixed-capacity buffer prevents old/new growth buffers from
+            // exceeding the decoder's bounded PCM allowance during reallocation.
+            // Sized from the container duration (1.5x margin, clamped to
+            // [2 MiB, MAX]) so short clips do not reserve the full limit;
+            // missing or lying durations fall back to the full MAX.
+            val durationUs = if (input.containsKey(MediaFormat.KEY_DURATION)) input.getLong(MediaFormat.KEY_DURATION) else 0L
+            val capacity = if (durationUs > 0L) {
+                (durationUs / 1_000_000.0 * rate * 4.0 * 1.5).toLong()
+                    .coerceIn(2L * 1024 * 1024, MAX_PCM_BYTES.toLong()).toInt()
+            } else {
+                MAX_PCM_BYTES
+            }
+            var data = ByteBuffer.allocateDirect(capacity).order(ByteOrder.LITTLE_ENDIAN)
             val info = MediaCodec.BufferInfo()
             val begin = System.nanoTime()
             var lastProgress = begin
@@ -91,7 +101,8 @@ object Mp3Decoder {
                                     throw IllegalArgumentException("Invalid decoder PCM buffer")
                                 val frames = info.size / (channels * unit)
                                 val add = frames.toLong() * 4
-                                if (add > MAX_PCM_BYTES || size.toLong() + add > MAX_PCM_BYTES) throw IllegalArgumentException("Decoded MP3 exceeds 64 MiB PCM limit")
+                                if (add > capacity || size.toLong() + add > capacity)
+                                    throw IllegalArgumentException("Decoded MP3 exceeds the 128 MiB PCM limit (about 12.7 min at 44.1 kHz)")
                                 val required = size + add.toInt()
                                 val src = out.duplicate().order(ByteOrder.LITTLE_ENDIAN)
                                 src.position(info.offset); src.limit(info.offset + info.size)

@@ -1448,6 +1448,19 @@ JNIEXPORT jstring JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeLoad
         return env->NewStringUTF(error.c_str());
     return nullptr;
 }
+JNIEXPORT jstring JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeLoadPcmSlotFromDisk(
+    JNIEnv* env, jclass, jint slot, jstring path) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (!inst) return env->NewStringUTF("engine unavailable");
+    if (!path) return env->NewStringUTF("missing PCM cache path");
+    const char* utf = env->GetStringUTFChars(path, nullptr);
+    if (!utf) return env->NewStringUTF("path conversion failed");
+    std::string error;
+    const bool ok = inst->loadPcmSlotFromDisk(slot, utf, &error);
+    env->ReleaseStringUTFChars(path, utf);
+    if (!ok) return env->NewStringUTF(error.c_str());
+    return nullptr;
+}
 JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeStartPcmSlot(JNIEnv*, jclass, jint slot, jboolean loop) { auto* e=NativeEngine::getInstance(); return e && e->startPcmSlot(slot, loop); }
 JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeSetPcmSlotLoop(JNIEnv*, jclass, jint slot, jboolean loop) { auto* e=NativeEngine::getInstance(); return e && e->setPcmSlotLoop(slot, loop); }
 JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeStopPcmSlot(JNIEnv*, jclass, jint slot) { auto* e=NativeEngine::getInstance(); return e && e->stopPcmSlot(slot); }

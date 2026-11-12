@@ -113,6 +113,9 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 noteStateMachine.stopPlaying(key)
                 result = applyImportedAsset(current, prepared)
                 s.set(result!!)
+                // Re-arm the new MP3 asset now (its PCM cache was written at
+                // import) so the first press after replace is instant.
+                if (result.isMp3) warmCell(result)
             } catch (failure: Exception) {
                 prepared.file.delete()
                 error = failure.message ?: "Unable to replace asset"
@@ -190,8 +193,9 @@ class MidiFileTriggerController private constructor(appContext: Context) {
         this.store ?: run {
             this.store = MidiFileMappingStore.get(activity.applicationContext)
         }
-        // Preload files when cells are saved
-        store?.onCellSaved = { cell -> if (cell.filePath.isNotEmpty() && !cell.isMp3) preloadFile(cell.filePath) }
+        // Preload files when cells are saved; prime MP3 cells so the first
+        // press never pays the decode cost.
+        store?.onCellSaved = { warmCell(it) }
     }
 
 
@@ -647,6 +651,10 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 if (testPlayPlaying) {
                     svc.stopMidiFileSlot(testPlaySlot)
                     svc.stopPcmSlot(testPlaySlot)
+                    // Release the preview PCM: the resident budget belongs to
+                    // performance slots; a re-preview reloads from the cache.
+                    svc.freePcmSlot(testPlaySlot)
+                    loadedFilePerSlot.remove(testPlaySlot)
                     testPlayPlaying = false
                     testPlayCellId = null
                     mainHandler.post { onTestPlayStateChanged?.invoke(null, false) }
@@ -662,9 +670,29 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     svc.stopPcmSlot(testPlaySlot)
                     svc.freePcmSlot(testPlaySlot)
                     svc.freeMidiFileSlot(testPlaySlot)
+                    // Borrow the cell slot's idle copy of THIS file, if any,
+                    // so a same-size preview fits the resident budget. A grid
+                    // press reloads the evicted copy from the PCM cache.
+                    val cellSlot = cell.triggerKey().let { triggerSlotMap[it] }
+                    if (cellSlot != null && cellSlot != testPlaySlot && !svc.isPcmSlotPlaying(cellSlot)) {
+                        synchronized(slotLocks[cellSlot]) {
+                            val ld = loadedFilePerSlot[cellSlot]
+                            if (ld != null && ld.first == filePath && ld.third == "MP3") {
+                                svc.stopPcmSlot(cellSlot)
+                                svc.freePcmSlot(cellSlot)
+                                loadedFilePerSlot.remove(cellSlot)
+                            }
+                        }
+                    }
                     val error = svc.loadMp3Slot(testPlaySlot, filePath)
-                    if (error != null || !svc.startPcmSlot(testPlaySlot, loop)) {
-                        showToast(error ?: "MP3 playback could not start")
+                    if (error != null) {
+                        showToast(error)
+                        AppLogger.warn("TRIG", "MP3 test-play load failed: $error")
+                        return@synchronized
+                    }
+                    if (!svc.startPcmSlot(testPlaySlot, loop)) {
+                        showToast("MP3 playback could not start")
+                        svc.freePcmSlot(testPlaySlot)
                         return@synchronized
                     }
                     testPlayPlaying = true
@@ -674,6 +702,8 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     return@synchronized
                 }
                 svc.stopPcmSlot(testPlaySlot)
+                svc.freePcmSlot(testPlaySlot)
+                loadedFilePerSlot.remove(testPlaySlot)
                 if (cell != null && !applyFileSetPrograms(svc, cell)) return@synchronized
                 val selection = resolveSelection(svc, filePath, selectedTracks, trackChannels, channel, cell)
                 logFileSetSnapshot(svc, "test-before", cellId, filePath, cell, selection)
@@ -722,6 +752,10 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                                 if (testPlayGeneration == gen) {
                                     svc.stopMidiFileSlot(testPlaySlot)
                                     svc.stopPcmSlot(testPlaySlot)
+                                    // Release any preview PCM (uniform with the
+                                    // MP3 natural-completion path below).
+                                    svc.freePcmSlot(testPlaySlot)
+                                    loadedFilePerSlot.remove(testPlaySlot)
                                     testPlayPlaying = false
                                     testPlayCellId = null
                                     mainHandler.post { onTestPlayStateChanged?.invoke(null, false) }
@@ -746,6 +780,11 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     if (svc.isPcmSlotPlaying(testPlaySlot) || svc.getProcessedFrames() == 0L) {
                         mainHandler.postDelayed({ schedulePcmTestPlayPoll(svc, gen) }, 200L)
                     } else {
+                        // Natural EOF: release the preview PCM so the resident
+                        // budget returns to performance slots.
+                        svc.stopPcmSlot(testPlaySlot)
+                        svc.freePcmSlot(testPlaySlot)
+                        loadedFilePerSlot.remove(testPlaySlot)
                         testPlayPlaying = false
                         testPlayCellId = null
                         testPlayRunnable = null
@@ -785,6 +824,8 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                 if (testPlayPlaying) {
                     svc.stopMidiFileSlot(testPlaySlot)
                     svc.stopPcmSlot(testPlaySlot)
+                    svc.freePcmSlot(testPlaySlot)
+                    loadedFilePerSlot.remove(testPlaySlot)
                     testPlayPlaying = false
                     testPlayCellId = null
                     mainHandler.post { onTestPlayStateChanged?.invoke(null, false) }
@@ -1009,8 +1050,61 @@ class MidiFileTriggerController private constructor(appContext: Context) {
     /** Warm the cache for all assigned cells (startup). */
     fun preloadAll() {
         val s = store ?: return
-        for (cell in s.all()) {
-            if (cell.filePath.isNotEmpty() && !cell.isMp3) preloadFile(cell.filePath)
+        for (cell in s.all()) warmCell(cell)
+    }
+
+    /**
+     * Warm one assigned cell: parse the MIDI event cache, or prime the MP3
+     * PCM buffer into the cell's trigger slot. SYSEX-triggered file cells
+     * are skipped: they are never note-triggered, so priming them would only
+     * evict a live mapping's round-robin slot.
+     */
+    private fun warmCell(cell: SequencerCell) {
+        when {
+            cell.filePath.isEmpty() -> {}
+            cell.isMp3 -> if (cell.hasTrigger() && cell.triggerType != TRIGGER_SYSEX) primeMp3Slot(cell)
+            else -> preloadFile(cell.filePath)
+        }
+    }
+
+    /**
+     * Prewarm an MP3 cell's PCM buffer into its trigger slot WITHOUT
+     * starting playback, so the first press does not pay the decode cost
+     * (a native cache-file read instead of MediaCodec). Worker (tracked
+     * slot executor) only. Idempotent: a slot already holding the same file
+     * is a no-op. Self-heals: a failed prime (budget, queue) just leaves the
+     * slot for the normal on-demand load path.
+     */
+    private fun primeMp3Slot(cell: SequencerCell) {
+        trackedSlotExecutor.execute {
+            val s = store ?: return@execute
+            // Re-read the store: the [cell] snapshot may be stale (an asset
+            // replace or delete committed after this task was queued).
+            val current = s.get(cell.id) ?: return@execute
+            if (!current.isMp3 || current.filePath.isEmpty() || !current.hasTrigger()) return@execute
+            val key = current.triggerKey()
+            val slot = allocateSlotForKey(key)
+            synchronized(slotLocks[slot]) {
+                val svc = service ?: return@synchronized
+                // Round-robin may have handed this slot to a key whose old
+                // free task is still in flight: only prime while the current
+                // cell still owns the slot (mirrors triggerSlot staleness rule).
+                if (triggerSlotMap[key] != slot) return@synchronized
+                val loaded = loadedFilePerSlot[slot]
+                if (loaded != null && loaded.first == current.filePath &&
+                    loaded.second == current.channel && loaded.third == "MP3") return@synchronized
+                svc.stopMidiFileSlot(slot)
+                svc.stopPcmSlot(slot)
+                svc.freePcmSlot(slot)
+                svc.freeMidiFileSlot(slot)
+                val error = svc.loadMp3Slot(slot, current.filePath)
+                if (error != null) {
+                    AppLogger.warn("TRIG", "MP3 prewarm failed slot=$slot id=${current.id}: $error")
+                    return@synchronized
+                }
+                loadedFilePerSlot[slot] = Triple(current.filePath, current.channel, "MP3")
+                AppLogger.info("TRIG", "MP3 prewarmed slot=$slot id=${current.id} file=${current.filePath.substringAfterLast('/')}")
+            }
         }
     }
 

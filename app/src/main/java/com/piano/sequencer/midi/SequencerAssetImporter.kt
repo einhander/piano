@@ -2,7 +2,9 @@ package com.piano.sequencer.midi
 
 import android.content.Context
 import android.net.Uri
+import com.piano.sequencer.AppLogger
 import com.piano.sequencer.audio.Mp3Decoder
+import com.piano.sequencer.audio.Mp3PcmCache
 import java.io.File
 import java.io.InputStream
 import java.util.Locale
@@ -33,7 +35,14 @@ object SequencerAssetImporter {
         val input = resolver.openInputStream(uri) ?: throw IllegalArgumentException("Unable to open selected file")
         val directory = File(context.filesDir, "midi_files")
         return importStream(displayName, mime, input, directory) { file, type ->
-            if (type == ASSET_MP3) Mp3Decoder.decode(file)
+            if (type == ASSET_MP3) {
+                val decoded = Mp3Decoder.decode(file)
+                // Persist the normalized PCM, content-addressed (best-effort:
+                // a failed cache write must not block import — first playback
+                // re-decodes and re-caches).
+                if (Mp3PcmCache.write(context.filesDir, file, decoded) == null)
+                    AppLogger.warn("SequencerAssetImporter", "MP3 imported but PCM cache not written: ${file.name}")
+            }
         }
     }
 
