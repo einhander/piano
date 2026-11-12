@@ -1504,6 +1504,10 @@ bool NativeEngine::loadPcmSlotFromDisk(int slot, const char* path, std::string* 
     return mPcmSlotPlayer.loadFromDisk(slot, path, error);
 }
 
+void NativeEngine::setPcmSlotResidentBudget(uint64_t bytes) {
+    mPcmSlotPlayer.setResidentBudget(bytes);
+}
+
 bool NativeEngine::startPcmSlot(int slot, bool loop) { return mPcmSlotPlayer.start(slot, loop); }
 bool NativeEngine::setPcmSlotLoop(int slot, bool loop) { return mPcmSlotPlayer.setLoop(slot, loop); }
 bool NativeEngine::stopPcmSlot(int slot) { return mPcmSlotPlayer.stop(slot); }

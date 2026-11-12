@@ -152,6 +152,20 @@ int main() {
         std::remove(path);
     }
 
+    // Runtime budget change: shrinking only blocks new admissions (resident
+    // buffers stay), growing admits again.
+    {
+        PcmSlotPlayer bud(1024, 16);
+        int16_t two[4] = {100, 200, 300, 400}; // 2 frames = 8 B
+        int16_t two2[4] = {1, 2, 3, 4};
+        assert(bud.load(0, two, 2, 48000)); // 8 B resident of 16 B
+        bud.setResidentBudget(8);
+        assert(!bud.load(1, two2, 2, 48000)); // resident 8 > 8 - 8 = 0
+        bud.setResidentBudget(16);
+        assert(bud.load(1, two2, 2, 48000)); // fits again
+        assert(bud.isPlaying(0) == false); // load alone never starts playback
+    }
+
     // Serialized worker replacement/free while audio callback concurrently renders.
     std::atomic<bool> done{false};
     std::thread audio([&] { float block[128]{}; while(!done.load()) p.renderAdd(block,64,48000); });

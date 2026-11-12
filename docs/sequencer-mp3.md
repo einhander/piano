@@ -32,11 +32,13 @@ Native decoded-frame progress, not a UI timer, controls MP3 duration and looping
   minutes at 44.1 kHz or 11.6 minutes at 48 kHz. Duration depends on the
   source rate; the decoder's direct buffer is sized from the container
   duration and capped at this limit.
-- Native PCM accounting has a 256 MiB resident budget, covering all slots,
-  pending/retired assets and a conservative upload-copy allowance. Two copies
-  of a full-size asset (a prewarmed pad slot plus the test-play slot) sit at
-  that boundary; the test-play borrows the pad slot's idle copy of the same
-  file so a preview always fits.
+- Native PCM accounting has a 256 MiB resident budget (user-configurable in
+  Settings, 64–512 MiB, `pcm_budget_mb`; changing it at runtime only affects
+  new loads — resident buffers are kept until replaced or freed), covering
+  all slots, pending/retired assets and a conservative upload-copy
+  allowance. Two copies of a full-size asset (a prewarmed pad slot plus the
+  test-play slot) sit at the default boundary; the test-play borrows the pad
+  slot's idle copy of the same file so a preview always fits.
 - Unsupported formats, malformed data, queue pressure and memory limits must
   be reported rather than silently truncating audio.
 

@@ -207,6 +207,8 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var seekBarPolyphony: SeekBar
     private lateinit var tvMasterGain: TextView
     private lateinit var seekBarMasterGain: SeekBar
+    private lateinit var tvPcmBudget: TextView
+    private lateinit var seekBarPcmBudget: SeekBar
     private lateinit var tvReverb: TextView
     private lateinit var switchReverb: SwitchCompat
     private lateinit var tvChorus: TextView
@@ -220,6 +222,10 @@ class SettingsActivity : AppCompatActivity() {
 
     // Interpolation options (Spinner position → FluidSynth interp method).
     private val interpsValues = intArrayOf(0, 1, 4)
+
+    // MP3 PCM resident budget options, MiB (SeekBar progress → value).
+    private val pcmBudgetStepsMb = intArrayOf(64, 128, 192, 256, 384, 512)
+    private val defaultPcmBudgetMb = 256
 
     private var service: PlaybackService? = null
     private var serviceBound = false
@@ -367,6 +373,8 @@ class SettingsActivity : AppCompatActivity() {
         seekBarMasterGain = findViewById(R.id.seekBarMasterGain)
         btnPitchBendChannels = findViewById(R.id.btnPitchBendChannels)
         tvReverb = findViewById(R.id.tvReverb)
+        tvPcmBudget = findViewById(R.id.tvPcmBudget)
+        seekBarPcmBudget = findViewById(R.id.seekBarPcmBudget)
         switchReverb = findViewById(R.id.switchReverb)
         tvChorus = findViewById(R.id.tvChorus)
         switchChorus = findViewById(R.id.switchChorus)
@@ -596,6 +604,37 @@ class SettingsActivity : AppCompatActivity() {
             }
         })
 
+        // MP3 PCM resident budget (worker thread; new loads only).
+        seekBarPcmBudget.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                val idx = progress.coerceIn(0, pcmBudgetStepsMb.lastIndex)
+                tvPcmBudget.text = getString(R.string.settings_pcm_budget_value, pcmBudgetStepsMb[idx])
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                if (isFinishing || isDestroyed) return
+                val idx = (sb?.progress ?: 0).coerceIn(0, pcmBudgetStepsMb.lastIndex)
+                val mb = pcmBudgetStepsMb[idx]
+                val svc = service ?: return@onStopTrackingTouch
+                CompletableFuture.supplyAsync({ svc.setPcmSlotResidentMb(mb) }, mainExecutor)
+                    .whenComplete { ok, ex ->
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            if (ex == null && ok) {
+                                Toast.makeText(this@SettingsActivity,
+                                    getString(R.string.settings_pcm_budget_value, mb), Toast.LENGTH_SHORT).show()
+                                getSharedPreferences("piano_prefs", MODE_PRIVATE).edit()
+                                    .putInt("pcm_budget_mb", mb)
+                                    .apply()
+                            } else {
+                                Toast.makeText(this@SettingsActivity,
+                                    "Failed to set PCM budget", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+            }
+        })
+
         val startupState = (application as PianoApp).runtimeDiagnosticsCoordinator.startupDiagnosticState
         if (startupState?.plan?.order != StartupOrder.MIDI_ONLY) {
             Intent(this, PlaybackService::class.java).also { intent ->
@@ -764,6 +803,14 @@ class SettingsActivity : AppCompatActivity() {
 
             seekBarMasterGain.progress = gainProgress
             tvMasterGain.text = getString(R.string.settings_master_gain_value, gain)
+
+            // MP3 PCM resident budget (MiB, persisted on every change).
+            val savedBudgetMb = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+                .getInt("pcm_budget_mb", defaultPcmBudgetMb)
+            val budgetIdx = pcmBudgetStepsMb.indexOfFirst { it >= savedBudgetMb }
+                .coerceIn(0, pcmBudgetStepsMb.lastIndex)
+            seekBarPcmBudget.progress = budgetIdx
+            tvPcmBudget.text = getString(R.string.settings_pcm_budget_value, pcmBudgetStepsMb[budgetIdx])
 
             // Reverb / Chorus (Fix #10-11).
             val reverbOn = reverb >= .5f

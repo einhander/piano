@@ -926,6 +926,12 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun freePcmSlot(slot: Int): Boolean = NativeEngineBridge.nativeFreePcmSlot(slot)
     fun stopAllPcmSlots(): Boolean = NativeEngineBridge.nativeStopAllPcmSlots()
     fun isPcmSlotPlaying(slot: Int): Boolean = NativeEngineBridge.nativeIsPcmSlotPlaying(slot)
+    /**
+     * Set the PCM resident budget in MiB (worker thread). Affects new loads
+     * only: already-resident buffers are kept until replaced or freed.
+     */
+    fun setPcmSlotResidentMb(mb: Int): Boolean =
+        NativeEngineBridge.nativeSetPcmSlotResidentBudget(mb.toLong() * 1024L * 1024L)
 
     fun getMidiFileTracks(filePath: String): Array<String>? = NativeEngineBridge.nativeGetMidiFileTracks(filePath)
 

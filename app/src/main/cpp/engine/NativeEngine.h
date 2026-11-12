@@ -280,6 +280,9 @@ public:
     // Worker thread (blocking file I/O): adopt a normalized PCM cache file
     // (PcmCacheHeader) without re-decode and without a Java heap copy.
     bool loadPcmSlotFromDisk(int slot, const char* path, std::string* error);
+    // Worker thread: set the PCM resident budget in bytes (clamped by the
+    // caller to a sane range). Affects new admissions only.
+    void setPcmSlotResidentBudget(uint64_t bytes);
     bool startPcmSlot(int slot, bool loop);
     bool setPcmSlotLoop(int slot, bool loop);
     bool stopPcmSlot(int slot);

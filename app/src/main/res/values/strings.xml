@@ -41,6 +41,10 @@
     <string name="settings_sf2_loaded_count">Loaded: %d SoundFont(s)</string>
     <string name="settings_polyphony_value">Polyphony: %d</string>
     <string name="settings_master_gain_value">Master Gain: %.2f</string>
+    <string name="settings_mp3_title">MP3 / PCM</string>
+    <string name="settings_pcm_budget_label">PCM resident budget</string>
+    <string name="settings_pcm_budget_value">PCM budget: %d MiB</string>
+    <string name="settings_pcm_budget_hint">Shared RAM cap for loaded MP3 pads and previews. New loads stop fitting at the cap; already-loaded pads are kept until replaced. The setting survives restarts.</string>
     <string name="settings_reverb_label">Reverb:</string>
     <string name="settings_chorus_label">Chorus:</string>
     <string name="settings_interps_label">Interpolation:</string>

@@ -71,7 +71,10 @@ bool PcmSlotPlayer::load(int slot, const int16_t* input, int64_t frames, int32_t
     if (uint64_t(frames) > (std::numeric_limits<uint64_t>::max() / 4)) return fail("PCM size overflow");
     const uint64_t bytes = uint64_t(frames) * 4;
     if (bytes > maxAssetBytes_) return fail("asset budget exceeded");
-    const uint64_t uploadBytes = std::max(uploadCapacity, bytes);
+    // Conservative peak accounting: while the worker copies, the caller's
+    // live storage (uploadCapacity; always >= bytes on the JNI path, where
+    // undersized buffers are rejected) coexists with the new resident copy.
+    const uint64_t uploadBytes = uploadCapacity;
     if (uploadBytes > maxResidentBytes_ || residentBytes_ > maxResidentBytes_ - uploadBytes ||
         bytes > maxResidentBytes_ - uploadBytes - residentBytes_)
         return fail("resident budget exceeded (copy allowance)");
@@ -113,9 +116,12 @@ bool PcmSlotPlayer::loadFromDisk(int slot, const char* path, std::string* error)
     in.seekg(0, std::ios::end);
     const std::streamoff size = in.tellg();
     if (size < 0 || uint64_t(size) != static_cast<uint64_t>(sizeof(header)) + bytes) return fail("PCM cache size mismatch");
-    // Same admission rules as load(); on-disk bytes are the upload footprint.
+    // Admission for a file load: there is no separate in-RAM upload copy
+    // (the source is the file itself), so the constraint is simply
+    // resident + bytes <= max — unlike load(), where the caller's live
+    // buffer counts additionally as a conservative copy allowance.
     if (bytes > maxResidentBytes_ || residentBytes_ > maxResidentBytes_ - bytes ||
-        bytes > maxResidentBytes_ - bytes - residentBytes_)
+        bytes > maxResidentBytes_ - residentBytes_)
         return fail("resident budget exceeded (copy allowance)");
     const uint32_t w = write_.load(std::memory_order_relaxed);
     if (w - read_.load(std::memory_order_acquire) >= kQueueCapacity) return fail("command queue full");
@@ -132,6 +138,12 @@ bool PcmSlotPlayer::loadFromDisk(int slot, const char* path, std::string* error)
         return fail("PCM cache read failed");
     }
     return adoptQueued(slot, asset, error);
+}
+
+void PcmSlotPlayer::setResidentBudget(uint64_t bytes) {
+    std::lock_guard<std::mutex> g(workerMutex_);
+    drainRetired();
+    maxResidentBytes_ = bytes;
 }
 
 bool PcmSlotPlayer::start(int slot, bool loop) {

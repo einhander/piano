@@ -1461,6 +1461,20 @@ JNIEXPORT jstring JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeLoad
     if (!ok) return env->NewStringUTF(error.c_str());
     return nullptr;
 }
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeSetPcmSlotResidentBudget(
+    JNIEnv*, jclass, jlong bytes) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (!inst) return false;
+    // Clamp to a sane range: below this the player is useless, above it
+    // the budget is dominated by a single asset (max 128 MiB) anyway.
+    const uint64_t lo = 16ull * 1024 * 1024;
+    const uint64_t hi = 1024ull * 1024 * 1024;
+    uint64_t v = (bytes < 0) ? 0 : static_cast<uint64_t>(bytes);
+    if (v < lo) v = lo;
+    if (v > hi) v = hi;
+    inst->setPcmSlotResidentBudget(v);
+    return true;
+}
 JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeStartPcmSlot(JNIEnv*, jclass, jint slot, jboolean loop) { auto* e=NativeEngine::getInstance(); return e && e->startPcmSlot(slot, loop); }
 JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeSetPcmSlotLoop(JNIEnv*, jclass, jint slot, jboolean loop) { auto* e=NativeEngine::getInstance(); return e && e->setPcmSlotLoop(slot, loop); }
 JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeStopPcmSlot(JNIEnv*, jclass, jint slot) { auto* e=NativeEngine::getInstance(); return e && e->stopPcmSlot(slot); }

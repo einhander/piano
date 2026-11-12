@@ -46,6 +46,11 @@ public:
     // Worker-thread only (blocking file I/O): adopt a pre-decoded PCM cache
     // file (PcmCacheHeader layout) without a Java heap copy or re-decode.
     bool loadFromDisk(int slot, const char* path, std::string* error = nullptr);
+    // Worker-thread only: change the resident budget at runtime. Reader
+    // side (renderAdd) never consults the budget, so the callback is
+    // unaffected; shrinking only blocks new admissions — resident buffers
+    // are kept until explicitly freed or replaced.
+    void setResidentBudget(uint64_t bytes);
     bool start(int slot, bool loop);
     bool setLoop(int slot, bool loop);
     bool stop(int slot);
