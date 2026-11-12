@@ -20,6 +20,52 @@ import java.util.Locale
  * the app's private filesDir.
  */
 class PianoApp : Application() {
+    @Volatile var activeStartupDiagnosticPlan: StartupDiagnosticState? = null
+        private set
+    data class StartupClaim(val state: StartupDiagnosticState?, val executeActions: Boolean)
+    @Volatile private var startupPlanConsumed = false
+    @Volatile private var startupClaimed = false
+    private val startupWorker by lazy { java.util.concurrent.Executors.newSingleThreadExecutor() }
+    fun consumeStartupDiagnosticPlan(callback: (StartupClaim) -> Unit) {
+        synchronized(this) {
+            if (startupPlanConsumed) {
+                startupWorker.execute { android.os.Handler(android.os.Looper.getMainLooper()).post { callback(StartupClaim(activeStartupDiagnosticPlan, false)) } }
+                return
+            }
+            startupWorker.execute {
+                synchronized(this) {
+                    if (startupPlanConsumed) {
+                        android.os.Handler(android.os.Looper.getMainLooper()).post { callback(StartupClaim(activeStartupDiagnosticPlan, false)) }
+                        return@execute
+                    }
+                }
+                val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+                val plan = StartupDiagnosticPlanStore.load(prefs)
+                val success = plan == null || runCatching { StartupDiagnosticPlanStore.cancel(prefs) }.getOrDefault(false)
+                val state = when {
+                    plan == null -> activeStartupDiagnosticPlan
+                    !success -> StartupDiagnosticState(plan, phase = "store-consume-failed")
+                    activeStartupDiagnosticPlan != null -> activeStartupDiagnosticPlan!!.copy(phase = "diagnostic-recreated")
+                    else -> StartupDiagnosticState(plan)
+                }
+                synchronized(this) {
+                    val firstClaim = !startupClaimed && plan != null && success
+                    startupPlanConsumed = true
+                    if (firstClaim) startupClaimed = true
+                    if (state != null) activeStartupDiagnosticPlan = state
+                    runtimeDiagnosticsCoordinator.updateStartupPlanState(state)
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        callback(StartupClaim(state, firstClaim))
+                    }
+                }
+            }
+        }
+    }
+    @Synchronized fun updateStartupDiagnosticState(phase: String, streamCreated: Boolean) {
+        activeStartupDiagnosticPlan?.let { activeStartupDiagnosticPlan = it.copy(phase = phase, streamCreated = it.streamCreated || streamCreated) }
+        runtimeDiagnosticsCoordinator.updateStartupPlanState(activeStartupDiagnosticPlan)
+    }
+    val runtimeDiagnosticsCoordinator = RuntimeDiagnosticsCoordinator()
     lateinit var actionMidiMapper: com.piano.sequencer.midi.ActionMidiMapper
         private set
     @Volatile private var actionMidiLearnListener: ((com.piano.sequencer.midi.ActionMidiMapper.Result) -> Unit)? = null

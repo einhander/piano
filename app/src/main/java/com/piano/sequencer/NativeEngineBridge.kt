@@ -128,6 +128,7 @@ object NativeEngineBridge {
     external fun nativeGetUnderrunCount(): Int
     external fun nativeGetAudioStreamError(): Int
     external fun nativeOpenAudio(): Int
+    external fun nativeReopenAudioForDiagnostics(): Int
     /** Configure once, before the process's first audio stream open. */
     external fun nativeConfigureDiagnosticAudioProfile(api: Int, rate: Int, callbackFrames: Int): Boolean
     /** Closes output stream only; preserves native engine and SoundFont state. */
@@ -190,6 +191,9 @@ object NativeEngineBridge {
     external fun nativeGetSf2LoadMs(): Long
     external fun nativeGetBufferSizeInFrames(): Int
     external fun nativeGetBufferCapacityInFrames(): Int
+    external fun nativeGetMaxSynthFrames(): Int
+    external fun nativeGetEngineSampleRate(): Int
+    external fun nativeGetDeviceId(): Int
     external fun nativeGetLatencyMillis(): Int
     external fun nativeGetSharingMode(): Int
     external fun nativeGetPerformanceMode(): Int

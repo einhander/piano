@@ -281,6 +281,8 @@ public:
 
     // Getters
     int getSampleRate() const;
+    int getEngineSampleRate() const noexcept { return mSampleRate; }
+    int getMaxSynthFrames() const noexcept { return mMaxSynthFrames; }
     int getUnderrunCount() const;
     int getAudioStreamError() const;
 
@@ -302,6 +304,7 @@ public:
     // Oboe stream diagnostics (worker-thread reads).
     int getBufferSizeInFrames();
     int getBufferCapacityInFrames() const;
+    int getDeviceId() const;
     int getLatencyMillis() const;
     int getSharingMode() const;      // 0=Exclusive, 1=Shared
     int getPerformanceMode() const;  // 0=LowLatency, ...

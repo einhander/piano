@@ -17,6 +17,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import com.piano.sequencer.midi.DiagnosticPortMode
 import com.piano.sequencer.audio.AudioDiagnosticSnapshot
 import com.piano.sequencer.audio.DiagnosticsProfile
 import com.piano.sequencer.service.PlaybackService
@@ -47,6 +49,22 @@ class AudioDiagnosticsActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var close: Button
     private lateinit var refresh: Button
+    private lateinit var runtime: TextView
+    private lateinit var planStatus: TextView
+    private var latestRuntime: RuntimeDiagnosticsSnapshot? = null
+    private var exportText: String? = null
+    private val coordinator get() = (application as PianoApp).runtimeDiagnosticsCoordinator
+    private val exportLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        val report = exportText
+        exportText = null
+        if (uri != null && report != null) worker.execute {
+            val result = runCatching {
+                val stream = contentResolver.openOutputStream(uri) ?: error("Document unavailable")
+                stream.bufferedWriter().use { it.write(report) }
+            }
+            onUi { status.text = if (result.isSuccess) "Report exported." else "Export failed: ${result.exceptionOrNull()?.message}" }
+        }
+    }
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder) {
@@ -92,6 +110,82 @@ class AudioDiagnosticsActivity : AppCompatActivity() {
         active = label("Connecting to playback service…").apply { setTextIsSelectable(true) }
         refresh = button("Refresh current stream") { refreshSnapshot() }
         val prefs = getSharedPreferences("piano_prefs", Context.MODE_PRIVATE)
+        label("Runtime MIDI and audio", true)
+        runtime = label("Reading runtime state…").apply { setTextIsSelectable(true) }
+        label("ALL is the normal default. 0 + 2 is experimental: excludes port 1, not a proven fix. Test both keys and pads on your device. No single-port mode is used.")
+        val modes = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL; body.addView(this) }
+        val modeOptions = DiagnosticPortMode.values().associateWith { mode ->
+            RadioButton(this).apply {
+                id = android.view.View.generateViewId()
+                text = when (mode) { DiagnosticPortMode.NONE -> "No ports"; DiagnosticPortMode.PORTS_0_2 -> "Ports 0 + 2 (experimental)"; DiagnosticPortMode.ALL -> "ALL ports (default)" }
+                minHeight = (48 * resources.displayMetrics.density).toInt()
+                setTextColor(getColor(R.color.ui_text)); modes.addView(this)
+            }
+        }
+        modes.check(modeOptions.getValue(DiagnosticPortMode.ALL).id)
+        fun selectedMode() = modeOptions.entries.first { it.value.id == modes.checkedRadioButtonId }.key
+        val applyMode = button("Apply MIDI port mode now") {}
+        applyMode.setOnClickListener {
+            applyMode.isEnabled = false
+            coordinator.setPortMode(selectedMode()) { snapshot -> onUi {
+                applyMode.isEnabled = true
+                showRuntime(snapshot)
+                status.text = if (snapshot == null) "Main screen unavailable; port mode not applied." else "Port operation completed. Check each port outcome above."
+            } }
+        }
+        label("Next cold launch only", true)
+        label("These controls schedule a one-shot startup test; they do not run it now. Uses the device key from the latest snapshot, not a USB serial number. AUDIO_ONLY opens no MIDI ports.")
+        val orders = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL; body.addView(this) }
+        val orderOptions = StartupOrder.values().associateWith { order ->
+            RadioButton(this).apply {
+                id = android.view.View.generateViewId(); text = order.name.replace('_', ' ')
+                minHeight = (48 * resources.displayMetrics.density).toInt()
+                setTextColor(getColor(R.color.ui_text)); orders.addView(this)
+            }
+        }
+        orders.check(orderOptions.getValue(StartupOrder.AUDIO_THEN_MIDI).id)
+        planStatus = label("No pending plan loaded yet.").apply { setTextIsSelectable(true) }
+        button("Schedule next cold launch") {
+            val order = orderOptions.entries.first { it.value.id == orders.checkedRadioButtonId }.key
+            val plan = StartupDiagnosticPlan(order, selectedMode(), latestRuntime?.midi?.deviceKey)
+            worker.execute {
+                val saved = runCatching { StartupDiagnosticPlanStore.schedule(prefs, plan) }.getOrDefault(false)
+                onUi { planStatus.text = if (saved) "Scheduled: $plan\nUse Exit on the main screen, then relaunch. Back does not restart the process." else "Could not save startup plan." }
+            }
+        }
+        button("Cancel pending cold-launch plan") {
+            worker.execute {
+                val result = runCatching { StartupDiagnosticPlanStore.cancel(prefs) }.getOrDefault(false)
+                onUi { planStatus.text = if (result) "Pending plan cleared. Active test is unchanged." else "Could not clear pending plan." }
+            }
+        }
+        worker.execute {
+            val pendingPlan = StartupDiagnosticPlanStore.load(prefs)
+            onUi { planStatus.text = "Pending next launch: ${pendingPlan ?: "none"}" }
+        }
+        label("Android outputs (advertised capabilities)", true)
+        val outputs = label("Reading Android outputs…").apply { setTextIsSelectable(true) }
+        worker.execute {
+            val result = runCatching {
+                val manager = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                manager.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS).joinToString("\n") {
+                    "ID ${it.id}: ${it.productName} · type ${it.type}\nAdvertised rates: ${it.sampleRates.joinToString().ifEmpty { "unspecified" }}; channels: ${it.channelCounts.joinToString().ifEmpty { "unspecified" }}; encodings: ${it.encodings.joinToString().ifEmpty { "unspecified" }}"
+                }.ifEmpty { "No outputs reported." }
+            }
+            onUi { outputs.text = result.getOrElse { "Output enumeration unavailable: ${it.message}" } }
+        }
+        label("Advertised capabilities are not actual stream parameters. This list does not identify Telegram's active route. Our actual Oboe output ID and stream parameters appear in the runtime report.")
+        button("Export diagnostics report…") {
+            coordinator.diagnosticReport { report -> onUi {
+                val context = runtime.text.toString() + "\n" + planStatus.text +
+                    "\n\nAndroid outputs (advertised capabilities, not another app's active route)\n" + outputs.text
+                worker.execute {
+                    val text = "Audio diagnostics\n$context\n\n${report ?: "Runtime report unavailable: main screen unavailable."}\n\nApp Log (bounded snapshot)\n" + AppLogger.getAll().joinToString("\n").take(200000)
+                    onUi { exportText = text; exportLauncher.launch("piano-diagnostics.txt") }
+                }
+            } }
+        }
+        label("Clipping and detailed xrun metrics: unavailable in this diagnostic version.")
         label("MIDI devices", true)
         body.addView(CheckBox(this).apply {
             text = "Load MIDI devices automatically when synthesizer is ready"
@@ -209,21 +303,27 @@ class AudioDiagnosticsActivity : AppCompatActivity() {
         label("Lower your device volume before testing. Stop leaves the stream allocated; Close releases the stream. Both preserve loaded SoundFonts and channel settings and require a full process restart for audio. Audio focus is intentionally retained, if currently held.")
         stop = button("Stop our audio stream") { confirmAction(false) }
         close = button("Close our audio stream") { confirmAction(true) }
+        button("Resume audio (safety checked)") {
+            coordinator.resumeAudio { _, message -> onUi { status.text = message; refreshSnapshot() } }
+        }
+        label("Resume is subject to backend safety checks. Close may require a full process restart; this control does not guarantee reopening.")
         label("Use Exit on the main screen, then relaunch, or Android Settings → Force stop, then relaunch. Back or reopening this screen is not a full restart. API and sample-rate requests are configured in Settings.")
         status = label("").apply { accessibilityLiveRegion = android.view.View.ACCESSIBILITY_LIVE_REGION_POLITE }
         button("Back") { finish() }
         setContentView(ScrollView(this).apply { addView(body) })
         updateControls()
         // MainActivity owns startup. Binding here never calls nativeInit or opens a stream.
-        bound = bindService(Intent(this, PlaybackService::class.java), connection, Context.BIND_AUTO_CREATE)
-        if (!bound) active.text = "Playback service unavailable. Return to the main screen first."
+        val midiOnly = coordinator.startupDiagnosticState?.plan?.order == StartupOrder.MIDI_ONLY
+        if (!midiOnly) bound = bindService(Intent(this, PlaybackService::class.java), connection, 0)
+        if (!bound) active.text = if (midiOnly) "MIDI_ONLY: this screen does not bind or create an audio service." else "Playback service unavailable; this screen does not initialize audio."
+        refreshRuntime()
     }
 
     private fun onUi(action: () -> Unit) = runOnUiThread { if (!destroyed && !isFinishing) action() }
 
     private fun updateControls() {
         close.isEnabled = !busy && service != null && !manuallyClosed
-        refresh.isEnabled = !busy && service != null
+        refresh.isEnabled = !busy
         stop.isEnabled = !busy && service != null && !manuallyStopped && !manuallyClosed
     }
 
@@ -241,6 +341,7 @@ class AudioDiagnosticsActivity : AppCompatActivity() {
 
     private fun refreshSnapshot(automatic: Boolean = false) {
         if (!resumed || busy || destroyed) return
+        refreshRuntime()
         val target = service ?: return
         if (automatic) {
             runTask(null) {
@@ -263,6 +364,30 @@ class AudioDiagnosticsActivity : AppCompatActivity() {
                     status.text = "Current stream report refreshed."
                 }
             }
+        }
+    }
+
+    private fun refreshRuntime() {
+        coordinator.diagnosticSnapshot { snapshot -> onUi { showRuntime(snapshot) } }
+    }
+
+    private fun showRuntime(snapshot: RuntimeDiagnosticsSnapshot?) {
+        latestRuntime = snapshot
+        if (snapshot == null) {
+            runtime.text = "Runtime snapshot unavailable: main screen unavailable.\nActive startup plan: ${coordinator.startupDiagnosticState ?: "none"}"
+            return
+        }
+        val midi = snapshot.midi
+        val plan = snapshot.startupPlan
+        runtime.text = buildString {
+            append("Device: ${midi.deviceName ?: "none"}\nDevice key: ${midi.deviceKey ?: "none"}\nMode: ${midi.mode}\nhandleOpen: ${midi.deviceHandleOpen} · connected: ${midi.connected}\n")
+            midi.ports.forEach { append("Port ${it.portNumber}: ${it.name ?: "unnamed"}\nselected=${it.selected} opened=${it.opened} connected=${it.connected}\noutcome=${it.outcome} · ${it.elapsedMs} ms\n") }
+            append("\nActive startup plan: ${plan?.plan ?: "none"}\nPhase: ${plan?.phase ?: "normal startup"}\nstreamCreated: ${plan?.streamCreated ?: "not tracked"}\n")
+            if (plan?.plan?.order == StartupOrder.MIDI_ONLY && !plan.streamCreated) append("MIDI_ONLY: stream never created (not merely closed).\n")
+            append("Audio focus granted: ${snapshot.audioFocusGranted}\n")
+            val audio = snapshot.audio
+            if (audio == null) append("Audio snapshot unavailable; no audio service snapshot.\n")
+            else append("Actual Oboe output ID: ${audio.actualDeviceId}\nActual sample rate: ${audio.sampleRate} Hz\nBuffer capacity: ${audio.bufferCapacityFrames} frames\n${audio.streamDiagnostics}")
         }
     }
 

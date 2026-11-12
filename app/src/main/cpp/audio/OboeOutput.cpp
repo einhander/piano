@@ -134,8 +134,20 @@ oboe::Result OboeOutput::open() {
                 builder.setSampleRate(rate);
             }
 
-            oboe::Result result = builder.openStream(&mStream);
+            oboe::AudioStream* candidate = nullptr;
+            oboe::Result result = builder.openStream(&candidate);
             if (result == oboe::Result::OK) {
+                const int32_t candidateRate = candidate->getSampleRate();
+                const int32_t candidateCallbackFrames = candidate->getFramesPerDataCallback();
+                const int32_t candidateCapacity = candidate->getBufferCapacityInFrames();
+                if (mRequiredReopenRate > 0 &&
+                    (candidateRate != mRequiredReopenRate || candidateCapacity <= 0 ||
+                     candidateCapacity > mRequiredReopenCapacity ||
+                     (mRequestedCallbackFrames > 0 && candidateCallbackFrames > mRequiredReopenCapacity))) {
+                    candidate->close();
+                    continue;
+                }
+                mStream = candidate;
                 // The device may have negotiated a different rate than
                 // requested — the actual rate is authoritative.
                 mSampleRate = mStream->getSampleRate();
@@ -171,7 +183,7 @@ oboe::Result OboeOutput::open() {
                 // rate it updates the transport + re-prepares the inactive
                 // synth slot at the new rate.
                 OnOpenCallback onOpen = sOnOpenCallback.load(std::memory_order_acquire);
-                if (onOpen) {
+                if (onOpen && mRequiredReopenRate == 0) {
                     onOpen(mSampleRate);
                 }
 
@@ -181,6 +193,17 @@ oboe::Result OboeOutput::open() {
     }
 
     return oboe::Result::ErrorInternal;
+}
+
+oboe::Result OboeOutput::reopenForDiagnostics(int32_t requiredRate, int32_t maxFrames) {
+    if (requiredRate <= 0 || maxFrames <= 0) return oboe::Result::ErrorInvalidState;
+    // Constraints apply only during this open. open() holds serialization lock.
+    mRequiredReopenRate = requiredRate;
+    mRequiredReopenCapacity = maxFrames;
+    const oboe::Result result = open();
+    mRequiredReopenRate = 0;
+    mRequiredReopenCapacity = 0;
+    return result;
 }
 
 void OboeOutput::createLatencyTuner() {
@@ -481,6 +504,11 @@ int32_t OboeOutput::getBufferCapacityInFrames() const {
     std::lock_guard<std::mutex> streamLock(mStreamMutex);
     if (mStream == nullptr) return 0;
     return mStream->getBufferCapacityInFrames();
+}
+
+int32_t OboeOutput::getDeviceId() const {
+    std::lock_guard<std::mutex> streamLock(mStreamMutex);
+    return mStream == nullptr ? -1 : mStream->getDeviceId();
 }
 
 int32_t OboeOutput::getLatencyMillis() const {

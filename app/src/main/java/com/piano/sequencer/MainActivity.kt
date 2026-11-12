@@ -65,7 +65,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), RuntimeDiagnosticsDelegate {
     private val midiWorker = Executors.newSingleThreadExecutor { r ->
         Thread(r, "MainMidiWorker").apply { isDaemon = true }
     }
@@ -174,6 +174,7 @@ class MainActivity : AppCompatActivity() {
     private val midiDeviceCallback = object : MidiManager.DeviceCallback() {
         override fun onDeviceAdded(deviceInfo: MidiDeviceInfo) {
             if (exitPending) return
+            if (StartupDiagnosticPolicy.blocksMidiAutomation((application as PianoApp).runtimeDiagnosticsCoordinator.startupDiagnosticState)) return
             if (!midiLoadingPolicy.allowAutomaticLoading()) return
             refreshMidiStatus()
             if (!midiManager.isConnected() && !userDisconnected) {
@@ -188,6 +189,7 @@ class MainActivity : AppCompatActivity() {
         }
         override fun onDeviceRemoved(deviceInfo: MidiDeviceInfo) {
             if (exitPending) return
+            if (StartupDiagnosticPolicy.blocksMidiAutomation((application as PianoApp).runtimeDiagnosticsCoordinator.startupDiagnosticState)) return
             refreshMidiStatus()
             val active = midiManager.getCurrentDevice()
             if (active != null && midiManager.stableKey(active) == midiManager.stableKey(deviceInfo)) {
@@ -403,6 +405,7 @@ class MainActivity : AppCompatActivity() {
                 val cpuConfig = AudioCpuConfig.read(getSharedPreferences("piano_prefs", MODE_PRIVATE))
                 NativeEngineBridge.nativeConfigureAudioCpu(cpuConfig.fastCores, cpuConfig.synthCores)
                 if (!NativeEngineBridge.nativeInit()) {
+                    setDiagnosticFailure("native-init-failed")
                     AppLogger.error("MainActivity", "nativeInit() failed")
                     runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this@MainActivity, "Native init failed", Toast.LENGTH_LONG).show() }
                     return@Thread
@@ -411,11 +414,13 @@ class MainActivity : AppCompatActivity() {
 
                 val openResult = svc.openAudio()
                 if (openResult != 0) {
+                    setDiagnosticFailure("audio-open-failed")
                     AppLogger.error("MainActivity", "Audio open failed: $openResult")
                     runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this@MainActivity, "Audio open failed: $openResult", Toast.LENGTH_SHORT).show() }
                     return@Thread
                 }
                 AppLogger.info("MainActivity", "Audio opened successfully")
+                (application as PianoApp).updateStartupDiagnosticState("audio-stream-created", true)
 
                 // Fix #3: use the ACTUAL Oboe stream rate (device rate, e.g.
                 // 44100 or 48000) for the engine, not the hardcoded 48000. The
@@ -425,6 +430,7 @@ class MainActivity : AppCompatActivity() {
                 // synth render rate disagree.
                 val actualRate = svc.getSampleRate()
                 if (!svc.initEngine(actualRate, 512)) {
+                    setDiagnosticFailure("engine-init-failed")
                     AppLogger.error("MainActivity", "Engine init failed")
                     runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this@MainActivity, "Engine init failed", Toast.LENGTH_SHORT).show() }
                     return@Thread
@@ -448,7 +454,8 @@ class MainActivity : AppCompatActivity() {
                     svc.startAudio()
                 }
                 val playing = svc.isAudioPlaying() == true
-                publishMidiReadiness(svc.getSoundFontCount() > 0 && playing)
+                if (!playing) setDiagnosticFailure("audio-start-failed")
+                publishMidiReadiness(playing)
                 // Query only after nativeInit/open/init; binding and Activity
                 // recreation must reflect backend state, never a stale UI flag.
                 val audioRecordingState = svc.audioRecordingState()
@@ -473,6 +480,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun withService(action: (PlaybackService) -> Unit) {
+        if (!allowAudioDiagnosticAction()) return
         if (serviceBound && playbackService != null) {
             action(playbackService!!)
         } else {
@@ -482,6 +490,12 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun allowAudioDiagnosticAction(): Boolean {
+        if (StartupDiagnosticPolicy.allowsAudioAction((application as PianoApp).runtimeDiagnosticsCoordinator.startupDiagnosticState)) return true
+        runOnUiThread { if (!isFinishing && !isDestroyed) Toast.makeText(this, "MIDI-only test: audio actions disabled; use Audio diagnostics or Exit", Toast.LENGTH_SHORT).show() }
+        return false
     }
 
     /** Sends one keyboard message to every target channel of multi-channel broadcast. */
@@ -790,11 +804,34 @@ class MainActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed || exitPending) return@runOnUiThread
             midiSynthReady = ready
             midiLoadingPolicy.setSynthReady(ready)
-            if (ready) enumerateAndConnectMidi()
+            val state = (application as PianoApp).activeStartupDiagnosticPlan
+            if (state != null) {
+                (application as PianoApp).updateStartupDiagnosticState(if (ready) "audio-ready" else "audio-not-playing", false)
+                if (StartupDiagnosticPolicy.onAudioCompleted(state.plan)) runDiagnosticMidi(state.plan)
+                else if (state.plan.order == StartupOrder.AUDIO_ONLY) (application as PianoApp).updateStartupDiagnosticState("complete", true)
+            } else if (ready) enumerateAndConnectMidi()
         }
     }
 
+    private fun setDiagnosticFailure(phase: String) { (application as PianoApp).updateStartupDiagnosticState(phase, false) }
+
+    private fun runDiagnosticMidi(state: StartupDiagnosticPlan, after: (() -> Unit)? = null) {
+        val app = application as PianoApp
+        val planToken = app.activeStartupDiagnosticPlan
+        fun active() = !exitPending && !isFinishing && !isDestroyed && planToken != null && app.activeStartupDiagnosticPlan?.plan === planToken.plan
+        if (!active()) return
+        val devices = midiManager.listDevices()
+        val target = StartupDiagnosticPolicy.selectMidiTarget(state.deviceKey, devices) { midiManager.stableKey(it) }
+        if (target == null) { if (active()) { app.updateStartupDiagnosticState("midi-missing", false); after?.invoke() }; return }
+        midiManager.connect(target) { result -> runOnUiThread {
+            if (!active()) return@runOnUiThread
+            app.updateStartupDiagnosticState(if (result.connected) "midi-connected" else "midi-failed", false)
+            after?.invoke()
+        } }
+    }
+
     private fun enumerateAndConnectMidi(preferred: MidiDeviceInfo? = null) {
+        if (StartupDiagnosticPolicy.blocksMidiAutomation((application as PianoApp).runtimeDiagnosticsCoordinator.startupDiagnosticState)) return
         if (exitPending || !midiLoadingPolicy.allowAutomaticLoading() || userDisconnected || midiManager.isConnected() || midiOpenPending) return
         val devices = midiManager.listDevices()
         if (devices.isEmpty()) {
@@ -816,6 +853,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val app = application as PianoApp
+        val diagnosticState = app.activeStartupDiagnosticPlan ?: StartupDiagnosticPlanStore.load(getSharedPreferences("piano_prefs", MODE_PRIVATE))?.let { StartupDiagnosticState(it) }
+        app.runtimeDiagnosticsCoordinator.updateStartupPlanState(diagnosticState)
         diagnosticNotes = DiagnosticNoteInput(
             noteOn = { note -> midiIngress.noteOn(0, note, 100) },
             noteOff = { note -> midiIngress.noteOff(0, note, 0) }
@@ -885,19 +925,19 @@ class MainActivity : AppCompatActivity() {
         settingsButton = Button(this).apply {
             text = getString(R.string.ui_settings)
             setOnClickListener {
-                startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+                if (allowAudioDiagnosticAction()) startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
             }
         }
         instrumentsButton = Button(this).apply {
             text = getString(R.string.instruments_title)
             setOnClickListener {
-                startActivity(Intent(this@MainActivity, InstrumentActivity::class.java))
+                if (allowAudioDiagnosticAction()) startActivity(Intent(this@MainActivity, InstrumentActivity::class.java))
             }
         }
         effectsButton = Button(this).apply {
             text = getString(R.string.master_effects_title)
             setOnClickListener {
-                startActivity(Intent(this@MainActivity, EffectsActivity::class.java))
+                if (allowAudioDiagnosticAction()) startActivity(Intent(this@MainActivity, EffectsActivity::class.java))
             }
         }
         // Keep the original touch listeners and fields; only their parents change.
@@ -913,7 +953,7 @@ class MainActivity : AppCompatActivity() {
         val sequencerButton = Button(this).apply {
             text = getString(R.string.sequencer_title)
             setOnClickListener {
-                startActivity(Intent(this@MainActivity, SequencerActivity::class.java))
+                if (allowAudioDiagnosticAction()) startActivity(Intent(this@MainActivity, SequencerActivity::class.java))
             }
         }
         val exitButton = Button(this).apply {
@@ -950,7 +990,7 @@ class MainActivity : AppCompatActivity() {
                     .setItems(names.toTypedArray()) { _, which ->
                         if (which < devices.size) {
                             if (!midiLoadingPolicy.chooserCanLoadExplicitly()) return@setItems
-                            connectToDevice(devices[which])
+                            if (!StartupDiagnosticPolicy.blocksMidiAutomation((application as PianoApp).runtimeDiagnosticsCoordinator.startupDiagnosticState)) connectToDevice(devices[which])
                         } else {
                             midiManager.disconnect()
                             selectedDeviceName = null
@@ -1059,6 +1099,12 @@ class MainActivity : AppCompatActivity() {
         layout.addView(View(this).apply { setBackgroundColor(getColor(R.color.ui_outline)) },
             LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(8); bottomMargin = dp(4) })
         layout.addView(row(projectsButton, settingsButton))
+        layout.addView(Button(this).apply {
+            text = "Audio diagnostics"
+            isAllCaps = false
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
+            setOnClickListener { startActivity(Intent(this@MainActivity, AudioDiagnosticsActivity::class.java)) }
+        })
         layout.addView(row(aboutButton, exitButton))
         panicButton.background = getDrawable(R.drawable.ui_action_frame)
         panicButton.backgroundTintList = android.content.res.ColorStateList.valueOf(getColor(R.color.ui_danger))
@@ -1184,7 +1230,8 @@ class MainActivity : AppCompatActivity() {
         })
 
         // Setup MIDI device manager
-        midiManager = MidiDeviceManager(this, midiInputReceiver)
+        midiManager = MidiDeviceManager(this, midiInputReceiver, diagnosticState?.plan?.ports ?: com.piano.sequencer.midi.DiagnosticPortMode.ALL)
+        (application as PianoApp).runtimeDiagnosticsCoordinator.register(this)
         midiLoadingPolicy = MidiLoadingPolicy(
             getSharedPreferences("piano_prefs", MODE_PRIVATE).getBoolean("midi_lazy_loading", false)
         )
@@ -1210,14 +1257,34 @@ class MainActivity : AppCompatActivity() {
 
         // Start (not just bind) so the service survives activity re-creation —
         // no audio gap on rotation/back-forward (always-on).
-        startForegroundService(Intent(this, PlaybackService::class.java))
-        bindService(Intent(this, PlaybackService::class.java), serviceConnection, BIND_AUTO_CREATE)
+        app.consumeStartupDiagnosticPlan { claim ->
+            if (isFinishing || isDestroyed || exitPending || !claim.executeActions && claim.state != null) {
+                if (claim.state != null) app.updateStartupDiagnosticState("diagnostic-recreated", claim.state.streamCreated)
+                return@consumeStartupDiagnosticPlan
+            }
+            val state = claim.state
+            if (StartupDiagnosticPolicy.startMidiInitially(state?.plan)) {
+                if (state?.plan?.order == StartupOrder.MIDI_ONLY) {
+                    app.updateStartupDiagnosticState("midi-only-stream-not-created", false)
+                    statusText.text = "Diagnostic MIDI-only — audio stream not created"
+                }
+                runDiagnosticMidi(state!!.plan) {
+                    if (StartupDiagnosticPolicy.onMidiCompleted(state.plan) && !exitPending && !isFinishing && !isDestroyed && app.activeStartupDiagnosticPlan?.plan === state.plan) startPlaybackService()
+                }
+            } else if (StartupDiagnosticPolicy.startAudioInitially(state?.plan)) startPlaybackService()
+            else app.updateStartupDiagnosticState("complete", false)
+        }
 
         // Live re-enumeration: listen for MIDI device add/remove events
         midiManager.registerDeviceCallback(midiDeviceCallback, Handler(Looper.getMainLooper()))
 
         // Initialize project repository
         projectRepo = ProjectRepository(this)
+    }
+
+    private fun startPlaybackService() {
+        startForegroundService(Intent(this, PlaybackService::class.java))
+        bindService(Intent(this, PlaybackService::class.java), serviceConnection, BIND_AUTO_CREATE)
     }
 
     private fun beginExplicitExit() {
@@ -2031,13 +2098,14 @@ class MainActivity : AppCompatActivity() {
             midiLoadingPolicy.setSynthReady(false)
         }
         val bootThread = engineBootThread
+        if (StartupDiagnosticPolicy.blocksMidiAutomation((application as PianoApp).runtimeDiagnosticsCoordinator.startupDiagnosticState)) return
         if (bootThread == null || !bootThread.isAlive) playbackService?.let { svc -> midiWorker.execute {
             val ready = svc.isAudioPlaying() == true && svc.getSoundFontCount() > 0
             runOnUiThread {
                 if (exitPending || engineBootThread?.isAlive == true) return@runOnUiThread
                 midiSynthReady = ready
                 midiLoadingPolicy.setSynthReady(ready)
-                if (ready || !lazy) enumerateAndConnectMidi()
+                if (!StartupDiagnosticPolicy.blocksMidiAutomation((application as PianoApp).runtimeDiagnosticsCoordinator.startupDiagnosticState) && (ready || !lazy)) enumerateAndConnectMidi()
             }
         } }
     }
@@ -2060,6 +2128,7 @@ class MainActivity : AppCompatActivity() {
         stopUnderrunPolling()
         underrunWorker.shutdownNow()
         playbackService?.let { (application as PianoApp).instrumentEffectCcController.detach(this@MainActivity, it) }
+        (application as PianoApp).runtimeDiagnosticsCoordinator.unregister(this)
         midiWorker.shutdown()
         projectIoWorker.shutdown()
         super.onDestroy()
@@ -2075,5 +2144,38 @@ class MainActivity : AppCompatActivity() {
         // loaded SoundFont every time the user left and returned (back button
         // -> new empty engine on re-create). Native resources are reclaimed
         // on process death; the engine must survive activity recreation.
+    }
+
+    override fun diagnosticSnapshot(callback: (RuntimeDiagnosticsSnapshot) -> Unit) {
+        val midi = midiManager.diagnosticSnapshot()
+        val service = playbackService
+        if (service == null) {
+            Handler(Looper.getMainLooper()).post { callback(RuntimeDiagnosticsSnapshot(midi, null, false, (application as PianoApp).activeStartupDiagnosticPlan)) }
+        } else {
+            service.getAudioDiagnosticStreamSnapshotAsync { audio, focus ->
+                callback(RuntimeDiagnosticsSnapshot(midi, audio, focus, (application as PianoApp).activeStartupDiagnosticPlan))
+            }
+        }
+    }
+
+    override fun setPortMode(mode: com.piano.sequencer.midi.DiagnosticPortMode, callback: (RuntimeDiagnosticsSnapshot) -> Unit) {
+        midiManager.setDiagnosticPortMode(mode) {
+            diagnosticSnapshot(callback)
+        }
+    }
+
+    override fun stopAudio(callback: (com.piano.sequencer.audio.AudioStreamCloseResult?) -> Unit) {
+        val svc = playbackService
+        if (svc == null) callback(null) else midiWorker.execute { val result = svc.stopAudioStreamForDiagnostics(); runOnUiThread { callback(result) } }
+    }
+
+    override fun closeAudio(callback: (com.piano.sequencer.audio.AudioStreamCloseResult?) -> Unit) {
+        val svc = playbackService
+        if (svc == null) callback(null) else midiWorker.execute { val result = svc.closeAudioStreamForDiagnostics(); runOnUiThread { callback(result) } }
+    }
+
+    override fun resumeAudio(callback: (Boolean, String) -> Unit) {
+        val svc = playbackService
+        if (svc == null) callback(false, "PlaybackService unavailable") else svc.resumeAudioAfterDiagnostics(callback)
     }
 }

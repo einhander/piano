@@ -7,6 +7,12 @@ import org.junit.Test
 import android.content.SharedPreferences
 
 class DiagnosticsProfileTest {
+    @Test fun resumeRequiresKnownSameRateAndCapacityFit() {
+        assertTrue(diagnosticResumeDecision(48000, 48000, 1024, 512).allowed)
+        assertFalse(diagnosticResumeDecision(48000, 44100, 1024, 512).allowed)
+        assertFalse(diagnosticResumeDecision(48000, 48000, 512, 1024).allowed)
+        assertFalse(diagnosticResumeDecision(0, 48000, 1024, 512).allowed)
+    }
     @Test fun profileChoicesRoundTripFromStableKeys() {
         assertEquals(AudioApiChoice.AAUDIO, AudioApiChoice.fromStored("aaudio"))
         assertEquals(AudioApiChoice.OPENSL_ES, AudioApiChoice.fromStored("opensl_es"))

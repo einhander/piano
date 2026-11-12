@@ -175,6 +175,17 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeOpenAudio(JNIEnv* env, jclass)
     return static_cast<jint>(inst->open());
 }
 
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeReopenAudioForDiagnostics(JNIEnv*, jclass) {
+    OboeOutput* output = OboeOutput::getInstance();
+    NativeEngine* engine = NativeEngine::getInstance();
+    if (!output || !engine) return -1;
+    const int rate = engine->getEngineSampleRate();
+    const int capacity = engine->getMaxSynthFrames();
+    if (rate <= 0 || capacity <= 0) return -1;
+    return static_cast<jint>(output->reopenForDiagnostics(rate, capacity));
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeConfigureDiagnosticAudioProfile(JNIEnv*, jclass, jint api, jint rate, jint callbackFrames) {
     OboeOutput* inst = OboeOutput::getInstance();
@@ -551,6 +562,24 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetBufferCapacityInFrames(JNIE
     NativeEngine* inst = NativeEngine::getInstance();
     if (inst) return static_cast<jint>(inst->getBufferCapacityInFrames());
     return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetMaxSynthFrames(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    return inst && inst->isEngineInitialized() ? static_cast<jint>(inst->getMaxSynthFrames()) : 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetEngineSampleRate(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    return inst && inst->isEngineInitialized() ? static_cast<jint>(inst->getEngineSampleRate()) : 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetDeviceId(JNIEnv* env, jclass) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    return inst ? static_cast<jint>(inst->getDeviceId()) : -1;
 }
 
 JNIEXPORT jint JNICALL

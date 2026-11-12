@@ -548,10 +548,67 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         NativeEngineBridge.nativeGetActualAudioState(), audioFocusGranted,
         manualStreamCloseState.isClosedByUser(), NativeEngineBridge.nativeGetStreamDiagnostics(),
         manualStreamCloseState.isStoppedByUser(),
+        NativeEngineBridge.nativeGetSampleRate(), NativeEngineBridge.nativeGetBufferCapacityInFrames(), NativeEngineBridge.nativeGetDeviceId(),
+        NativeEngineBridge.nativeGetUnderrunCount(),
     )
 
     fun getAudioDiagnosticStreamSnapshot(): AudioDiagnosticSnapshot = onAudioWorkerSync {
         diagnosticSnapshot()
+    }
+
+    fun getAudioDiagnosticStreamSnapshotAsync(callback: (AudioDiagnosticSnapshot, Boolean) -> Unit) {
+        audioWorker.execute { val value = diagnosticSnapshot(); val focus = audioFocusGranted; mainHandler.post { callback(value, focus) } }
+    }
+
+    /** Explicit diagnostic resume only; closed streams reopen without changing engine/profile. */
+    fun resumeAudioAfterDiagnostics(callback: (Boolean, String) -> Unit) {
+        audioWorker.execute {
+            val streamState = NativeEngineBridge.nativeGetActualAudioState()
+            if (streamState != 12 && streamState != 13 && manualStreamCloseState.isStoppedByUser()) {
+                // Stream remains open after Stop; same-rate/capacity checks still gate start.
+            }
+            if (NativeEngineBridge.nativeIsAudioRecording()) {
+                mainHandler.post { callback(false, "Stop audio recording before resuming") }
+                return@execute
+            }
+            if (!audioFocusGranted) requestAudioFocus()
+            if (!audioFocusGranted) {
+                mainHandler.post { callback(false, "Audio resume failed: audio focus not granted") }
+                return@execute
+            }
+            val reopening = streamState == 12 || streamState == 13
+            if (reopening && !NativeEngineBridge.nativeIsEngineInitialized()) {
+                mainHandler.post { callback(false, "restart required: audio engine is not initialized") }
+                return@execute
+            }
+            if (reopening) {
+                val openResult = traceAudioOperation("open:diagnostic-reopen") { NativeEngineBridge.nativeReopenAudioForDiagnostics() }
+                if (openResult != 0) {
+                    mainHandler.post { callback(false, "Audio reopen failed: $openResult") }
+                    return@execute
+                }
+            }
+            val rate = NativeEngineBridge.nativeGetSampleRate()
+            val capacity = NativeEngineBridge.nativeGetBufferCapacityInFrames()
+            val decision = com.piano.sequencer.audio.diagnosticReopenDecision(
+                NativeEngineBridge.nativeIsEngineInitialized(), NativeEngineBridge.nativeGetEngineSampleRate(), rate,
+                NativeEngineBridge.nativeGetMaxSynthFrames(), capacity,
+            )
+            if (!decision.allowed) {
+                if (reopening) NativeEngineBridge.nativeCloseAudioForDiagnostics()
+                mainHandler.post { callback(false, decision.reason) }
+                return@execute
+            }
+            manualStreamCloseState.clearForDiagnosticResume()
+            val result = traceAudioOperation(if (reopening) "start:diagnostic-reopen" else "start:diagnostic-resume") { NativeEngineBridge.nativeStartAudio() }
+            if (result != 0) {
+                // Keep manual suspension honest after failed explicit start.
+                if (reopening) manualStreamCloseState.close() else manualStreamCloseState.stop()
+            }
+            val message = if (result == 0) "Audio resumed" else "Audio resume failed: $result"
+            AppLogger.info("PlaybackService", message)
+            mainHandler.post { callback(result == 0, message) }
+        }
     }
 
     fun isAudioManuallySuspendedForDiagnostics(): Boolean = manualStreamCloseState.isSuspendedByUser()

@@ -68,7 +68,26 @@ data class AudioDiagnosticSnapshot(
     val manuallyClosed: Boolean,
     val streamDiagnostics: String,
     val manuallyStopped: Boolean = false,
+    val sampleRate: Int = 0,
+    val bufferCapacityFrames: Int = 0,
+    val actualDeviceId: Int = -1,
+    val underrunCount: Int = -1,
 )
+
+data class DiagnosticResumeDecision(val allowed: Boolean, val reason: String)
+
+fun diagnosticResumeDecision(engineRate: Int, streamRate: Int, engineCapacity: Int, streamCapacity: Int): DiagnosticResumeDecision = when {
+    engineRate <= 0 || streamRate <= 0 -> DiagnosticResumeDecision(false, "restart required: sample rate unavailable")
+    engineRate != streamRate -> DiagnosticResumeDecision(false, "restart required: stream rate $streamRate differs from engine rate $engineRate")
+    engineCapacity <= 0 || streamCapacity <= 0 -> DiagnosticResumeDecision(false, "restart required: stream capacity unavailable")
+    streamCapacity > engineCapacity -> DiagnosticResumeDecision(false, "restart required: stream capacity $streamCapacity exceeds engine capacity $engineCapacity")
+    else -> DiagnosticResumeDecision(true, "safe to reopen at ${streamRate}Hz, capacity ${streamCapacity} frames")
+}
+
+fun diagnosticReopenDecision(initialized: Boolean, engineRate: Int, streamRate: Int, engineCapacity: Int, streamCapacity: Int): DiagnosticResumeDecision = when {
+    !initialized -> DiagnosticResumeDecision(false, "restart required: audio engine is not initialized")
+    else -> diagnosticResumeDecision(engineRate, streamRate, engineCapacity, streamCapacity)
+}
 
 data class AudioStreamCloseResult(val closed: Boolean, val message: String, val snapshot: AudioDiagnosticSnapshot)
 
@@ -100,6 +119,7 @@ class ManualStreamCloseState {
     fun isSuspendedByUser(): Boolean = closedByUser || stoppedByUser
     fun stop() { stoppedByUser = true }
     fun close() { closedByUser = true; stoppedByUser = true }
+    fun clearForDiagnosticResume() { closedByUser = false; stoppedByUser = false }
 }
 
 enum class ProfileApplyResult { APPLIED, ALREADY_LATCHED, STREAM_ALREADY_OPEN, NATIVE_REJECTED }

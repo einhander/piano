@@ -18,6 +18,7 @@ public:
     OboeOutput& operator=(const OboeOutput&) = delete;
 
     oboe::Result open();
+    oboe::Result reopenForDiagnostics(int32_t requiredRate, int32_t maxFrames);
     bool configureDiagnosticProfile(piano::audio::ApiChoice api, piano::audio::RateChoice rate, int32_t callbackFrames);
     void closeForDiagnostics();
     void close();
@@ -48,6 +49,7 @@ public:
     // Non-const: Oboe's getBufferSizeInFrames() is a non-const virtual.
     int32_t getBufferSizeInFrames();
     int32_t getBufferCapacityInFrames() const;
+    int32_t getDeviceId() const;
     // Output latency in milliseconds (valid only while the stream is started).
     // Returns -1 if unavailable (stream not started / unsupported).
     int32_t getLatencyMillis() const;
@@ -102,6 +104,8 @@ private:
     piano::audio::RateChoice mRequestedRate = piano::audio::RateChoice::Hz48000;
     int32_t mRequestedCallbackFrames = 64;
     bool mProfileConfigured = false;
+    int32_t mRequiredReopenRate = 0;
+    int32_t mRequiredReopenCapacity = 0;
     // Serializes every non-callback stream dereference with close/open. Callback
     // accesses only callback-owned tuner state and never takes this lock.
     mutable std::mutex mStreamMutex;

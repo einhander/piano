@@ -460,6 +460,11 @@ int NativeEngine::getBufferCapacityInFrames() const {
     return inst ? inst->getBufferCapacityInFrames() : 0;
 }
 
+int NativeEngine::getDeviceId() const {
+    OboeOutput* inst = OboeOutput::getInstance();
+    return inst ? inst->getDeviceId() : -1;
+}
+
 int NativeEngine::getLatencyMillis() const {
     OboeOutput* inst = OboeOutput::getInstance();
     return inst ? inst->getLatencyMillis() : 0;
