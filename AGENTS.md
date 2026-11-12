@@ -31,6 +31,19 @@ paths when environment variables are unset. It never stages, commits or pushes.
   unit tests must pass: `./gradlew :app:testDebugUnitTest` (MIDI parser regression
   suite in `app/src/test/.../midi/MidiMessageParserTest.kt`). On-device behavior is
   verified manually (no adb/logcat on the dev machine).
+- **Trust a real run, not a cache.** After editing sources, `:app:testDebugUnitTest`
+  may report `UP-TO-DATE` (a stale, passing-looking result). Before relying on the
+  suite, force a genuine run for the affected package:
+  `./gradlew :app:testDebugUnitTest --tests '<pkg>.*' --rerun-tasks --no-daemon`.
+  The final gate after all edits is `./build.sh check` (exit 0 = assemble + full JVM
+  suite + `git diff --check`).
+- **Native host tests.** C++ engine code ships host-testable unit suites under
+  `app/src/test/cpp/`, each with its own runner script (e.g.
+  `app/src/test/cpp/run_pcm_slot_test.sh`, `run_audio_cpu_policy_test.sh`, and the
+  LSP/LSP-integration tests). When you change `app/src/main/cpp/` (engine, audio,
+  synth, midi, realtime), run the relevant `run_*.sh` script and confirm it prints its
+  pass line with exit 0 before committing; a Gradle/`build.sh` build does not run them.
+  The `g++`/sanitizer flags live in each script (no manual rebuild recipe needed).
 - **Release versioning:** On `master`, use `scripts/prepare-release.sh X.Y.Z`;
   do not bump the version manually. The script updates `baseVersion`, chooses the
   next monotonically increasing `versionCode`, commits the app bump, then
@@ -41,6 +54,9 @@ paths when environment variables are unset. It never stages, commits or pushes.
   metadata commit. Preserve unrelated local files and submodule modifications.
   To repair/check metadata for an existing release, use
   `python3 scripts/sync_fdroid_recipe.py` and then the same command with `--check`.
+  Ordering matters: `--check` resolves the app-source SHA from the annotated tag, so it
+  fails if the tag does not exist yet - create the `v<baseVersion>` tag first, then run
+  `--check`, then `git push --atomic origin master v<baseVersion>`.
   Keep F-Droid `Disabled` until submission is explicitly authorized.
   `versionName` resolves from an exact tag; non-tag builds show
   `<baseVersion>~<short-sha>`. Do not infer the next release from only `v*` tags:
@@ -175,6 +191,10 @@ Kotlin plugins: `org.jetbrains.kotlin.android`, `org.jetbrains.kotlin.plugin.ser
   ignored files.
 - Orchestration: never run multiple specialist agents in parallel. At most one
   sub-agent at a time, plus @oracle for architecture/review. Sequential lanes only.
+  When a specialist reports 'incomplete'/'blocked'/'no changes made', do NOT treat that as
+  finished: re-dispatch the SAME session naming the concrete in-scope edit and a fresh
+  `file:symbol` anchor (taken from a new grep), capped at two re-dispatches; after that, finish
+  the edit inline and re-run the full `./build.sh check` (plus affected native host tests) yourself.
 - Branch naming: new work goes on a branch prefixed `feature/` (features) or `fix/`
   (bug fixes) — e.g. `feature/chord-channel-del-cell`, `fix/chord-release`. Not `feat/`.
 
