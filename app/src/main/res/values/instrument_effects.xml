@@ -11,4 +11,19 @@
     <string name="instrument_effects_hide">Hide parameters</string>
     <string name="instrument_effects_bypass">Rack bypassed. Effect settings are kept for when the rack is enabled.</string>
     <string name="instrument_vibrato_caption">Retunes the instrument\'s built-in vibrato (rate, depth, delay) for this channel. Final sound also depends on the SoundFont\'s own vibrato settings.</string>
+
+    <!-- Zone headers -->
+    <string name="instrument_effects_zone_voice_parameters">VOICE PARAMETERS</string>
+    <string name="instrument_effects_zone_effects">EFFECTS</string>
+    <string name="instrument_effects_zone_presets_mapping">PRESETS &amp; MAPPING</string>
+    <string name="instrument_effects_presets">FX presets…</string>
+    <string name="instrument_effects_mappings">MIDI CC mappings</string>
+
+    <!-- Live state in the Release / Vibrato button labels -->
+    <string name="instrument_effects_release_static">Release · %1$s</string>
+    <string name="instrument_effects_release_default">Release — 0 tc</string>
+    <string name="instrument_effects_release_value">Release — %+d tc</string>
+    <string name="instrument_effects_vibrato_static">Vibrato · %1$s</string>
+    <string name="instrument_effects_vibrato_off">Vibrato — off</string>
+    <string name="instrument_effects_vibrato_on">Vibrato — on · %1$.2f Hz · %2$.0f ¢ · %3$.0f ms</string>
 </resources>

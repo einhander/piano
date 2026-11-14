@@ -38,6 +38,7 @@ import java.util.concurrent.Executors
 import kotlin.math.ln
 import kotlin.math.exp
 import kotlin.math.round
+import kotlin.math.roundToInt
 
 /** Channel-scoped editor. Opening/closing never starts, stops or reconfigures playback. */
 class InstrumentEffectsActivity : AppCompatActivity() {
@@ -203,6 +204,10 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         }
         val absolute = absoluteChannel()
         val rack = svc.isInstrumentRackEnabled(setId, channel)
+        // Voice state is re-read here with every other native value in the snapshot:
+        // the button labels must show native truth, never an in-memory copy.
+        val release = runCatching { svc.getChannelRelease(absolute) }.getOrNull()
+        val vibrato = runCatching { svc.getChannelVibrato(absolute) }.getOrNull()
         val instances = EFFECTS.mapIndexed { slot, (id, title) ->
             val available = svc.isInstrumentEffectAvailable(absoluteChannel(), id)
             val parameters = if (!available) emptyList() else (0 until svc.getInstrumentEffectParamCount(id)).mapNotNull { index ->
@@ -233,7 +238,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             presetLibraryError = libraryResult.exceptionOrNull()?.let { "Preset library unavailable: ${it.message}. Stored presets were not replaced." }
             if (presets.none { it.name == selectedPresetName }) selectedPresetName = null
             if (presetResult != null) { presetMessage = presetResult; presetBusy = false; restorePresetControls() }
-            supportActionBar?.title = "$targetLabel · Effects"; render(rack, instances, failed); renderShared(shared, latency)
+            supportActionBar?.title = "$targetLabel · Effects"; render(rack, instances, failed, release, vibrato, shared, latency)
             renderPresetMenu()
             if (presetBusy) setPresetControlsEnabled(container, false)
         }
@@ -245,7 +250,9 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         renderSnapshot(svc, !success)
     }
 
-    private fun render(rack: Boolean, instances: List<EffectInstance>, failed: Boolean) {
+    private fun render(rack: Boolean, instances: List<EffectInstance>, failed: Boolean,
+                       release: Float?, vibrato: FloatArray?,
+                       shared: List<EffectInstance>, latency: Map<String, String>) {
         valueRefreshers.clear()
         parameters = instances.flatMap { instance -> instance.parameters.map { (instance.descriptor.stableId to it.stableId) to it } }.toMap()
         container.removeAllViews()
@@ -266,26 +273,19 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                     }.setNegativeButton("Cancel", null).show()
             }
         })
+        // Signal-flow order: voice parameters shape the source voice, ahead of the insert chain.
+        container.addView(sectionHeader(R.string.instrument_effects_zone_voice_parameters))
         container.addView(Button(this).apply {
             com.piano.sequencer.ui.UiControlStyle.apply(this)
-            text = "Release · $targetLabel"
+            text = releaseSummary(release)
             setOnClickListener { openReleaseEditor(channel) }
         })
         container.addView(Button(this).apply {
             com.piano.sequencer.ui.UiControlStyle.apply(this)
-            text = "Vibrato · $targetLabel"
+            text = vibratoSummary(vibrato)
             setOnClickListener { openVibratoEditor(channel) }
         })
-        container.addView(Button(this).apply {
-            com.piano.sequencer.ui.UiControlStyle.apply(this)
-            text = "FX presets…"
-            setOnClickListener { if (!presetBusy) showPresetMenu() }
-        })
-        container.addView(Button(this).apply {
-            com.piano.sequencer.ui.UiControlStyle.apply(this)
-            text = "MIDI CC mappings"
-            setOnClickListener { showMappings() }
-        })
+        container.addView(sectionHeader(R.string.instrument_effects_zone_effects))
         container.addView(SwitchCompat(this).apply {
             minimumHeight = dp(48)
             text = getString(R.string.instrument_effects_rack)
@@ -351,6 +351,20 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             card.addView(controls)
             container.addView(card)
         }
+        // Independent Delay is a shared return on the signal path, so it stays in EFFECTS, after the inserts.
+        renderShared(shared, latency)
+        // Presets and MIDI mapping organize channel state, not audio; they sit last.
+        container.addView(sectionHeader(R.string.instrument_effects_zone_presets_mapping))
+        container.addView(Button(this).apply {
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
+            text = getString(R.string.instrument_effects_presets)
+            setOnClickListener { if (!presetBusy) showPresetMenu() }
+        })
+        container.addView(Button(this).apply {
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
+            text = getString(R.string.instrument_effects_mappings)
+            setOnClickListener { showMappings() }
+        })
     }
 
     /** Identity and slot are captured once; stale dialogs never follow a recycled file slot. */
@@ -955,6 +969,31 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     }
 
     private fun label(value: String) = TextView(this).apply { text = value; textSize = 14f }
+
+    /** Small bold uppercase zone header, muted like secondary captions, with spacing above each zone. */
+    private fun sectionHeader(resId: Int) = TextView(this).apply {
+        text = getString(resId)
+        textSize = 12f
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        setPadding(0, dp(16), 0, dp(4))
+        setTextColor(getColor(R.color.ui_muted))
+    }
+
+    /** Live release value for the button label; falls back to the static target label when unreadable. */
+    private fun releaseSummary(release: Float?): String = when {
+        release == null || !release.isFinite() -> getString(R.string.instrument_effects_release_static, targetLabel)
+        release.roundToInt() == 0 -> getString(R.string.instrument_effects_release_default)
+        else -> String.format(java.util.Locale.getDefault(), getString(R.string.instrument_effects_release_value), release.roundToInt())
+    }
+
+    /** Live vibrato tuple for the button label; falls back to the static target label when unreadable. */
+    private fun vibratoSummary(vibrato: FloatArray?): String =
+        if (vibrato == null || vibrato.size != 4 || !vibrato.all(Float::isFinite))
+            getString(R.string.instrument_effects_vibrato_static, targetLabel)
+        else if (vibrato[3] >= .5f)
+            String.format(java.util.Locale.getDefault(), getString(R.string.instrument_effects_vibrato_on), vibrato[0], vibrato[1], vibrato[2])
+        else getString(R.string.instrument_effects_vibrato_off)
+
     private fun mappingDescription(m: EffectCcMapping): String {
         val name = if (m.parameterId == "-1") "Insert enabled" else parameters[m.effectId to m.parameterId]?.displayName ?: "Parameter ${m.parameterId}"
         val effect = EFFECTS.firstOrNull { it.first == m.effectId }?.second?.let { getString(it) } ?: m.effectId
