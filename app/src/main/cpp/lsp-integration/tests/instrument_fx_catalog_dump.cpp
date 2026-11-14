@@ -12,6 +12,7 @@ int main() {
         piano::lsp::kIdFilter,
         piano::lsp::kIdPhaser,
         piano::lsp::kIdFlanger,
+        piano::lsp::kIdTremolo,
     };
     for (int slot = 0; slot < piano::lsp::kInstrumentEffectCount; ++slot) {
         int count = 0;

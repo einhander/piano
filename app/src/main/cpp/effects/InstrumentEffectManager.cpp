@@ -1,4 +1,5 @@
 #include "InstrumentEffectManager.h"
+#include "TremoloEffect.h"
 #include "lsp/LspEffectFactory.h"
 #include "lsp/LspEffectIds.h"
 #include "ladspa/LadspaRegistry.h"
@@ -10,6 +11,14 @@
 #include <thread>
 
 namespace piano {
+
+// Build the effect instance for an instrument rack slot. The custom (non-LSP)
+// Tremolo slot is pure C++ DSP: no LADSPA descriptor lookup, no port-map
+// validation, no latency-capacity check — the LSP-specific preparation gates
+// must not apply to it, so it is routed away from LspEffectFactory here.
+static AudioEffect* createInstrumentEffect(int slot) {
+    return slot == lsp::kSlotTremolo ? new TremoloEffect() : lsp::LspEffectFactory::create(slot);
+}
 
 InstrumentEffectManager::InstrumentEffectManager(EffectFactory factory) noexcept : mFactory(factory) {
     for(auto& x:mRackEnabled)x.store(false,std::memory_order_relaxed);
@@ -98,7 +107,7 @@ bool InstrumentEffectManager::reprepareQuiescent(double sampleRate, int maxFrame
         rebuild[c][s]=static_cast<bool>(mEffects[c][s]);
     }
     for(int c=0;c<kChannels;++c) for(int s=0;s<kEffects;++s) if(rebuild[c][s]) {
-        std::unique_ptr<AudioEffect> candidate=mFactory?mFactory(s):std::unique_ptr<AudioEffect>(lsp::LspEffectFactory::create(s));
+        std::unique_ptr<AudioEffect> candidate=mFactory?mFactory(s):std::unique_ptr<AudioEffect>(createInstrumentEffect(s));
         if(!candidate || !candidate->prepare(sampleRate,maxFrames) || !candidate->isAvailable()) {
             for(int i=0;i<kChannels;++i){std::free(left[i]);std::free(right[i]);}
             mPrepareStatus.store(PrepareStatus::AllocationFailed,std::memory_order_release);
@@ -145,7 +154,7 @@ bool InstrumentEffectManager::instantiate(int channel, int slot) {
     auto& effect = mEffects[channel][slot];
     if (effect) return effect->isAvailable();
     std::unique_ptr<AudioEffect> candidate = mFactory ? mFactory(slot)
-        : std::unique_ptr<AudioEffect>(lsp::LspEffectFactory::create(slot));
+        : std::unique_ptr<AudioEffect>(createInstrumentEffect(slot));
     if (!candidate) return false;
     if (!candidate->prepare(mSampleRate, mMaxFrames) || !candidate->isAvailable()) return false;
     int count=0; const auto* descriptors=lsp::paramDescriptors(slot,count);
@@ -233,6 +242,7 @@ bool InstrumentEffectManager::isAvailable(int channel, int slot) const noexcept 
     std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
     auto* e=mPublished[channel][slot].load(std::memory_order_acquire);
     if(e) return e->isAvailable();
+    if (slot == lsp::kSlotTremolo) return true; // custom C++ DSP: no LSP bundle needed
     const auto* binding=slot<lsp::kMasterEffectCount?lsp::bindingForSlot(slot):lsp::instrumentBindingForSlot(slot);
     return binding && ladspa::LadspaRegistry::instance().findByLabel(binding->label)!=nullptr;
 }
