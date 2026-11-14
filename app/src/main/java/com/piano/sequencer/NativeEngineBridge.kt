@@ -225,6 +225,8 @@ object NativeEngineBridge {
     external fun nativeGetChannelVolume(channel: Int): Int
     external fun nativeSetChannelRelease(channel: Int, timecents: Float): Boolean
     external fun nativeGetChannelRelease(channel: Int): Float
+    external fun nativeSetChannelVibrato(channel: Int, enabled: Boolean, rateHz: Float, depthCents: Float, delayMs: Float): Boolean
+    external fun nativeGetChannelVibrato(channel: Int): FloatArray?   // [rateHz, depthCents, delayMs, enabled?1:0]; null if no engine / bad channel
     external fun nativeSendMidiMessage(status: Int, data1: Int, data2: Int)
 
     /**

@@ -152,3 +152,5 @@ lsp.flanger	400	rate_hz	0.00999999978	20	0.447214007
 lsp.flanger	401	depth	0.100000001	20	5.07499981
 lsp.flanger	402	feedback	0	0.891251028	0
 lsp.flanger	403	mix	0	100	100
+piano.tremolo	410	tremolo_rate_hz	0.100000001	20	5
+piano.tremolo	411	tremolo_depth_pct	0	100	50

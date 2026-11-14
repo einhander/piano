@@ -10,4 +10,5 @@
     <string name="instrument_effects_configure">Configure</string>
     <string name="instrument_effects_hide">Hide parameters</string>
     <string name="instrument_effects_bypass">Rack bypassed. Effect settings are kept for when the rack is enabled.</string>
+    <string name="instrument_vibrato_caption">Retunes the instrument\'s built-in vibrato (rate, depth, delay) for this channel. Final sound also depends on the SoundFont\'s own vibrato settings.</string>
 </resources>

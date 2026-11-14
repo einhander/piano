@@ -1,6 +1,7 @@
 package com.piano.sequencer.midi
 
 import com.piano.sequencer.InstrumentReleasePreferences
+import com.piano.sequencer.InstrumentVibratoPreferences
 
 import android.content.Context
 import android.os.Handler
@@ -1013,9 +1014,10 @@ class MidiFileTriggerController private constructor(appContext: Context) {
                     },
                     resetRange = {
                         val reset = svc.resetInstrumentChannelRange(set.channelBase, 16)
-                        val preferencesCleared = reset && InstrumentReleasePreferences.resetSet(
-                            appContext.getSharedPreferences("piano_prefs", android.content.Context.MODE_PRIVATE), setId
-                        )
+                        val prefs = appContext.getSharedPreferences("piano_prefs", android.content.Context.MODE_PRIVATE)
+                        val preferencesCleared = reset &&
+                            InstrumentReleasePreferences.resetSet(prefs, setId) &&
+                            InstrumentVibratoPreferences.resetSet(prefs, setId)
                         reset && preferencesCleared
                     }
                 )

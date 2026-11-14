@@ -1565,6 +1565,7 @@ class MainActivity : AppCompatActivity(), RuntimeDiagnosticsDelegate {
             restoreDelays = { EffectStateRestore.restoreInstrumentDelays(this, svc) }
         )
         InstrumentReleasePreferences.restoreStartup(this, svc)
+        InstrumentVibratoPreferences.restoreStartup(this, svc)
         if (count <= 0) {
             AppLogger.warn("MainActivity", "Instrument LSP effects unavailable; saved rack state retained")
         }

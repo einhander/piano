@@ -5,7 +5,7 @@ import com.piano.sequencer.midi.sharedFxParameterFromNativeInfo
 /** Order is the native instrument slot identity; append, never reorder. */
 internal val instrumentInsertCardIds = listOf(
     "lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper",
-    "lsp.filter", "lsp.phaser", "lsp.flanger"
+    "lsp.filter", "lsp.phaser", "lsp.flanger", "piano.tremolo"
 )
 
 /** Worker-only at call sites. Instrument cards never contain global effects. */
@@ -64,6 +64,11 @@ internal fun instrumentPresentation(effect: String, p: EffectParameter): EffectP
         401 -> p.copy(displayName = "Depth", unit = "ms")
         402 -> p.copy(displayName = "Feedback", unit = "%", scale = "fraction-percent")
         403 -> p.copy(displayName = "Dry/Wet", unit = "%")
+        else -> p
+    }
+    "piano.tremolo" -> when (p.stableId.toInt()) {
+        410 -> p.copy(displayName = "Rate", unit = "Hz")
+        411 -> p.copy(displayName = "Depth", unit = "%")
         else -> p
     }
     else -> p

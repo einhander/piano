@@ -165,7 +165,10 @@ class InstrumentFxPresetLibraryTest {
         )
         defaults.forEach { preset ->
             assertEquals(InstrumentFxPresetCodec.insertIds, preset.effects.map { it.effectId })
-            assertEquals(NativeCatalog.byEffect.mapValues { it.value.map(NativeParameter::id).toSet() },
+            // The native catalog is a superset: presets manage the codec's insert list;
+            // compare parameter coverage per managed insert, not the full catalog.
+            assertEquals(NativeCatalog.byEffect.filterKeys { it in InstrumentFxPresetCodec.insertIds }
+                .mapValues { it.value.map(NativeParameter::id).toSet() },
                 preset.effects.associate { it.effectId to it.parameters.keys })
             assertEquals((0..5).toSet(), preset.delay.parameters.keys)
             assertTrue(preset.effects.flatMap { it.parameters.values }.all(Float::isFinite))

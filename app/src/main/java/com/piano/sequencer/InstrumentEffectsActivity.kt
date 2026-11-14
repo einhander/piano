@@ -87,6 +87,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     private var presetMessage: String? = null
     @Volatile private var presetBusy = false
     private var releaseDialog: AlertDialog? = null
+    private var vibratoDialog: AlertDialog? = null
     private var presetDialog: AlertDialog? = null
     private var presetMenu: AlertDialog? = null
     private var presetMenuContent: LinearLayout? = null
@@ -102,6 +103,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             service?.let { ccController.detach(this@InstrumentEffectsActivity, it) }
             service = null
             releaseDialog?.dismiss()
+            vibratoDialog?.dismiss()
             presetDialog?.dismiss()
             presetMenu?.dismiss()
             presetBusy = false
@@ -144,6 +146,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         if (ownsLearn) ccController.cancelLearn()
         learnDialog?.dismiss()
         releaseDialog?.dismiss()
+        vibratoDialog?.dismiss()
         presetDialog?.dismiss()
         presetMenu?.dismiss()
         presetDisabledViews.clear()
@@ -267,6 +270,11 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             com.piano.sequencer.ui.UiControlStyle.apply(this)
             text = "Release · $targetLabel"
             setOnClickListener { openReleaseEditor(channel) }
+        })
+        container.addView(Button(this).apply {
+            com.piano.sequencer.ui.UiControlStyle.apply(this)
+            text = "Vibrato · $targetLabel"
+            setOnClickListener { openVibratoEditor(channel) }
         })
         container.addView(Button(this).apply {
             com.piano.sequencer.ui.UiControlStyle.apply(this)
@@ -474,6 +482,171 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                         dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
                         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = false
                     }
+            }
+        }
+    }
+
+    private fun labelUpdatingListener(update: () -> Unit) = object : SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) { update() }
+        override fun onStartTrackingTouch(bar: SeekBar?) {}
+        override fun onStopTrackingTouch(bar: SeekBar?) {}
+    }
+
+    /**
+     * Per-channel vibrato editor: reads the current tuple from native (source of truth)
+     * on open and writes native + prefs on Apply with rollback on failure, mirroring the
+     * release editor. The full tuple is persisted, disabled state included, so
+     * re-enabling restores the last rate/depth/delay.
+     */
+    private fun openVibratoEditor(localChannel: Int) {
+        val setId = this.setId
+        val absolute = releaseChannel(setId, localChannel)
+        if (absolute < 0) {
+            AlertDialog.Builder(this).setMessage("Instrument set is missing or unsupported").setPositiveButton("OK", null).show()
+            return
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(8), dp(24), dp(24))
+        }
+        content.addView(TextView(this).apply {
+            text = getString(R.string.instrument_vibrato_caption)
+            textSize = 13f
+        })
+        val enabledSwitch = SwitchCompat(this).apply {
+            minimumHeight = dp(48)
+            text = "Enable vibrato"
+            isChecked = false
+            isEnabled = false
+            contentDescription = "Enable vibrato"
+        }
+        content.addView(enabledSwitch)
+        val locale = java.util.Locale.getDefault()
+        val rateParam = EffectParameter("rate", "Rate", EffectParameterValue(0f),
+            InstrumentVibratoPreferences.MIN_RATE_HZ, InstrumentVibratoPreferences.MAX_RATE_HZ,
+            InstrumentVibratoPreferences.DEFAULT_RATE_HZ, EffectParameterType.FLOAT, true)
+        val depthParam = EffectParameter("depth", "Depth", EffectParameterValue(0f),
+            InstrumentVibratoPreferences.MIN_DEPTH_CENTS, InstrumentVibratoPreferences.MAX_DEPTH_CENTS,
+            InstrumentVibratoPreferences.DEFAULT_DEPTH_CENTS, EffectParameterType.FLOAT, false)
+        val delayParam = EffectParameter("delay", "Delay", EffectParameterValue(0f),
+            InstrumentVibratoPreferences.MIN_DELAY_MS, InstrumentVibratoPreferences.MAX_DELAY_MS,
+            InstrumentVibratoPreferences.DEFAULT_DELAY_MS, EffectParameterType.FLOAT, false)
+        val rateValue = TextView(this).apply { textSize = 14f }
+        val rateSlider = SeekBar(this).apply { max = 1000; isEnabled = false; contentDescription = "Vibrato rate in hertz" }
+        val depthValue = TextView(this).apply { textSize = 14f }
+        val depthSlider = SeekBar(this).apply { max = 1000; isEnabled = false; contentDescription = "Vibrato depth in cents" }
+        val delayValue = TextView(this).apply { textSize = 14f }
+        val delaySlider = SeekBar(this).apply { max = 1000; isEnabled = false; contentDescription = "Vibrato delay in milliseconds" }
+        content.addView(rateValue)
+        content.addView(rateSlider, LinearLayout.LayoutParams(-1, dp(48)))
+        content.addView(depthValue)
+        content.addView(depthSlider, LinearLayout.LayoutParams(-1, dp(48)))
+        content.addView(delayValue)
+        content.addView(delaySlider, LinearLayout.LayoutParams(-1, dp(48)))
+        val status = TextView(this).apply {
+            textSize = 13f
+            setPadding(0, dp(12), 0, 0)
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        content.addView(status)
+        fun showRate() { rateValue.text = "Rate: " + String.format(locale, "%.2f Hz", instrumentParameterValue(rateParam, rateSlider.progress)) }
+        fun showDepth() { depthValue.text = "Depth: " + String.format(locale, "%.0f cents", instrumentParameterValue(depthParam, depthSlider.progress)) }
+        fun showDelay() { delayValue.text = "Delay: " + String.format(locale, "%.0f ms", instrumentParameterValue(delayParam, delaySlider.progress)) }
+        rateSlider.setOnSeekBarChangeListener(labelUpdatingListener { showRate() })
+        depthSlider.setOnSeekBarChangeListener(labelUpdatingListener { showDepth() })
+        delaySlider.setOnSeekBarChangeListener(labelUpdatingListener { showDelay() })
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Vibrato · $targetLabel")
+            .setView(content)
+            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Reset", null)
+            .setPositiveButton("Apply", null)
+            .create()
+        vibratoDialog = dialog
+        dialog.setOnDismissListener { if (vibratoDialog === dialog) vibratoDialog = null }
+        dialog.show()
+        fun alive() = !isFinishing && !isDestroyed && dialog.isShowing
+        var ready = false
+        fun busy(saving: Boolean) {
+            val usable = !saving && ready
+            enabledSwitch.isEnabled = usable
+            rateSlider.isEnabled = usable
+            depthSlider.isEnabled = usable
+            delaySlider.isEnabled = usable
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = !saving
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = !saving
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).isEnabled = !saving
+            dialog.setCancelable(!saving)
+            dialog.setCanceledOnTouchOutside(!saving)
+        }
+        fun apply(reset: Boolean) {
+            val target = InstrumentVibratoPreferences.Vibrato(
+                if (reset) InstrumentVibratoPreferences.DEFAULT_ENABLED else enabledSwitch.isChecked,
+                if (reset) InstrumentVibratoPreferences.DEFAULT_RATE_HZ else instrumentParameterValue(rateParam, rateSlider.progress),
+                if (reset) InstrumentVibratoPreferences.DEFAULT_DEPTH_CENTS else instrumentParameterValue(depthParam, depthSlider.progress),
+                if (reset) InstrumentVibratoPreferences.DEFAULT_DELAY_MS else instrumentParameterValue(delayParam, delaySlider.progress)
+            )
+            busy(true)
+            status.text = "Saving…"
+            worker.execute {
+                val error = runCatching {
+                    check(releaseChannel(setId, localChannel) == absolute) { "Instrument set changed or was removed. Reopen Vibrato." }
+                    val svc = service ?: error("Playback service is not connected")
+                    val current = svc.getChannelVibrato(absolute)
+                    check(current != null && current.size == 4 && current.all(Float::isFinite)) { "Could not read current vibrato" }
+                    val old = InstrumentVibratoPreferences.Vibrato(current[3] >= .5f, current[0], current[1], current[2])
+                    val prefs = getSharedPreferences("piano_prefs", MODE_PRIVATE)
+                    val hadKey = InstrumentVibratoPreferences.has(prefs, setId, localChannel)
+                    val savedOld = InstrumentVibratoPreferences.load(prefs, setId, localChannel)
+                    check(svc.setChannelVibrato(absolute, target.enabled, target.rateHz, target.depthCents, target.delayMs)) { "Could not apply vibrato; nothing saved" }
+                    val saved = runCatching { InstrumentVibratoPreferences.save(prefs, setId, localChannel, target) }.getOrDefault(false)
+                    if (!saved) {
+                        val rolledBack = runCatching {
+                            svc.setChannelVibrato(absolute, old.enabled, old.rateHz, old.depthCents, old.delayMs)
+                        }.getOrDefault(false)
+                        // SharedPreferences commit failure may still change its in-memory map.
+                        runCatching {
+                            if (hadKey) InstrumentVibratoPreferences.save(prefs, setId, localChannel, savedOld)
+                            else InstrumentVibratoPreferences.reset(prefs, setId, localChannel)
+                        }
+                        error(if (rolledBack) "Could not save vibrato; previous sound restored. Try again."
+                            else "Could not save or restore vibrato. Sound may differ from saved setting.")
+                    }
+                }.exceptionOrNull()?.message
+                runOnUiThread {
+                    if (!alive()) return@runOnUiThread
+                    busy(false)
+                    if (error == null) dialog.dismiss() else status.text = error
+                }
+            }
+        }
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { apply(false) }
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { apply(true) }
+        busy(true)
+        worker.execute {
+            val result = runCatching {
+                check(releaseChannel(setId, localChannel) == absolute) { "Instrument set changed or was removed" }
+                val svc = service ?: error("Playback service is not connected")
+                val v = svc.getChannelVibrato(absolute)
+                check(v != null && v.size == 4 && v.all(Float::isFinite)) { "Could not read vibrato" }
+                v
+            }
+            runOnUiThread {
+                if (!alive()) return@runOnUiThread
+                result.onSuccess { v ->
+                    ready = true
+                    busy(false)
+                    enabledSwitch.isChecked = v[3] >= .5f
+                    rateSlider.progress = instrumentParameterProgress(rateParam, v[0])
+                    depthSlider.progress = instrumentParameterProgress(depthParam, v[1])
+                    delaySlider.progress = instrumentParameterProgress(delayParam, v[2])
+                    showRate(); showDepth(); showDelay()
+                }.onFailure {
+                    busy(false)
+                    status.text = it.message
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+                    dialog.getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = false
+                }
             }
         }
     }
@@ -980,7 +1153,8 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         private val EFFECTS = instrumentInsertCardIds.zip(listOf(
             R.string.master_effects_eq, R.string.master_effects_compressor, R.string.master_effects_limiter,
             R.string.instrument_effects_chorus, R.string.instrument_effects_clipper,
-            R.string.instrument_effects_filter, R.string.instrument_effects_phaser, R.string.instrument_effects_flanger))
+            R.string.instrument_effects_filter, R.string.instrument_effects_phaser, R.string.instrument_effects_flanger,
+            R.string.instrument_effects_tremolo))
     }
 }
 

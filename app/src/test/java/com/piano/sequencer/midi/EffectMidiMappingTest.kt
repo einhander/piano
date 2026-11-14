@@ -14,7 +14,7 @@ class EffectMidiMappingTest {
         assertThrows(IllegalArgumentException::class.java) { global.copy(effectId = "fluidsynth.reverb", scope = EffectCcScope.INSTRUMENT) }
     }
     @Test fun newRackIdsAreWhitelistedAndUseVirtualEnabledTarget() {
-        val added = listOf("lsp.filter", "lsp.phaser", "lsp.flanger")
+        val added = listOf("lsp.filter", "lsp.phaser", "lsp.flanger", "piano.tremolo")
         assertTrue(EffectCcMapping.INSTRUMENT_EFFECT_IDS.containsAll(added))
         assertTrue(added.all { it in EffectStateRestore.instrumentIds })
         added.forEach { id ->

@@ -12,7 +12,7 @@ import com.piano.sequencer.midi.legacyInstrumentMigrationNeeded
 /** Shared preference restoration for a newly loaded master effect chain. */
 internal object EffectStateRestore {
     const val INSTRUMENT_VERSION = 1
-    internal val instrumentIds = listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper", "lsp.filter", "lsp.phaser", "lsp.flanger")
+    internal val instrumentIds = listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper", "lsp.filter", "lsp.phaser", "lsp.flanger", "piano.tremolo")
     private val sharedParamIds = mapOf("native.delay" to 0..5, "fluidsynth.reverb" to 0..4)
 
     /** Startup fan-out. Delay restore is independent of optional LSP rack availability. */
