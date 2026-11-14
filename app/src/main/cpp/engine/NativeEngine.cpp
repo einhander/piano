@@ -380,6 +380,12 @@ int NativeEngine::getChannelVolume(int channel) const {
 }
 bool NativeEngine::setChannelRelease(int channel, float value) { return mSynth && mSynth->setChannelRelease(channel, value); }
 float NativeEngine::getChannelRelease(int channel) const { return mSynth ? mSynth->getChannelRelease(channel) : 0.0f; }
+bool NativeEngine::setChannelVibrato(int channel, bool enabled, float rateHz, float depthCents, float delayMs) {
+    return mSynth && mSynth->setChannelVibrato(channel, enabled, rateHz, depthCents, delayMs);
+}
+bool NativeEngine::getChannelVibrato(int channel, bool& enabled, float& rateHz, float& depthCents, float& delayMs) const {
+    return mSynth ? mSynth->getChannelVibrato(channel, enabled, rateHz, depthCents, delayMs) : false;
+}
 
 bool NativeEngine::getChannelProgram(int channel, int& bank, int& program) const {
     return mSynth ? mSynth->getChannelProgram(channel, bank, program) : false;
@@ -1225,7 +1231,21 @@ int instrumentSlot(const char* id) {
 int NativeEngine::loadInstrumentEffectBundle(const char* path) {
     return path && piano::ladspa::LadspaRegistry::instance().open(path) ? piano::lsp::kMasterEffectCount : 0;
 }
-bool NativeEngine::setInstrumentRackEnabled(int c,bool on){if(!piano::isInstrumentChannel(c))return false;mInstrumentEffects.setRackEnabled(c,on);return true;}
+bool NativeEngine::setInstrumentRackEnabled(int c,bool on){
+    if(!piano::isInstrumentChannel(c))return false;
+    mInstrumentEffects.setRackEnabled(c,on);
+    // Keep the per-channel vibrato in step with its rack: turning the rack
+    // OFF mutes the generator offsets temporarily (the stored desired state
+    // is KEPT), turning it ON re-pushes the stored state — mirroring how the
+    // LSP slots in the same rack behave (rack disable mutes, state survives).
+    if(mSynth){
+        bool en=false; float r=5.0f,d=25.0f,dl=0.0f;
+        mSynth->getChannelVibrato(c,en,r,d,dl);
+        if(on) mSynth->pushChannelVibratoOffsets(c,en,r,d,dl);
+        else mSynth->pushChannelVibratoOffsets(c,false,r,d,dl);
+    }
+    return true;
+}
 bool NativeEngine::isInstrumentRackEnabled(int c)const{return piano::isInstrumentChannel(c)&&mInstrumentEffects.rackEnabled(c);}
 bool NativeEngine::setInstrumentEffectEnabled(int c,const char* id,bool on){int s=instrumentSlot(id);return s>=0&&mInstrumentEffects.setEffectEnabledChecked(c,s,on);}
 bool NativeEngine::isInstrumentEffectEnabled(int c,const char* id)const{int s=instrumentSlot(id);return s>=0&&mInstrumentEffects.effectEnabled(c,s);}

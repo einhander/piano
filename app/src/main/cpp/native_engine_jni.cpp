@@ -792,6 +792,32 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetChannelRelease(JNIEnv*, jcl
     return inst ? inst->getChannelRelease(channel) : 0.0f;
 }
 
+// Per-channel vibrato: enabled + rate (Hz) + depth (cents) + delay (ms).
+// Validated server-side (see FluidSynthEngine::setChannelVibrato):
+// channel 0..127, rate finite 0.5..12, depth finite 0..100, delay finite 0..2000.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetChannelVibrato(
+    JNIEnv*, jclass, jint channel, jboolean enabled, jfloat rateHz, jfloat depthCents, jfloat delayMs) {
+    auto* inst = NativeEngine::getInstance();
+    return inst && inst->setChannelVibrato(channel, enabled != JNI_FALSE, rateHz, depthCents, delayMs) ? JNI_TRUE : JNI_FALSE;
+}
+
+// Returns [rateHz, depthCents, delayMs, enabled?1:0] for the channel, or
+// nullptr when the engine is absent or the channel is out of range.
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetChannelVibrato(
+    JNIEnv* env, jclass, jint channel) {
+    auto* inst = NativeEngine::getInstance();
+    if (!inst) return nullptr;
+    bool enabled = false;
+    float rateHz = 0.0f, depthCents = 0.0f, delayMs = 0.0f;
+    if (!inst->getChannelVibrato(channel, enabled, rateHz, depthCents, delayMs)) return nullptr;
+    jfloat values[4] = {rateHz, depthCents, delayMs, enabled ? 1.0f : 0.0f};
+    jfloatArray out = env->NewFloatArray(4);
+    if (out) env->SetFloatArrayRegion(out, 0, 4, values);
+    return out;
+}
+
 JNIEXPORT void JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeSendMidiMessage(
     JNIEnv* env, jclass, jint status, jint data1, jint data2) {

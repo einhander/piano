@@ -34,6 +34,9 @@
 //   SET_INTERPS:       a=interp method (0/1/4)
 //   SET_CHANNEL_PROGRAM: a=channel, b=bank, f=program
 //   SET_REVERB_PARAMS: complete room-size/damping/width/level tuple
+//   SET_CHANNEL_VIBRATO: a=channel, b=enabled (0/1), f=rateHz,
+//                        vibratoDepth=depthCents, vibratoDelay=delayMs
+//                        (native SF2 generator units; disabled => all three 0)
 enum class SynthCmdType : uint8_t {
     NOTE_ON = 0,
     NOTE_OFF,
@@ -52,6 +55,9 @@ enum class SynthCmdType : uint8_t {
     SET_REVERB_PARAMS,
     RESET_CHANNEL_RANGE,
     SET_CHANNEL_RELEASE,
+    // Append-only: the queue is a stable ABI between workers and the audio
+    // thread; existing values must never be reordered.
+    SET_CHANNEL_VIBRATO,
 };
 
 struct SynthCmd {
@@ -64,6 +70,9 @@ struct SynthCmd {
     float reverbDamping;
     float reverbWidth;
     float reverbLevel;
+    // Vibrato value tuple for SET_CHANNEL_VIBRATO (native SF2 units: cents, ms).
+    float vibratoDepth;
+    float vibratoDelay;
 };
 inline bool makeResetChannelRangeCommand(int first, int count, int channelCount, SynthCmd& out) noexcept {
     if (channelCount <= 0 || first < 0 || count <= 0 || first > channelCount || count > channelCount - first) return false;

@@ -106,6 +106,9 @@ public:
     int getChannelVolume(int channel) const;
     bool setChannelRelease(int channel, float timecents);
     float getChannelRelease(int channel) const;
+    // Per-channel vibrato (FluidSynth generator offsets; see FluidSynthEngine).
+    bool setChannelVibrato(int channel, bool enabled, float rateHz, float depthCents, float delayMs);
+    bool getChannelVibrato(int channel, bool& enabled, float& rateHz, float& depthCents, float& delayMs) const;
 
     // Transport control
     void setBPM(double bpm);
