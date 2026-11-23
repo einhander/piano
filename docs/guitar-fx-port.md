@@ -516,3 +516,145 @@ re-run is race-free.
 - Looper lazy-allocates record buffers on first record → RT hazard for the
   adapter lane.
 - Tuner is hard-wired into the process path (always fed) — metering-only cost.
+
+## Verification (final pass — phase H)
+
+Independent re-verification on `feature/guitar-fx-0xfx` @ `c4061a1`,
+host x86-64, gcc 14.2, ASan+UBSan. All four host suites were rebuilt and
+re-run from the exact commands in their `tests/README.*.md` files (the
+object set mirrors the `fx0_engine` target; the four suites link only the
+vendored 0xFX subset — no FluidSynth, no Oboe). Environment:
+`JAVA_HOME=$HOME/tools/jdk-17.0.14+7`,
+`ANDROID_HOME=ANDROID_SDK_ROOT=$HOME/tools/android-sdk`.
+
+### Commands (per-suite, verbatim from READMEs)
+
+Each suite: `gcc -std=gnu99 -g -O1 -fPIC -fsanitize=address,undefined
+-fno-omit-frame-pointer` over the 11 internal modules + `core/log.c` +
+`deps/cJSON.c` + both kissfft sources, then the suite-specific `g++
+-std=c++17` link, then run the binary. Build/run dirs:
+`/tmp/opencode/cab-test`, `/tmp/opencode/guitar-rig-test` (effect +
+manager), `/tmp/opencode/guitar-swap`. Per-run logs captured under
+ignored `build/verification/`.
+
+| Suite | Command source | Exit | Result | Key numbers |
+|---|---|---|---|---|
+| `cab_segmented_convolution_test` | README.cab-segmented-convolution.md | 0 | ALL PASS (0) | A: 0.000000000 all 3 segment variants; A2 vs float64 GT: 0.000000060 all four segmentations; fft_size=8192, ir_len=2048; geometry `fft_size ≥ n+ir_len−1` PASS; B guards broken=0, non-finite=0 |
+| `guitar_rig_effect_test` | README.guitar-rig-effect.md | 0 | ALL PASS (0) | sine RMS=0.584957 finite; latency first=0 peak=63 declared=0; 4096+123 bit-exact vs 2-chunk ref; guards untouched; L→R bit-identical |
+| `guitar_rig_manager_test` | README.guitar-rig-manager.md | 0 | ALL PASS (0) | channel isolation, rack gate bit-identical, disable→dry no-touch, pending-before-instantiate, live-swap ACK/busy, reprepare keep, reset, oversized no-op |
+| `guitar_rig_swap_test` | README.guitar-rig-swap.md | 0 | ALL PASS (0) | I4 max\|Δ\| natural=0.433210 swap-run=0.450334 bound=0.483210 (margin 0.050); stress frames=38 706 128 busy-spins=27 994; I5 85 834 tail floats bit-exact (eps 0); T1 accepted=1500 rejected=4500; T2–T6 ok |
+
+Timing scenario T (`CAB_TIMING=1`, non-sanitized -O2) was not re-run in this
+ASan pass; the documented figures (≈0.094–0.098 ms/cab block, ~64× cost at
+n=64) stand from the prior measurement.
+
+### `./build.sh check`
+
+`./build.sh check` → exit 0.
+- `:app:assembleDebug` → **BUILD SUCCESSFUL** (debug APK; native `buildCMakeDebug`
+  executed for both `arm64-v8a` and `armeabi-v7a`).
+- `:app:testDebugUnitTest` → **BUILD SUCCESSFUL** (MIDI parser JVM suite; tasks
+  UP-TO-DATE — source unchanged since the green run on this branch).
+- `git diff --check` → exit 0 (no whitespace errors).
+
+### ABI artifacts (both ABIs, active CMake build dir `app/.cxx/Debug/3v2f1z26/`)
+
+- `arm64-v8a/libfx0_engine.a` and `armeabi-v7a/libfx0_engine.a` — static lib
+  built from `app/src/main/cpp/third_party/0xFX` (`fx0_engine` target,
+  `CMakeLists.txt:48`). Members: `engine,amp,biquad,noise_gate,tuner,pedals,
+  studio,cab_ir,mic_sim,preset,looper` + `core/log.c` + `deps/cJSON.c` + both
+  kissfft sources (15 TUs).
+- Defined public symbols (llvm-nm): `fx_engine_create`, `fx_engine_destroy`,
+  `fx_engine_process` (T) in both archives.
+- Object machine (llvm-readelf): `AArch64` (arm64-v8a), `ARM` (armeabi-v7a).
+- Adapter/manager objects present for **both** ABIs under
+  `CMakeFiles/native-lib.dir/effects/guitar/`: `GuitarRigEffect.cpp.o`,
+  `GuitarRigManager.cpp.o`, `GuitarRigParams.cpp.o`.
+
+## Known limitations (device-pending / out of scope for this host pass)
+
+- **Real Oboe cadence not exercised on host.** Every suite drives the engine
+  with synthetic, test-chosen block schedules; the production callback hands
+  `GuitarRigEffect` whatever frame count Oboe returns on-device. Segmentation
+  correctness is proven across arbitrary cuts, but real block-size jitter and
+  its effect on cadence are device-only.
+- **Audible click behaviour on real hardware not measured.** The swap-run
+  max|Δ| bound (0.450334 vs 0.483210) bounds the *numerical* discontinuity at
+  the commit boundary; whether it is audible through a real DAC/amplifier and
+  downstream LSP stages requires a listening check (see §Device acceptance).
+- **CPU / XRun on Poco F1 not measured.** Cab pays a full 8192-point FFT pair
+  per call regardless of frame count; the ~64× per-frame cost at small blocks
+  (README.cab §T) is a host measurement. Real-time headroom and XRun rate on
+  the target device remain unverified.
+- **TSan covered via `setarch $(uname -m) -R` on this host only** (plain TSan
+  aborts at startup on this kernel); that is the same constraint as the prior
+  swap hardening run. TSan was run in its earlier phase (T1 storm, race-free);
+  this final pass did not re-run the TSan build.
+- **LADSPA / lsp-plugins unchanged** by the Guitar FX work; its host/LSP status
+  is unaffected. (The IDE/clangd `fluidsynth.h`/`jni.h` LSP noise is a known
+  pre-existing include-path issue, not a build defect.)
+- **FluidSynth vibrato interplay n/a**: Guitar FX runs on its own channels via
+  `GuitarRigManager`; no interaction path with the FluidSynth vibrato was
+  introduced or tested.
+- **`fx0_engine` is opt-in per channel**; with no Guitar FX channel enabled the
+  engine is never instantiated, so a regression here cannot affect the pure
+  synth path.
+
+## Device acceptance checklist (mirrors user spec §15)
+
+Host-side items (§15 Native unit tests 1–9) are all green above; §15 item 10
+(no legacy regression) = `./build.sh check` passes and LSP host tests remain
+unrun here. The following Android items are **outstanding — must be checked
+on a real device** before the feature is accepted:
+
+- [ ] Debug APK installs and runs on `arm64-v8a` (and `armeabi-v7a` device if available).
+- [ ] With an SF2 loaded, clean notes play with Guitar FX off (no regression to the synth).
+- [ ] LSP EQ / Compressor / Limiter available and sound as before the Guitar FX work.
+- [ ] Enabling Guitar FX on channel 1 leaves every other channel unchanged.
+- [ ] Overdrive, Rodent, Mammoth are audibly distinct.
+- [ ] British Crunch / Regent 800 / Meridian High Gain switch and sound distinct.
+- [ ] Cabinet On/Off and all four cabinets change the spectrum.
+- [ ] Switching amp model / cabinet **during playback** causes no crash, no UAF,
+      no loud click; the transition limit (§10 / swap-run max|Δ| bound) holds.
+- [ ] On fractional/dense MIDI segments (fast events, arpeggio) there is no note
+      dropout and no Cabinet IR error.
+- [ ] Parameters persist across app restart; pre-existing LSP settings are kept.
+- [ ] MIDI CC Learn for Gain/Drive/Mix works and does not conflict with current
+      MIDI mappings.
+- [ ] No sustained silence, drop-outs, or XRun on the real device.
+- [ ] Sample-rate change 44.1↔48 kHz, stop/start, and SF2 swap do not hang.
+- [ ] If Guitar FX fails to build, the legacy synth keeps working (graceful).
+
+## Upstream provenance
+
+- URL: <https://github.com/averagenative/0xFX> · pinned SHA
+  `5b248779c96dce6e64d0ed29cfa598014dc4d3c4` (upstream 0xFX 1.3.0), copied
+  2026-11-23 into `app/src/main/cpp/third_party/0xFX/`.
+- **Patch list: one file.** The only modification to an upstream source file is
+  `patches/cab_ir-segmented-overlap-add.patch` applied to
+  `src/engine/internal/cab_ir.c` (rotate-then-add overlap carry; bit-identical
+  to stock for uniform 4096 blocks). **No other upstream file was edited.**
+  The dedupe (T6 / `mAppliedConfig`) and the live-swap protocol
+  (CURRENT/PENDING/RETIRED) are **Piano-side files under
+  `app/src/main/cpp/effects/guitar/`, not patches to any upstream file.**
+- Verified locally by the only diff the repo can compute (the upstream SHA is
+  not a git object in this checkout — 0xFX is a vendored copy, not a submodule):
+
+  ```
+  $ git diff 6a7514a...HEAD --stat -- app/src/main/cpp/third_party/0xFX
+   .../patches/cab_ir-segmented-overlap-add.patch   | 27 ++++++++++
+   .../third_party/0xFX/src/engine/internal/cab_ir.c | 17 +++++-----
+   2 files changed, 38 insertions(+), 6 deletions(-)
+  ```
+
+  (`6a7514a` is the import commit that added the byte-for-byte vendor copy; the
+  `...HEAD` window shows exactly the post-import edits — only `cab_ir.c` plus
+  the new patch record.)
+- **`git diff 5b248779...HEAD` was NOT run** in this checkout: `5b248779` is not
+  a local object and `/tmp/piano-0xfx-src` (a real upstream clone) was not
+  present, so a bit-for-bit diff against upstream is **NOT RE-VERIFIED** here —
+  it rests on the import-commit diff above plus the recorded patch.
+- Stale note: `third_party/0xFX/UPSTREAM.txt` still ends with
+  “Patches: none (unmodified copy)”; that footer predates the `cab_ir.c` patch
+  and is superseded by §Patches here and by the diff above. (Left untouched:
+  it is inside the vendored tree; docs-only scope.)
