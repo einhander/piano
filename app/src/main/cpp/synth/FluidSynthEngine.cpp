@@ -36,6 +36,18 @@ bool setDrumChannels(fluid_synth_t* synth) {
     }
     return true;
 }
+
+// Program the per-channel vibrato generator OFFSETS (native SF2 units:
+// GEN_VIBLFOFREQ = Hz, GEN_VIBLFODELAY = ms, GEN_VIBLFOTOPITCH = absolute
+// cents) on one synth slot. Zeroing the app's offsets when disabled leaves the
+// SoundFont's OWN vibrato untouched — fluid_synth_set_gen programs an offset,
+// not an absolute value, so this is the required disable semantics.
+void applyVibratoGen(fluid_synth_t* synth, int channel, float rateHz, float depthCents, float delayMs) {
+    if (!synth || !piano::isInstrumentChannel(channel)) return;
+    fluid_synth_set_gen(synth, channel, GEN_VIBLFOFREQ, rateHz);
+    fluid_synth_set_gen(synth, channel, GEN_VIBLFODELAY, delayMs);
+    fluid_synth_set_gen(synth, channel, GEN_VIBLFOTOPITCH, depthCents);
+}
 }
 
 // ── Lock-free design (see FluidSynthEngine.h for the full rationale) ─────────
@@ -48,6 +60,14 @@ FluidSynthEngine::FluidSynthEngine() {
         mChannelPrograms[i].store(-1, std::memory_order_relaxed);
         mChannelVolumes[i].store(100, std::memory_order_relaxed);
         mChannelRelease[i].store(0.0f, std::memory_order_relaxed);
+    }
+    // Vibrato defaults: disabled, 5 Hz, 25 cents, 0 ms (match the validated
+    // setChannelVibrato range so the stored triple is always legal).
+    for (int i = 0; i < kInstrumentChannelCount; i++) {
+        mVibratoEnabled[i].store(false, std::memory_order_relaxed);
+        mVibratoRate[i].store(5.0f, std::memory_order_relaxed);
+        mVibratoDepth[i].store(25.0f, std::memory_order_relaxed);
+        mVibratoDelay[i].store(0.0f, std::memory_order_relaxed);
     }
     for (int i = 0; i < kAudioGroups * 2; ++i) mRenderAudioPtrs[i] = mRenderAudio[i];
     mRenderFxPtrs[0] = mRenderFx[0];
@@ -211,6 +231,10 @@ void FluidSynthEngine::applyDesiredState(fluid_synth_t* synth) {
             fluid_synth_cc(synth, ch, 7, mChannelVolumes[ch].load(std::memory_order_relaxed));
         }
         fluid_synth_set_gen(synth, ch, GEN_VOLENVRELEASE, mChannelRelease[ch].load(std::memory_order_relaxed));
+        // Re-apply the per-channel vibrato offsets on the prepared slot too
+        // (CC121/panic clear the chan->gen[] offset cache; a fresh slot
+        // starts at zero).
+        applyStoredVibrato(synth, ch);
         int packed = mChannelPrograms[ch].load(std::memory_order_relaxed);
         if (packed >= 0) {
             fluid_synth_bank_select(synth, ch, packed >> 8);
@@ -291,6 +315,7 @@ int FluidSynthEngine::prepareInactiveSlot(const std::vector<std::string>& sfPath
     // producer then enqueues only after the new active slot is no longer skipped.
     std::unique_lock<std::mutex> reverbConfigLock(mReverbConfigMutex);
     std::unique_lock<std::mutex> releaseConfigLock(mReleaseConfigMutex);
+    std::unique_lock<std::mutex> vibratoConfigLock(mVibratoConfigMutex);
     // M2: apply the current desired state to the prepared slot BEFORE the flip
     // (so the new active slot has the correct settings when it becomes active).
     applyDesiredState(synth);
@@ -313,6 +338,7 @@ int FluidSynthEngine::prepareInactiveSlot(const std::vector<std::string>& sfPath
     mPreparing[target].store(false, std::memory_order_release);
     reverbConfigLock.unlock();
     releaseConfigLock.unlock();
+    vibratoConfigLock.unlock();
 
     return lastSfId;
 }
@@ -383,6 +409,7 @@ bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
     // restore and the slot flip (both slots are skipped while preparing).
     std::unique_lock<std::mutex> reverbConfigLock(mReverbConfigMutex);
     std::unique_lock<std::mutex> releaseConfigLock(mReleaseConfigMutex);
+    std::unique_lock<std::mutex> vibratoConfigLock(mVibratoConfigMutex);
     applyDesiredState(newSynth);
     if (mSynth[target]) delete_fluid_synth(mSynth[target]);
     if (mSettings[target]) delete_fluid_settings(mSettings[target]);
@@ -403,6 +430,7 @@ bool FluidSynthEngine::reprepareAtNewRate(int newRate, const std::vector<std::st
     mPreparing[target].store(false, std::memory_order_release);
     reverbConfigLock.unlock();
     releaseConfigLock.unlock();
+    vibratoConfigLock.unlock();
 
     // Update the sample rate.
     mSampleRate = newRate;
@@ -596,8 +624,13 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             break;
         case SynthCmdType::CC:
             fluid_synth_cc(synth, cmd.a, cmd.b, static_cast<int>(cmd.f));
-            if (cmd.b == 121 && cmd.a >= 0 && cmd.a < kInstrumentChannelCount)
+            // CC121 (ALL_CTRL_OFF) zeroes the channel's entire gen[] offset
+            // cache (fluid_channel_init_ctrl) — re-apply the app's stored
+            // per-channel offsets afterward, exactly as for release.
+            if (cmd.b == 121 && cmd.a >= 0 && cmd.a < kInstrumentChannelCount) {
                 fluid_synth_set_gen(synth, cmd.a, GEN_VOLENVRELEASE, mChannelRelease[cmd.a].load(std::memory_order_relaxed));
+                applyStoredVibrato(synth, cmd.a);
+            }
             if (cmd.a >= 0 && cmd.a < 16 && (cmd.b == 120 || cmd.b == 123))
                 mRecentNoteOnMask.fetch_and(static_cast<uint16_t>(~(1u << cmd.a)), std::memory_order_relaxed);
             if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount && (cmd.b == 120 || cmd.b == 123)) {
@@ -633,6 +666,17 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             std::memset(mActiveNotes, 0, sizeof(mActiveNotes));
             mActiveChannelMask.store(0, std::memory_order_relaxed);
             mRecentNoteOnMask.store(0, std::memory_order_relaxed);
+            // Re-apply the per-channel generator offsets after the panic CC
+            // storm. In this FluidSynth build CC123 falls through to a plain
+            // modulating CC (no channel reset) and 120/64 do not touch
+            // chan->gen[], so the cache is intact here; re-applying anyway
+            // makes panic idempotent across FluidSynth revisions where MIDI
+            // reset DOES clear the channel, and closes a pre-existing release
+            // gap at the same time.
+            for (int ch = 0; ch < kInstrumentChannelCount; ch++) {
+                fluid_synth_set_gen(synth, ch, GEN_VOLENVRELEASE, mChannelRelease[ch].load(std::memory_order_relaxed));
+                applyStoredVibrato(synth, ch);
+            }
             break;
         case SynthCmdType::RESET_CHANNEL_RANGE:
             if (cmd.a >= 0 && cmd.b >= 0 && cmd.a <= kInstrumentChannelCount && cmd.b <= kInstrumentChannelCount - cmd.a) {
@@ -652,6 +696,20 @@ void FluidSynthEngine::applyCommandToSynth(fluid_synth_t* synth, const SynthCmd&
             break;
         case SynthCmdType::SET_CHANNEL_RELEASE:
             if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount) fluid_synth_set_gen(synth, cmd.a, GEN_VOLENVRELEASE, cmd.f);
+            break;
+        case SynthCmdType::SET_CHANNEL_VIBRATO:
+            // Self-contained: the command carries the full (possibly
+            // disabled) value tuple. Deliberately NOT the stored state —
+            // setChannelVibrato stores the desired state only AFTER a
+            // successful push, so the audio thread may observe the command
+            // before the new values are stored.
+            if (cmd.a >= 0 && cmd.a < kInstrumentChannelCount) {
+                const bool on = cmd.b != 0;
+                applyVibratoGen(synth, cmd.a,
+                                on ? cmd.f : 0.0f,
+                                on ? cmd.vibratoDepth : 0.0f,
+                                on ? cmd.vibratoDelay : 0.0f);
+            }
             break;
         case SynthCmdType::SET_POLYPHONY:
             fluid_synth_set_polyphony(synth, cmd.a);
@@ -756,8 +814,13 @@ void FluidSynthEngine::processOneMidi(const MidiMessage& m) {
             break;
         case 0xB0: // Control Change
             fluid_synth_cc(synth, channel, m.data1, m.data2);
-            if (m.data1 == 121)
+            // Live CC121 zeroes the gen[] offset cache — re-apply the stored
+            // per-channel offsets (release + vibrato), mirroring the queued
+            // CC path.
+            if (m.data1 == 121) {
                 fluid_synth_set_gen(synth, channel, GEN_VOLENVRELEASE, mChannelRelease[channel].load(std::memory_order_relaxed));
+                applyStoredVibrato(synth, channel);
+            }
             // Preserve live CC7 as synth desired state across SF2/rate swaps.
             if (m.data1 == 7) mChannelVolumes[channel].store(m.data2, std::memory_order_relaxed);
             if (m.data1 == 120 || m.data1 == 123) {
@@ -912,7 +975,16 @@ bool FluidSynthEngine::resetChannelRange(int first, int count) {
     SynthCmd c;
     if (!makeResetChannelRangeCommand(first, count, kInstrumentChannelCount, c)) return false;
     if (!mCmdQueue.push(c)) return false;
-    for (int ch = first; ch < first + count; ++ch) mChannelRelease[ch].store(0.0f, std::memory_order_relaxed);
+    for (int ch = first; ch < first + count; ++ch) {
+        mChannelRelease[ch].store(0.0f, std::memory_order_relaxed);
+        // Zero the stored vibrato state too: disabled + documented defaults
+        // (the audio side's CC121 in RESET_CHANNEL_RANGE already cleared the
+        // live offsets; keep the desired state coherent with them).
+        mVibratoEnabled[ch].store(false, std::memory_order_relaxed);
+        mVibratoRate[ch].store(5.0f, std::memory_order_relaxed);
+        mVibratoDepth[ch].store(25.0f, std::memory_order_relaxed);
+        mVibratoDelay[ch].store(0.0f, std::memory_order_relaxed);
+    }
     return true;
 }
 
@@ -1131,6 +1203,77 @@ bool FluidSynthEngine::setChannelRelease(int channel, float timecents) {
 
 float FluidSynthEngine::getChannelRelease(int channel) const {
     return channel >= 0 && channel < kInstrumentChannelCount ? mChannelRelease[channel].load(std::memory_order_relaxed) : 0.0f;
+}
+
+void FluidSynthEngine::applyStoredVibrato(fluid_synth_t* synth, int channel) const {
+    if (!piano::isInstrumentChannel(channel)) return;
+    const bool on = mVibratoEnabled[channel].load(std::memory_order_relaxed);
+    // Disabled => zero the app's per-channel offsets; the SoundFont's own
+    // vibrato is preserved (set_gen programs an OFFSET, not an absolute).
+    const float rate = on ? mVibratoRate[channel].load(std::memory_order_relaxed) : 0.0f;
+    const float depth = on ? mVibratoDepth[channel].load(std::memory_order_relaxed) : 0.0f;
+    const float delay = on ? mVibratoDelay[channel].load(std::memory_order_relaxed) : 0.0f;
+    applyVibratoGen(synth, channel, rate, depth, delay);
+}
+
+bool FluidSynthEngine::setChannelVibrato(int channel, bool enabled, float rateHz, float depthCents, float delayMs) {
+    // Same validation style as setChannelRelease: finite values inside the
+    // documented operating ranges; invalid input rejects without touching the
+    // stored desired state.
+    if (!piano::isInstrumentChannel(channel) ||
+        !std::isfinite(rateHz) || rateHz < 0.5f || rateHz > 12.0f ||
+        !std::isfinite(depthCents) || depthCents < 0.0f || depthCents > 100.0f ||
+        !std::isfinite(delayMs) || delayMs < 0.0f || delayMs > 2000.0f) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mVibratoConfigMutex);
+    // Store-after-push, mirroring setChannelRelease: the desired state
+    // changes only once the command is guaranteed queued (or pre-init, where
+    // it is applied on the init/SF2-load path via applyDesiredState).
+    if (!mInitialized.load(std::memory_order_relaxed)) {
+        mVibratoEnabled[channel].store(enabled, std::memory_order_relaxed);
+        mVibratoRate[channel].store(rateHz, std::memory_order_relaxed);
+        mVibratoDepth[channel].store(depthCents, std::memory_order_relaxed);
+        mVibratoDelay[channel].store(delayMs, std::memory_order_relaxed);
+        return true;
+    }
+    SynthCmd c{};
+    c.type = SynthCmdType::SET_CHANNEL_VIBRATO;
+    c.a = channel;
+    c.b = enabled ? 1 : 0;
+    c.f = rateHz;
+    c.vibratoDepth = depthCents;
+    c.vibratoDelay = delayMs;
+    if (!mCmdQueue.push(c)) return false;
+    mVibratoEnabled[channel].store(enabled, std::memory_order_relaxed);
+    mVibratoRate[channel].store(rateHz, std::memory_order_relaxed);
+    mVibratoDepth[channel].store(depthCents, std::memory_order_relaxed);
+    mVibratoDelay[channel].store(delayMs, std::memory_order_relaxed);
+    return true;
+}
+
+bool FluidSynthEngine::getChannelVibrato(int channel, bool& enabled, float& rateHz, float& depthCents, float& delayMs) const {
+    if (!piano::isInstrumentChannel(channel)) return false;
+    enabled = mVibratoEnabled[channel].load(std::memory_order_acquire);
+    rateHz = mVibratoRate[channel].load(std::memory_order_relaxed);
+    depthCents = mVibratoDepth[channel].load(std::memory_order_relaxed);
+    delayMs = mVibratoDelay[channel].load(std::memory_order_relaxed);
+    return true;
+}
+
+bool FluidSynthEngine::pushChannelVibratoOffsets(int channel, bool enabled, float rateHz, float depthCents, float delayMs) {
+    // Enqueue-only: the stored desired state is deliberately left untouched
+    // (rack toggle = temporary mute/restore, not a parameter change).
+    if (!mInitialized.load(std::memory_order_relaxed) || !piano::isInstrumentChannel(channel)) return false;
+    if (!std::isfinite(rateHz) || !std::isfinite(depthCents) || !std::isfinite(delayMs)) return false;
+    SynthCmd c{};
+    c.type = SynthCmdType::SET_CHANNEL_VIBRATO;
+    c.a = channel;
+    c.b = enabled ? 1 : 0;
+    c.f = rateHz;
+    c.vibratoDepth = depthCents;
+    c.vibratoDelay = delayMs;
+    return mCmdQueue.push(c);
 }
 
 // ── Getters (worker thread — atomic reads of the desired settings) ───────────

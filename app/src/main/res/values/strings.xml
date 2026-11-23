@@ -5,6 +5,7 @@
     <string name="instrument_effects_filter">Filter</string>
     <string name="instrument_effects_phaser">Phaser</string>
     <string name="instrument_effects_flanger">Flanger</string>
+    <string name="instrument_effects_tremolo">Tremolo</string>
     <string name="multi_title">Multi &amp; channel volume</string>
     <string name="multi_enable">Enable Multi</string>
     <string name="multi_routing_hint">Multi adds checked channels to the keyboard’s own channel. Unchecking does not mute a channel.</string>
@@ -41,6 +42,10 @@
     <string name="settings_sf2_loaded_count">Loaded: %d SoundFont(s)</string>
     <string name="settings_polyphony_value">Polyphony: %d</string>
     <string name="settings_master_gain_value">Master Gain: %.2f</string>
+    <string name="settings_mp3_title">MP3 / PCM</string>
+    <string name="settings_pcm_budget_label">PCM resident budget</string>
+    <string name="settings_pcm_budget_value">PCM budget: %d MiB</string>
+    <string name="settings_pcm_budget_hint">Shared RAM cap for loaded MP3 pads and previews. New loads stop fitting at the cap; already-loaded pads are kept until replaced. The setting survives restarts.</string>
     <string name="settings_reverb_label">Reverb:</string>
     <string name="settings_chorus_label">Chorus:</string>
     <string name="settings_interps_label">Interpolation:</string>
@@ -158,4 +163,5 @@
     <string name="ui_show_cell_actions">Show cell actions</string>
     <string name="ui_hide_cell_actions">Hide cell actions</string>
     <string name="ui_multi_channel_short">Ch %1$d</string>
+    <string name="ui_mp3_help">MP3 plays at its original speed (no BPM stretching). Limit: 64 MiB decoded per file, about 5.8 minutes at 48 kHz stereo. Load errors appear in a message and App Log.</string>
 </resources>

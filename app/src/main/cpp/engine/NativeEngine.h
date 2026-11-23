@@ -30,6 +30,7 @@
 #include "effects/SharedStereoDelay.h"
 #include "effects/InstrumentDelayBank.h"
 #include "audio/Mp3AudioRecorder.h"
+#include "audio/PcmSlotPlayer.h"
 
 class OboeOutput;
 
@@ -105,6 +106,9 @@ public:
     int getChannelVolume(int channel) const;
     bool setChannelRelease(int channel, float timecents);
     float getChannelRelease(int channel) const;
+    // Per-channel vibrato (FluidSynth generator offsets; see FluidSynthEngine).
+    bool setChannelVibrato(int channel, bool enabled, float rateHz, float depthCents, float delayMs);
+    bool getChannelVibrato(int channel, bool& enabled, float& rateHz, float& depthCents, float& delayMs) const;
 
     // Transport control
     void setBPM(double bpm);
@@ -272,6 +276,22 @@ public:
     void setMidiFileSlotTempo(int slot, float bpm);
     MidiFilePlayer::SlotInfo getMidiFileSlotInfo(int slot) const;
     void freeMidiFileSlot(int slot);
+
+    // PCM slots are loaded and controlled from a worker thread.
+    bool loadPcmSlot(int slot, const int16_t* pcm, int64_t frames, int32_t rate,
+                     std::string* error, uint64_t uploadCapacity);
+    // Worker thread (blocking file I/O): adopt a normalized PCM cache file
+    // (PcmCacheHeader) without re-decode and without a Java heap copy.
+    bool loadPcmSlotFromDisk(int slot, const char* path, std::string* error);
+    // Worker thread: set the PCM resident budget in bytes (clamped by the
+    // caller to a sane range). Affects new admissions only.
+    void setPcmSlotResidentBudget(uint64_t bytes);
+    bool startPcmSlot(int slot, bool loop);
+    bool setPcmSlotLoop(int slot, bool loop);
+    bool stopPcmSlot(int slot);
+    bool freePcmSlot(int slot);
+    bool stopAllPcmSlots();
+    bool isPcmSlotPlaying(int slot) const;
 
     // Timing trace: frame position when LOAD/START were consumed
     int64_t getMidiFileSlotLoadFrame(int slot) const;
@@ -466,4 +486,5 @@ private:
 
     // MIDI file playback (16 pre-allocated slots)
     MidiFilePlayer mMidiFilePlayer;
+    PcmSlotPlayer mPcmSlotPlayer;
 };

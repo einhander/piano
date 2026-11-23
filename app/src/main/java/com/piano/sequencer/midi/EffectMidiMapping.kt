@@ -39,7 +39,7 @@ data class EffectCcMapping(
         (this.source == null || this.source == source) && (inputChannel == null || inputChannel == channel)
 
     companion object {
-        val INSTRUMENT_EFFECT_IDS = setOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper", "lsp.filter", "lsp.phaser", "lsp.flanger")
+        val INSTRUMENT_EFFECT_IDS = setOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper", "lsp.filter", "lsp.phaser", "lsp.flanger", "piano.tremolo")
         val GLOBAL_EFFECT_IDS = setOf("native.delay", "fluidsynth.reverb")
         val EFFECT_IDS = INSTRUMENT_EFFECT_IDS + GLOBAL_EFFECT_IDS
     }

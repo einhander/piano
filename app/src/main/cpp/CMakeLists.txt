@@ -51,6 +51,7 @@ add_library(native-lib SHARED
     audio/AudioClipPlayer.cpp
     audio/AudioDecoderBridge.cpp
     audio/Mp3AudioRecorder.cpp
+    audio/PcmSlotPlayer.cpp
     synth/FluidSynthEngine.cpp
     realtime/MidiQueue.cpp
     realtime/SynthCmdQueue.cpp

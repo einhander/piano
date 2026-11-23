@@ -26,7 +26,9 @@ inline constexpr int kSlotClipper = 4;
 inline constexpr int kSlotFilter = 5;
 inline constexpr int kSlotPhaser = 6;
 inline constexpr int kSlotFlanger = 7;
-inline constexpr int kInstrumentEffectCount = 8;
+// Custom (non-LSP) slot: pure C++ DSP, no LADSPA binding (see TremoloEffect.h).
+inline constexpr int kSlotTremolo = 8;
+inline constexpr int kInstrumentEffectCount = 9;
 inline constexpr int kInstrumentSlotChorus = 3;
 inline constexpr int kInstrumentSlotClipper = 4;
 inline constexpr int kInstrumentSlotFilter = 5;
@@ -42,6 +44,7 @@ inline constexpr const char* kIdClipper = "lsp.clipper";
 inline constexpr const char* kIdFilter = "lsp.filter";
 inline constexpr const char* kIdPhaser = "lsp.phaser";
 inline constexpr const char* kIdFlanger = "lsp.flanger";
+inline constexpr const char* kIdTremolo = "piano.tremolo";
 
 // ── LADSPA binding metadata ──
 //
@@ -142,6 +145,9 @@ enum ParamId : uint32_t {
     kParamFilterGain, kParamFilterWidth,
     kParamPhaserRate = 380, kParamPhaserDepth, kParamPhaserStages, kParamPhaserFeedback, kParamPhaserMix,
     kParamFlangerRate = 400, kParamFlangerDepth, kParamFlangerFeedback, kParamFlangerMix,
+
+    // Tremolo (custom DSP, slot 8; no LADSPA ports).
+    kParamTremoloRate = 410, kParamTremoloDepth,
 };
 
 // Per-effect LADSPA port index for a stable parameter id. Returns -1 if the
@@ -176,8 +182,10 @@ const char* paramDisplayName(uint32_t paramId);
 inline const LadspaBinding* bindingForSlot(int slot) {
     return (slot >= 0 && slot < kMasterEffectCount) ? &kBindings[slot] : nullptr;
 }
+// LADSPA-backed instrument slots only (chorus..flanger). The custom Tremolo
+// slot (kSlotTremolo) has no LADSPA binding and must NOT reach this table.
 inline const LadspaBinding* instrumentBindingForSlot(int slot) {
-    return slot >= kInstrumentSlotChorus && slot < kInstrumentEffectCount
+    return slot >= kInstrumentSlotChorus && slot < kSlotTremolo
         ? &kInstrumentBindings[slot - kInstrumentSlotChorus] : nullptr;
 }
 

@@ -1565,6 +1565,7 @@ class MainActivity : AppCompatActivity(), RuntimeDiagnosticsDelegate {
             restoreDelays = { EffectStateRestore.restoreInstrumentDelays(this, svc) }
         )
         InstrumentReleasePreferences.restoreStartup(this, svc)
+        InstrumentVibratoPreferences.restoreStartup(this, svc)
         if (count <= 0) {
             AppLogger.warn("MainActivity", "Instrument LSP effects unavailable; saved rack state retained")
         }
@@ -1618,6 +1619,11 @@ class MainActivity : AppCompatActivity(), RuntimeDiagnosticsDelegate {
         // 2. Restore polyphony + master gain.
         svc.setPolyphony(prefs.getInt("polyphony", 64).coerceIn(1, 2048))
         svc.setMasterGain(prefs.getFloat("master_gain", 1.0f))
+
+        // 2a. Restore the MP3 PCM resident budget (MiB, 64–512, default 256).
+        //     Applied before preloadAll (EngineBoot runs it right after this
+        //     call) so startup prewarming honours the saved cap.
+        svc.setPcmSlotResidentMb(prefs.getInt("pcm_budget_mb", 256).coerceIn(64, 512))
 
         // 2b. Restore reverb / chorus / interps / buffer size (Fix #10-12, #4).
         svc.setReverb(prefs.getInt("reverb", 1) != 0)

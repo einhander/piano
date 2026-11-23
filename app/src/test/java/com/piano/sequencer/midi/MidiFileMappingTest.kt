@@ -16,6 +16,57 @@ import java.util.concurrent.Executors
  */
 class MidiFileMappingTest {
 
+    @Test
+    fun assetTypeDefaultsToMidiForLegacyJsonAndRoundTripsMp3() {
+        val legacyJson = """[{"id":1,"note":60,"filePath":"old.mid"}]"""
+        val legacy = MidiFileMappingStore(SharedPrefsStub(mutableMapOf("midi_file_map" to legacyJson)))
+        assertEquals(ASSET_MIDI, legacy.get(1)?.assetType)
+        assertFalse(legacy.get(1)!!.isMp3)
+
+        val store = createStore()
+        val mp3 = SequencerCell(id = 2, note = 61, filePath = "song.mp3", loop = true, assetType = ASSET_MP3)
+        store.set(mp3)
+        assertEquals(mp3, store.get(2))
+        assertTrue(store.get(2)!!.isMp3)
+        assertFalse(mp3.copy(mode = MODE_CHORD).isMp3)
+    }
+
+    // ── Recording/import data-safety policies (pure, production-used) ──
+
+    @Test
+    fun replacementBlockedDuringRecordingAndPendingSave() {
+        assertTrue(replacementAllowed(inFlight = false, cellId = null, pendingSave = false))
+        assertFalse(replacementAllowed(inFlight = true, cellId = null, pendingSave = false))
+        assertFalse(replacementAllowed(inFlight = false, cellId = 3, pendingSave = false))
+        assertFalse(replacementAllowed(inFlight = false, cellId = null, pendingSave = true))
+        assertFalse(replacementAllowed(inFlight = true, cellId = 3, pendingSave = true))
+    }
+
+    @Test
+    fun recordTargetUnchangedDetectsMutatedOrMissingCell() {
+        val original = RecordCellIdentity(id = 5, filePath = "/a.mid", assetType = ASSET_MIDI, mode = MODE_FILE)
+        val cell = { SequencerCell(id = 5, filePath = "/a.mid", assetType = ASSET_MIDI, mode = MODE_FILE) }
+        assertTrue(recordTargetUnchanged(original, cell()))
+        // Same id but the file was swapped → reject
+        assertFalse(recordTargetUnchanged(original, cell().copy(filePath = "/b.mid")))
+        // Converted to MP3 mid-recording → reject
+        assertFalse(recordTargetUnchanged(original, cell().copy(assetType = ASSET_MP3)))
+        // Deleted while saving → reject
+        assertFalse(recordTargetUnchanged(original, null))
+        // No capture (defensive) → reject
+        assertFalse(recordTargetUnchanged(null, cell()))
+        // Different id reused for a new cell → reject
+        assertFalse(recordTargetUnchanged(original, cell().copy(id = 6)))
+    }
+
+    @Test
+    fun validRecordingCommitsEvenAfterTempoTweakKeepsMidiType() {
+        // A pure tempo/loop change must NOT defeat the save (identity tracks file/type/mode only).
+        val original = RecordCellIdentity(id = 5, filePath = "/a.mid", assetType = ASSET_MIDI, mode = MODE_FILE)
+        val tweaked = SequencerCell(id = 5, filePath = "/a.mid", assetType = ASSET_MIDI, mode = MODE_FILE, loop = true, tempo = 150.0)
+        assertTrue(recordTargetUnchanged(original, tweaked))
+    }
+
     // ── In-memory SharedPreferences stub ──
 
     private class InMemorySharedPreferences : android.content.SharedPreferences {

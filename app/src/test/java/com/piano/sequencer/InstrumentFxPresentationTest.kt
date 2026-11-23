@@ -8,8 +8,32 @@ import org.junit.Test
 class InstrumentFxPresentationTest {
     @Test fun insertCardOrderPreservesExistingSlotsAndAppendsNewStableIds() {
         assertEquals(listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper",
-            "lsp.filter", "lsp.phaser", "lsp.flanger"), instrumentInsertCardIds)
-        assertEquals(8, instrumentInsertCardIds.distinct().size)
+            "lsp.filter", "lsp.phaser", "lsp.flanger", "piano.tremolo"), instrumentInsertCardIds)
+        assertEquals(9, instrumentInsertCardIds.distinct().size)
+    }
+
+    @Test fun tremoloPresentationAddsUnitsWithoutChangingNativeMetadata() {
+        val rate = instrumentPresentation("piano.tremolo", EffectParameter("410", "Rate (Hz)", EffectParameterValue(5f),
+            0.1f, 20f, 5f, EffectParameterType.FLOAT, true))
+        assertEquals("Rate", rate.displayName)
+        assertEquals("Hz", rate.unit)
+        assertEquals(0.1f, rate.minimum, 0f)
+        assertEquals(20f, rate.maximum, 0f)
+        assertEquals(5f, rate.defaultValue, 0f)
+        assertTrue(rate.logarithmic)
+        val depth = instrumentPresentation("piano.tremolo", EffectParameter("411", "Depth (%)", EffectParameterValue(50f),
+            0f, 100f, 50f, EffectParameterType.FLOAT, false))
+        assertEquals("Depth", depth.displayName)
+        assertEquals("%", depth.unit)
+        assertEquals(null, depth.scale)
+        assertFalse(depth.logarithmic)
+        assertEquals(0f, depth.minimum, 0f)
+        assertEquals(100f, depth.maximum, 0f)
+        // Locale-independent: pin the leading digits and the unit suffix only.
+        assertTrue(instrumentValueLabel(rate, 5f).startsWith("5"))
+        assertTrue(instrumentValueLabel(rate, 5f).endsWith(" Hz"))
+        assertTrue(instrumentValueLabel(depth, 50f).startsWith("50"))
+        assertTrue(instrumentValueLabel(depth, 50f).endsWith(" %"))
     }
 
     private fun presented(effect: String, id: Int, raw: Float = .5f): EffectParameter =

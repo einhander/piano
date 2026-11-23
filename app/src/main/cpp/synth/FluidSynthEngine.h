@@ -198,6 +198,22 @@ public:
     bool setChannelRelease(int channel, float timecents);
     float getChannelRelease(int channel) const;
 
+    // Per-channel vibrato as FluidSynth per-channel generator OFFSETS on top of
+    // the SoundFont's own vibrato (GEN_VIBLFOFREQ=Hz, GEN_VIBLFODELAY=ms,
+    // GEN_VIBLFOTOPITCH=absolute cents — native units, passed straight through).
+    // Disabled == the app's offsets zeroed; the SF2's authored vibrato is
+    // untouched (offset semantics, not absolute). Worker-thread API: validates,
+    // enqueues, and stores the desired state exactly like setChannelRelease.
+    bool setChannelVibrato(int channel, bool enabled, float rateHz, float depthCents, float delayMs);
+    // Reads the stored desired state (atomics). Works before init() (the
+    // deferred state is readable) and on any thread.
+    bool getChannelVibrato(int channel, bool& enabled, float& rateHz, float& depthCents, float& delayMs) const;
+    // Push a vibrato command to the audio thread WITHOUT touching the stored
+    // desired state. Used by NativeEngine::setInstrumentRackEnabled for the
+    // temporary mute (rack off) / restore (rack on); the stored state always
+    // wins on the next setChannelVibrato call or slot swap.
+    bool pushChannelVibratoOffsets(int channel, bool enabled, float rateHz, float depthCents, float delayMs);
+
     // Get the bank + program currently set on a channel (worker thread).
     // Returns the desired (enqueued) value, which also tracks live MIDI
     // program changes (0xC0) applied by the audio thread.
@@ -263,6 +279,11 @@ private:
     static_assert(std::atomic<uint32_t>::is_always_lock_free, "RT diagnostics counter must be lock-free");
     // Apply a single control command to one synth slot.
     void applyCommandToSynth(fluid_synth_t* synth, const SynthCmd& cmd);
+    // Apply the stored desired vibrato state (zeroing the offsets when
+    // disabled) to one synth slot. Audio thread, inside the synth access
+    // region (applyCommandToSynth / the re-apply sites below); worker thread
+    // inside applyDesiredState.
+    void applyStoredVibrato(fluid_synth_t* synth, int channel) const;
     void refreshActiveChannelBit(int channel);
     bool setReverbParametersLocked(float roomSize, float damping, float width, float level);
     bool setReverbEnabledLocked(bool on);
@@ -348,6 +369,16 @@ private:
     std::atomic<int> mChannelPrograms[256];
     std::atomic<int> mChannelVolumes[256];
     std::atomic<float> mChannelRelease[256];
+    // Per-channel DESIRED vibrato (see setChannelVibrato). The audio thread
+    // re-applies it to BOTH synth slots after CC121 (queued or drained),
+    // panic, and every slot swap (applyDesiredState); mVibratoConfigMutex
+    // serializes producer stores against those slot-prep snapshots, exactly
+    // like mReleaseConfigMutex. Never taken in the audio callback.
+    mutable std::mutex mVibratoConfigMutex; // producers/slot-prep only; never audio callback
+    std::atomic<bool> mVibratoEnabled[128];
+    std::atomic<float> mVibratoRate[128];
+    std::atomic<float> mVibratoDepth[128];
+    std::atomic<float> mVibratoDelay[128];
 
     // Active voice count (audio thread refreshes after each render).
     std::atomic<int> mActiveVoices{0};

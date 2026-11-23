@@ -260,7 +260,9 @@ int main(int argc,char**argv) {
   assert(sizeof(lsp::kInstrumentBindings)/sizeof(lsp::kInstrumentBindings[0])==5);
   for(int slot=0;slot<lsp::kInstrumentEffectCount;++slot) {
    int count=0; assert(lsp::paramDescriptors(slot,count) && count>0);
-   if(slot>=3) assert(lsp::instrumentBindingForSlot(slot) && lsp::effectSlotForId(lsp::instrumentBindingForSlot(slot)->stableId)==slot);
+   // The custom Tremolo slot has no LADSPA binding; every other instrument
+   // slot round-trips binding <-> id.
+   if(slot>=3 && slot!=lsp::kSlotTremolo) assert(lsp::instrumentBindingForSlot(slot) && lsp::effectSlotForId(lsp::instrumentBindingForSlot(slot)->stableId)==slot);
   }
   assert(lsp::effectSlotForId(lsp::kIdChorus)==3 && lsp::effectSlotForId(lsp::kIdClipper)==4 &&
          lsp::effectSlotForId(lsp::kIdFilter)==5 && lsp::effectSlotForId(lsp::kIdPhaser)==6 && lsp::effectSlotForId(lsp::kIdFlanger)==7);
@@ -268,7 +270,7 @@ int main(int argc,char**argv) {
  assert(!missing.prepare(48000,256) && !missing.isAvailable());
  assert(argc==2); void* so=dlopen(argv[1],RTLD_NOW|RTLD_LOCAL); assert(so);
  auto get=reinterpret_cast<DescriptorFn>(dlsym(so,"ladspa_descriptor")); assert(get);
-  for(int slot=3;slot<lsp::kInstrumentEffectCount;++slot) { runPlugin(get,slot,44100.); runPlugin(get,slot,48000.); }
+  for(int slot=3;slot<lsp::kSlotTremolo;++slot) { runPlugin(get,slot,44100.); runPlugin(get,slot,48000.); }
   const int latency441=checkClipperNonlinearity(get,44100.);
   const int latency480=checkClipperNonlinearity(get,48000.);
   assert(latency441==22 && latency480==24);

@@ -28,6 +28,8 @@ import com.piano.sequencer.audio.ProfileActivation
 import com.piano.sequencer.audio.ManualStreamCloseState
 import com.piano.sequencer.audio.AudioDiagnosticSnapshot
 import com.piano.sequencer.audio.AudioStreamCloseResult
+import com.piano.sequencer.audio.Mp3Decoder
+import com.piano.sequencer.audio.Mp3PcmCache
 import com.piano.sequencer.audio.applyProfileBeforeFirstOpen
 import com.piano.sequencer.audio.allowAudioOpen
 import com.piano.sequencer.audio.markManualCloseBeforeNativeClose
@@ -140,6 +142,9 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
         fun setChannelVolume(channel: Int, value: Int): Boolean = this@PlaybackService.setChannelVolume(channel, value)
         fun setChannelRelease(channel: Int, value: Float): Boolean = this@PlaybackService.setChannelRelease(channel, value)
         fun getChannelRelease(channel: Int): Float = this@PlaybackService.getChannelRelease(channel)
+        fun setChannelVibrato(channel: Int, enabled: Boolean, rateHz: Float, depthCents: Float, delayMs: Float): Boolean =
+            this@PlaybackService.setChannelVibrato(channel, enabled, rateHz, depthCents, delayMs)
+        fun getChannelVibrato(channel: Int): FloatArray? = this@PlaybackService.getChannelVibrato(channel)
         fun getChannelVolume(channel: Int): Int = this@PlaybackService.getChannelVolume(channel)
 
         // Recording control
@@ -864,6 +869,9 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun setChannelVolume(channel: Int, value: Int): Boolean = NativeEngineBridge.nativeSetChannelVolume(channel, value.coerceIn(0, 127))
     fun setChannelRelease(channel: Int, value: Float): Boolean = NativeEngineBridge.nativeSetChannelRelease(channel, value)
     fun getChannelRelease(channel: Int): Float = NativeEngineBridge.nativeGetChannelRelease(channel)
+    fun setChannelVibrato(channel: Int, enabled: Boolean, rateHz: Float, depthCents: Float, delayMs: Float): Boolean =
+        NativeEngineBridge.nativeSetChannelVibrato(channel, enabled, rateHz, depthCents, delayMs)
+    fun getChannelVibrato(channel: Int): FloatArray? = NativeEngineBridge.nativeGetChannelVibrato(channel)
     fun getChannelVolume(channel: Int): Int = NativeEngineBridge.nativeGetChannelVolume(channel)
 
     // Recording control
@@ -892,6 +900,44 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     // loadMidiFileSlot does blocking file I/O + parse (tens of ms).
     fun loadMidiFileSlot(slot: Int, filePath: String, tempo: Double, loop: Boolean, selectedTracks: IntArray, trackChannels: IntArray, startAfterLoad: Boolean): Int =
         NativeEngineBridge.nativeLoadMidiFileSlot(slot, filePath, tempo, loop, selectedTracks, trackChannels, startAfterLoad)
+
+    /**
+     * Load a slot's PCM, preferring the on-disk cache written at import
+     * (native file read — no MediaCodec, no Java heap copy). Missing or stale
+     * cache falls back to a live decode and re-caches best-effort.
+     * Decode/upload are blocking; caller must use a worker thread.
+     */
+    fun loadMp3Slot(slot: Int, path: String): String? {
+        val mp3 = java.io.File(path)
+        val cached = Mp3PcmCache.candidateFor(filesDir, mp3)
+        if (cached != null) {
+            val err = NativeEngineBridge.nativeLoadPcmSlotFromDisk(slot, cached.absolutePath)
+            if (err == null) {
+                AppLogger.info("TRIG", "MP3 slot=$slot from PCM cache ${cached.name} (${cached.length() / (1024 * 1024)} MiB)")
+                return null
+            }
+            AppLogger.warn("TRIG", "MP3 slot=$slot PCM cache rejected ($err); decoding live")
+        }
+        return try {
+            val decoded = Mp3Decoder.decode(mp3)
+            NativeEngineBridge.nativeLoadPcmSlot(slot, decoded.pcm, decoded.frames, decoded.sourceRate)
+            if (Mp3PcmCache.write(filesDir, mp3, decoded) == null)
+                AppLogger.warn("TRIG", "MP3 slot=$slot decoded live; PCM cache not written")
+            null
+        } catch (e: Exception) { e.message ?: "MP3 decode failed" }
+    }
+    fun startPcmSlot(slot: Int, loop: Boolean): Boolean = NativeEngineBridge.nativeStartPcmSlot(slot, loop)
+    fun setPcmSlotLoop(slot: Int, loop: Boolean): Boolean = NativeEngineBridge.nativeSetPcmSlotLoop(slot, loop)
+    fun stopPcmSlot(slot: Int): Boolean = NativeEngineBridge.nativeStopPcmSlot(slot)
+    fun freePcmSlot(slot: Int): Boolean = NativeEngineBridge.nativeFreePcmSlot(slot)
+    fun stopAllPcmSlots(): Boolean = NativeEngineBridge.nativeStopAllPcmSlots()
+    fun isPcmSlotPlaying(slot: Int): Boolean = NativeEngineBridge.nativeIsPcmSlotPlaying(slot)
+    /**
+     * Set the PCM resident budget in MiB (worker thread). Affects new loads
+     * only: already-resident buffers are kept until replaced or freed.
+     */
+    fun setPcmSlotResidentMb(mb: Int): Boolean =
+        NativeEngineBridge.nativeSetPcmSlotResidentBudget(mb.toLong() * 1024L * 1024L)
 
     fun getMidiFileTracks(filePath: String): Array<String>? = NativeEngineBridge.nativeGetMidiFileTracks(filePath)
 

@@ -230,6 +230,12 @@ static const EffectParameterDescriptor kFlangerDescriptors[] = {
   {kParamFlangerFeedback,"feedback","Feedback",0,.891251f,0,false,false,false},
   {kParamFlangerMix,"mix","Mix (%)",0,100,100,false,false,false}
 };
+// Custom DSP slot: no LADSPA ports, so only the UI descriptor table exists
+// (paramTable()/paramPortFor() intentionally return nothing for kSlotTremolo).
+static const EffectParameterDescriptor kTremoloDescriptors[] = {
+  {kParamTremoloRate,"tremolo_rate_hz","Rate (Hz)",0.1f,20.0f,5.0f,true,false,false},
+  {kParamTremoloDepth,"tremolo_depth_pct","Depth (%)",0.0f,100.0f,50.0f,false,false,false}
+};
 
 const EffectParameterDescriptor* paramDescriptors(int slot, int& count) {
     switch (slot) {
@@ -247,6 +253,7 @@ const EffectParameterDescriptor* paramDescriptors(int slot, int& count) {
         case kSlotFilter: count=sizeof(kFilterDescriptors)/sizeof(kFilterDescriptors[0]); return kFilterDescriptors;
         case kSlotPhaser: count=sizeof(kPhaserDescriptors)/sizeof(kPhaserDescriptors[0]); return kPhaserDescriptors;
         case kSlotFlanger: count=sizeof(kFlangerDescriptors)/sizeof(kFlangerDescriptors[0]); return kFlangerDescriptors;
+        case kSlotTremolo: count=sizeof(kTremoloDescriptors)/sizeof(kTremoloDescriptors[0]); return kTremoloDescriptors;
         default:
             count = 0;
             return nullptr;
@@ -256,7 +263,8 @@ const EffectParameterDescriptor* paramDescriptors(int slot, int& count) {
 int effectSlotForId(const char* id) {
  if (!id) return -1;
  for (int i=0;i<kMasterEffectCount;++i) if (std::strcmp(id,kBindings[i].stableId)==0) return i;
- for (int i=0;i<kInstrumentEffectCount-kMasterEffectCount;++i) if (std::strcmp(id,kInstrumentBindings[i].stableId)==0) return i+kMasterEffectCount;
+ for (int i=0;i<kSlotTremolo-kInstrumentSlotChorus;++i) if (std::strcmp(id,kInstrumentBindings[i].stableId)==0) return i+kInstrumentSlotChorus;
+ if (std::strcmp(id,kIdTremolo)==0) return kSlotTremolo;
  return -1;
 }
 

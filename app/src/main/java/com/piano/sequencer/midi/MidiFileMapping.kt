@@ -20,6 +20,8 @@ const val SYSEX_KEY_BASE = Int.MIN_VALUE
 /** Cell modes: file playback (sequencer) vs chord (single held chord). */
 const val MODE_FILE = "FILE"
 const val MODE_CHORD = "CHORD"
+const val ASSET_MIDI = "MIDI"
+const val ASSET_MP3 = "MP3"
 const val TRACK_INSTRUMENT_MAIN = "MAIN"
 const val TRACK_INSTRUMENT_FILE = "FILE"
 
@@ -77,8 +79,11 @@ data class SequencerCell(
     val programNumber: Int? = null,
     val sysexBytes: List<Int> = emptyList(),
     val mode: String = MODE_FILE,           // "FILE" / "CHORD"
-    val chordNotes: List<ChordNote> = emptyList()
+    val chordNotes: List<ChordNote> = emptyList(),
+    val assetType: String = ASSET_MIDI
 ) {
+    /** MP3 is meaningful only for file-playback cells; chord behavior stays unchanged. */
+    val isMp3: Boolean get() = mode == MODE_FILE && assetType == ASSET_MP3
     /** True if the cell has a usable trigger (note >= 0, or a CC/pitch-bend trigger). */
     fun hasTrigger(): Boolean = when (triggerType) {
         TRIGGER_NOTE -> note in 0..127

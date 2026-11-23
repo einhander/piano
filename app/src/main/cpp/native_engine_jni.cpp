@@ -792,6 +792,32 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeGetChannelRelease(JNIEnv*, jcl
     return inst ? inst->getChannelRelease(channel) : 0.0f;
 }
 
+// Per-channel vibrato: enabled + rate (Hz) + depth (cents) + delay (ms).
+// Validated server-side (see FluidSynthEngine::setChannelVibrato):
+// channel 0..127, rate finite 0.5..12, depth finite 0..100, delay finite 0..2000.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeSetChannelVibrato(
+    JNIEnv*, jclass, jint channel, jboolean enabled, jfloat rateHz, jfloat depthCents, jfloat delayMs) {
+    auto* inst = NativeEngine::getInstance();
+    return inst && inst->setChannelVibrato(channel, enabled != JNI_FALSE, rateHz, depthCents, delayMs) ? JNI_TRUE : JNI_FALSE;
+}
+
+// Returns [rateHz, depthCents, delayMs, enabled?1:0] for the channel, or
+// nullptr when the engine is absent or the channel is out of range.
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_piano_sequencer_NativeEngineBridge_nativeGetChannelVibrato(
+    JNIEnv* env, jclass, jint channel) {
+    auto* inst = NativeEngine::getInstance();
+    if (!inst) return nullptr;
+    bool enabled = false;
+    float rateHz = 0.0f, depthCents = 0.0f, delayMs = 0.0f;
+    if (!inst->getChannelVibrato(channel, enabled, rateHz, depthCents, delayMs)) return nullptr;
+    jfloat values[4] = {rateHz, depthCents, delayMs, enabled ? 1.0f : 0.0f};
+    jfloatArray out = env->NewFloatArray(4);
+    if (out) env->SetFloatArrayRegion(out, 0, 4, values);
+    return out;
+}
+
 JNIEXPORT void JNICALL
 Java_com_piano_sequencer_NativeEngineBridge_nativeSendMidiMessage(
     JNIEnv* env, jclass, jint status, jint data1, jint data2) {
@@ -1431,6 +1457,56 @@ Java_com_piano_sequencer_NativeEngineBridge_nativeSetOverdub(
 }
 
 // ── MIDI file slot playback ──
+
+JNIEXPORT jstring JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeLoadPcmSlot(
+    JNIEnv* env, jclass, jint slot, jobject buffer, jlong frames, jint rate) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (!inst) return env->NewStringUTF("engine unavailable");
+    if (!buffer || frames <= 0 || frames > INT64_MAX / 4 || rate <= 0 || rate > 768000)
+        return env->NewStringUTF("invalid PCM dimensions or rate");
+    const jlong capacity = env->GetDirectBufferCapacity(buffer);
+    const jlong required = frames * 4;
+    if (capacity < required || capacity < 0) return env->NewStringUTF("PCM buffer is not direct or is too small");
+    auto* address = static_cast<const int16_t*>(env->GetDirectBufferAddress(buffer));
+    if (!address) return env->NewStringUTF("PCM buffer address unavailable");
+    std::string error;
+    if (!inst->loadPcmSlot(slot, address, frames, rate, &error, static_cast<uint64_t>(capacity)))
+        return env->NewStringUTF(error.c_str());
+    return nullptr;
+}
+JNIEXPORT jstring JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeLoadPcmSlotFromDisk(
+    JNIEnv* env, jclass, jint slot, jstring path) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (!inst) return env->NewStringUTF("engine unavailable");
+    if (!path) return env->NewStringUTF("missing PCM cache path");
+    const char* utf = env->GetStringUTFChars(path, nullptr);
+    if (!utf) return env->NewStringUTF("path conversion failed");
+    std::string error;
+    const bool ok = inst->loadPcmSlotFromDisk(slot, utf, &error);
+    env->ReleaseStringUTFChars(path, utf);
+    if (!ok) return env->NewStringUTF(error.c_str());
+    return nullptr;
+}
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeSetPcmSlotResidentBudget(
+    JNIEnv*, jclass, jlong bytes) {
+    NativeEngine* inst = NativeEngine::getInstance();
+    if (!inst) return false;
+    // Clamp to a sane range: below this the player is useless, above it
+    // the budget is dominated by a single asset (max 128 MiB) anyway.
+    const uint64_t lo = 16ull * 1024 * 1024;
+    const uint64_t hi = 1024ull * 1024 * 1024;
+    uint64_t v = (bytes < 0) ? 0 : static_cast<uint64_t>(bytes);
+    if (v < lo) v = lo;
+    if (v > hi) v = hi;
+    inst->setPcmSlotResidentBudget(v);
+    return true;
+}
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeStartPcmSlot(JNIEnv*, jclass, jint slot, jboolean loop) { auto* e=NativeEngine::getInstance(); return e && e->startPcmSlot(slot, loop); }
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeSetPcmSlotLoop(JNIEnv*, jclass, jint slot, jboolean loop) { auto* e=NativeEngine::getInstance(); return e && e->setPcmSlotLoop(slot, loop); }
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeStopPcmSlot(JNIEnv*, jclass, jint slot) { auto* e=NativeEngine::getInstance(); return e && e->stopPcmSlot(slot); }
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeFreePcmSlot(JNIEnv*, jclass, jint slot) { auto* e=NativeEngine::getInstance(); return e && e->freePcmSlot(slot); }
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeStopAllPcmSlots(JNIEnv*, jclass) { auto* e=NativeEngine::getInstance(); return e && e->stopAllPcmSlots(); }
+JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeIsPcmSlotPlaying(JNIEnv*, jclass, jint slot) { auto* e=NativeEngine::getInstance(); return e && e->isPcmSlotPlaying(slot); }
 // Worker-thread functions: call from a worker thread, never the main thread.
 // loadMidiFileSlot does blocking file I/O + parse (tens of ms).
 

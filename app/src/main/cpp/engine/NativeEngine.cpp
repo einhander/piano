@@ -380,6 +380,12 @@ int NativeEngine::getChannelVolume(int channel) const {
 }
 bool NativeEngine::setChannelRelease(int channel, float value) { return mSynth && mSynth->setChannelRelease(channel, value); }
 float NativeEngine::getChannelRelease(int channel) const { return mSynth ? mSynth->getChannelRelease(channel) : 0.0f; }
+bool NativeEngine::setChannelVibrato(int channel, bool enabled, float rateHz, float depthCents, float delayMs) {
+    return mSynth && mSynth->setChannelVibrato(channel, enabled, rateHz, depthCents, delayMs);
+}
+bool NativeEngine::getChannelVibrato(int channel, bool& enabled, float& rateHz, float& depthCents, float& delayMs) const {
+    return mSynth ? mSynth->getChannelVibrato(channel, enabled, rateHz, depthCents, delayMs) : false;
+}
 
 bool NativeEngine::getChannelProgram(int channel, int& bank, int& program) const {
     return mSynth ? mSynth->getChannelProgram(channel, bank, program) : false;
@@ -868,6 +874,8 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
     // Mix all tracks through Mixer into stereo output
     measureStageCpu(stageCpuNs[4], [&] { mMixer.mix(output, safeFrames); });
 
+    mPcmSlotPlayer.renderAdd(output, safeFrames, mPublishedSampleRate.load(std::memory_order_relaxed));
+
     // ── LSP master effect chain (EQ → Compressor → Limiter) ──
     // Inserted AFTER the Mixer and BEFORE the MasterBus, per plan Phase 6/17:
     //   Mixer → EQ → Compressor → Limiter → MasterBus → Oboe
@@ -1223,7 +1231,21 @@ int instrumentSlot(const char* id) {
 int NativeEngine::loadInstrumentEffectBundle(const char* path) {
     return path && piano::ladspa::LadspaRegistry::instance().open(path) ? piano::lsp::kMasterEffectCount : 0;
 }
-bool NativeEngine::setInstrumentRackEnabled(int c,bool on){if(!piano::isInstrumentChannel(c))return false;mInstrumentEffects.setRackEnabled(c,on);return true;}
+bool NativeEngine::setInstrumentRackEnabled(int c,bool on){
+    if(!piano::isInstrumentChannel(c))return false;
+    mInstrumentEffects.setRackEnabled(c,on);
+    // Keep the per-channel vibrato in step with its rack: turning the rack
+    // OFF mutes the generator offsets temporarily (the stored desired state
+    // is KEPT), turning it ON re-pushes the stored state — mirroring how the
+    // LSP slots in the same rack behave (rack disable mutes, state survives).
+    if(mSynth){
+        bool en=false; float r=5.0f,d=25.0f,dl=0.0f;
+        mSynth->getChannelVibrato(c,en,r,d,dl);
+        if(on) mSynth->pushChannelVibratoOffsets(c,en,r,d,dl);
+        else mSynth->pushChannelVibratoOffsets(c,false,r,d,dl);
+    }
+    return true;
+}
 bool NativeEngine::isInstrumentRackEnabled(int c)const{return piano::isInstrumentChannel(c)&&mInstrumentEffects.rackEnabled(c);}
 bool NativeEngine::setInstrumentEffectEnabled(int c,const char* id,bool on){int s=instrumentSlot(id);return s>=0&&mInstrumentEffects.setEffectEnabledChecked(c,s,on);}
 bool NativeEngine::isInstrumentEffectEnabled(int c,const char* id)const{int s=instrumentSlot(id);return s>=0&&mInstrumentEffects.effectEnabled(c,s);}
@@ -1492,6 +1514,26 @@ MidiFilePlayer::SlotInfo NativeEngine::getMidiFileSlotInfo(int slot) const {
 void NativeEngine::freeMidiFileSlot(int slot) {
     mMidiFilePlayer.freeSlot(slot);
 }
+
+bool NativeEngine::loadPcmSlot(int slot, const int16_t* pcm, int64_t frames, int32_t rate,
+                               std::string* error, uint64_t uploadCapacity) {
+    return mPcmSlotPlayer.load(slot, pcm, frames, rate, error, uploadCapacity);
+}
+
+bool NativeEngine::loadPcmSlotFromDisk(int slot, const char* path, std::string* error) {
+    return mPcmSlotPlayer.loadFromDisk(slot, path, error);
+}
+
+void NativeEngine::setPcmSlotResidentBudget(uint64_t bytes) {
+    mPcmSlotPlayer.setResidentBudget(bytes);
+}
+
+bool NativeEngine::startPcmSlot(int slot, bool loop) { return mPcmSlotPlayer.start(slot, loop); }
+bool NativeEngine::setPcmSlotLoop(int slot, bool loop) { return mPcmSlotPlayer.setLoop(slot, loop); }
+bool NativeEngine::stopPcmSlot(int slot) { return mPcmSlotPlayer.stop(slot); }
+bool NativeEngine::freePcmSlot(int slot) { return mPcmSlotPlayer.free(slot); }
+bool NativeEngine::stopAllPcmSlots() { return mPcmSlotPlayer.stopAll(); }
+bool NativeEngine::isPcmSlotPlaying(int slot) const { return mPcmSlotPlayer.isPlaying(slot); }
 
 int64_t NativeEngine::getMidiFileSlotLoadFrame(int slot) const {
     return mMidiFilePlayer.getLoadConsumeFrame(slot);

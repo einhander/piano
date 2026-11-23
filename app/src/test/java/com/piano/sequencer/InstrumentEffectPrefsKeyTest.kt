@@ -25,10 +25,12 @@ class InstrumentEffectPrefsKeyTest {
         assertNotEquals(EffectStateRestore.sharedParameterKey("native.delay", 0), EffectStateRestore.sharedParameterKey("fluidsynth.reverb", 0))
     }
     @Test fun newInsertKeysRemainV1AndOldMappingsRemainStable() {
-        assertEquals(listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper", "lsp.filter", "lsp.phaser", "lsp.flanger"), EffectStateRestore.instrumentIds)
+        assertEquals(listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper", "lsp.filter", "lsp.phaser", "lsp.flanger", "piano.tremolo"), EffectStateRestore.instrumentIds)
         assertEquals("instrument_fx_v1_enabled_2_lsp_filter", EffectStateRestore.instrumentEnabledKey(2, "lsp.filter"))
         assertEquals("instrument_fx_v1_param_2_lsp_flanger_400", EffectStateRestore.instrumentParamKey(2, "lsp.flanger", 400))
         assertEquals("instrument_fx_v1_enabled_2_lsp_chorus", EffectStateRestore.instrumentEnabledKey(2, "lsp.chorus"))
+        assertEquals("instrument_fx_v1_enabled_main_2_piano_tremolo", EffectStateRestore.instrumentIdentityEnabledKey("main", 2, "piano.tremolo"))
+        assertEquals("instrument_fx_v1_param_main_2_piano_tremolo_410", EffectStateRestore.instrumentIdentityParamKey("main", 2, "piano.tremolo", 410))
     }
     @Test fun newInsertPresentationAddsAuditedUnitsAndEnumsWithoutChangingNativeMetadata() {
         val filterType = EffectParameter("362", "Type", EffectParameterValue(0f), 0f, 10f, 0f, EffectParameterType.INTEGER, false)

@@ -143,6 +143,15 @@ object NativeEngineBridge {
     // NativeEngine
     external fun nativeInitEngine(sampleRate: Int, bufferSize: Int): Boolean
     external fun nativeLoadSoundFont(filePath: String): Int
+    external fun nativeLoadPcmSlot(slot: Int, pcm: java.nio.ByteBuffer, frames: Long, rate: Int): String?
+    external fun nativeLoadPcmSlotFromDisk(slot: Int, path: String): String?
+    external fun nativeSetPcmSlotResidentBudget(bytes: Long): Boolean
+    external fun nativeStartPcmSlot(slot: Int, loop: Boolean): Boolean
+    external fun nativeSetPcmSlotLoop(slot: Int, loop: Boolean): Boolean
+    external fun nativeStopPcmSlot(slot: Int): Boolean
+    external fun nativeFreePcmSlot(slot: Int): Boolean
+    external fun nativeStopAllPcmSlots(): Boolean
+    external fun nativeIsPcmSlotPlaying(slot: Int): Boolean
     external fun nativeNoteOn(channel: Int, note: Int, velocity: Int)
     external fun nativeNoteOff(channel: Int, note: Int)
     external fun nativePanic()
@@ -216,6 +225,8 @@ object NativeEngineBridge {
     external fun nativeGetChannelVolume(channel: Int): Int
     external fun nativeSetChannelRelease(channel: Int, timecents: Float): Boolean
     external fun nativeGetChannelRelease(channel: Int): Float
+    external fun nativeSetChannelVibrato(channel: Int, enabled: Boolean, rateHz: Float, depthCents: Float, delayMs: Float): Boolean
+    external fun nativeGetChannelVibrato(channel: Int): FloatArray?   // [rateHz, depthCents, delayMs, enabled?1:0]; null if no engine / bad channel
     external fun nativeSendMidiMessage(status: Int, data1: Int, data2: Int)
 
     /**
