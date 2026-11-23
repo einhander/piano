@@ -59,15 +59,22 @@ namespace guitar {
 //    cost at n=64 vs n=4096, tests/README.cab-segmented-convolution.md).
 //    The chunk loop therefore uses the LARGEST allowed chunks.
 //
-// ── Interim configuration policy (live model/cab swap lands next lane) ──
+// ── Configuration policy: SAFE LIVE SWAP (docs/guitar-fx-port.md §Live
+//    rig swap, spec §10) ────────────────────────────────────────────────────
 // kAmpModel (fx_amp_set_model → fx_amp_init memsets the amp state, amp.c:676)
 // and kCabType (fx_cab_generate_ir mallocs + re-plans the FFT, engine.c:514)
-// are NOT live-safe: on a published, prepared engine their changes are
-// recorded in the pending atomics, hasPendingConfig() is set, and the audio
-// rate path ignores them. The manager applies model/cab only at
-// instantiate/prepare/quiescence via applyConfigNow(). All other parameters
-// (drive type/gain/tone, amp gain/bass/mid/treble, cab engage, output, mix)
-// are live-safe as verified above.
+// are NOT live-safe: this object NEVER mutates its engines' model/IR while a
+// callback may be processing. GuitarRigManager implements the full two-phase
+// protocol instead: the worker thread BUILDS a complete replacement rig
+// (this class, fully prepared from the desired row) and hands it over a
+// single-slot atomic mailbox; the audio callback commits the swap at its own
+// top-of-step — ramping the old rig's wet to 0 (forced bypass through the
+// existing crossfade ramp at setRampSeconds(10 ms)), exchanging pointers,
+// retiring the old rig into the worker-owned RETIRED mailbox, then ramping
+// the new rig back in. applyConfigNow() below therefore stays a QUIESCENT
+// path only (prepare + manager quiescent apply). All other parameters (drive
+// type/gain/tone, amp gain/bass/mid/treble, cab engage, output, mix) are
+// live-safe as verified above and keep flowing through setParameter().
 //
 // ── Output/level normalization scheme ────────────────────────────────────
 // The engine's master volume (fx_engine_set_master_volume) and the amp-model
@@ -128,21 +135,55 @@ public:
 
     // Audio-thread advisory: the manager may skip deinterleave + process
     // entirely when this is false (effect fully ramped dry). Reads only the
-    // bypass atomic plus audio-thread-owned ramp state, so call it from the
-    // audio thread.
+    // bypass atomic, the swap-prime counter and audio-thread-owned ramp
+    // state, so call it from the audio thread. TRUE while priming (a
+    // just-committed rig must run its engines even at wet==0).
     bool wantsFrames() const noexcept {
-        return mWetApplied > 0.0f ||
+        return mPrimeFrames > 0 || mWetApplied > 0.0f ||
                (!mBypassed.load(std::memory_order_acquire) &&
                 mParams[kParamMix].load(std::memory_order_relaxed) > 0.0f);
     }
 
-    // Control/worker thread, only while the audio callback is quiescent (or
+    // Control/worker thread, ONLY while the audio callback is quiescent (or
     // before the engine is ever published): applies the current kAmpModel +
-    // kCabType/kCabEnabled atomics to both live engines and clears the
-    // pending flag. Returns false if the IR regeneration failed.
+    // kCabType/kCabEnabled atomics to both live engines. This is the
+    // quiescent reconciliation path (used by prepare() and by the manager's
+    // applyPendingConfig on the no-mailbox branch); live discrete changes go
+    // through the manager's two-phase swap, never through this call while
+    // audio runs. Returns false if the IR regeneration failed.
     bool applyConfigNow() noexcept;
-    bool hasPendingConfig() const noexcept {
-        return mConfigPending.load(std::memory_order_acquire);
+
+    // ── Live-swap support (driven by GuitarRigManager's per-channel state
+    //    machine from the audio callback; see the policy comment above) ────
+    // Audio-thread only: current applied wet level (crossfade ramp value).
+    float wetApplied() const noexcept { return mWetApplied; }
+    // Audio-thread only: the ramp target process() is chasing right now
+    // (0 while bypassed, else the mix param).
+    float wetTarget() const noexcept {
+        return mBypassed.load(std::memory_order_acquire)
+                   ? 0.0f
+                   : mParams[kParamMix].load(std::memory_order_relaxed);
+    }
+    // ── Silent engine priming after a live-swap commit ────────────────────
+    // A freshly prepared rig's internal state (amp DC-blocker / power-sag /
+    // gate / cab overlap buffers) starts at zero, so its FIRST blocks of a
+    // real signal contain an internal transient. Injecting that transient
+    // through the fading-in crossfade is the dominant measured click
+    // (host stress: max|Δ| 0.483 without priming). startPriming(n) (the
+    // manager's commit, audio thread) makes the next n frames of process()
+    // run the FULL wet signal path but emit the dry samples verbatim, so
+    // the transient happens inaudibly and the fade-in that follows is
+    // continuous. isPriming()/wantsFrames() keep the manager from skipping
+    // the (cheap, already-budgeted) DSP during the priming window.
+    void startPriming(int frames) noexcept { mPrimeFrames = frames; }
+    bool isPriming() const noexcept { return mPrimeFrames > 0; }
+    // Dry/wet ramp duration in seconds. Default is the 5 ms rack-wide click-
+    // fade convention; the manager raises it to 10 ms around a live rig swap
+    // (fade-out with the old rig, fade-in with the new one). Atomic so it may
+    // be stored from the callback state machine; read once per process()
+    // block.
+    void setRampSeconds(float seconds) noexcept {
+        mRampSeconds.store(seconds, std::memory_order_relaxed);
     }
 
 private:
@@ -166,7 +207,7 @@ private:
 
     std::atomic<bool> mBypassed{true}; // safe default, like TremoloEffect
     std::atomic<bool> mPrepared{false};
-    std::atomic<bool> mConfigPending{false};
+    std::atomic<float> mRampSeconds{0.005f}; // 5 ms convention; 10 ms during swap
 
     double mSampleRate = 0.0;
     int mMaxFrames = 0;
@@ -180,6 +221,8 @@ private:
     // contract: only touched from process()/wantsFrames() on the audio
     // thread.
     float mWetApplied = 0.0f;
+    // Audio-thread-owned silent-priming countdown (see startPriming()).
+    int mPrimeFrames = 0;
 };
 
 } // namespace guitar

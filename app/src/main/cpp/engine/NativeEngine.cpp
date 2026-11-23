@@ -183,6 +183,13 @@ void NativeEngine::shutdown() {
     }
 
     OboeOutput::setAudioFrameCallback(nullptr);
+    // Guitar live-swap protocol drain (spec §10.7): with the callback
+    // detached, retire/pending mailboxes hold worker-owned rigs the audio
+    // thread provably no longer processes — reclaim/destroy them inline so
+    // a shutdown during an in-flight swap leaves no leak and frees nothing
+    // the callback still fades (any lagging in-flight callback only ever
+    // touches mPublished, which drain leaves intact).
+    mGuitarEffects.drainAllQuiescent();
     unloadSoundFonts();
     mInitialized.store(false, std::memory_order_release);
 }

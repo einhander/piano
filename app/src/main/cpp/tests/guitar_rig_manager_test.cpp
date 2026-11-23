@@ -6,7 +6,8 @@
 //   2 rack OFF gates the rig: bus bit-identical
 //   3 disable ramps to dry, then the bus is NOT touched again (no FFT when off)
 //   4 param-before-instantiate honored (incl. model/cab before the rig is live)
-//   5 live model/cab interim rejection + quiescent applyPendingConfig
+//   5 live model/cab accepted as a live swap: busy while in flight, ACK via
+//     swapCount, RETIRED reclaim, quiescent apply (spec §10)
 //   6 enable/disable/reprepare cycles leak-free (ASan at exit), flags survive
 //   7 resetChannelRange clears state
 //   8 oversized frame count is a documented no-op
@@ -125,24 +126,48 @@ int main() {
         CHECK(mgr.getParameterChecked(5, kParamAmpModel, v) && v == 2.0f, "model honored at create");
         CHECK(!mgr.hasPendingConfig(5), "fresh rig applies config, nothing pending");
 
-        // ── 5: live model/cab rejection + quiescent apply ────────────────
-        CHECK(!mgr.setParameterChecked(5, kParamAmpModel, 1.0f), "live model change must reject");
-        CHECK(mgr.hasPendingConfig(5), "rejected change must stay pending");
+        // ── 5: live model/cab swap protocol (accept → busy → ack → reclaim)
+        // The ch5 rig is published but silent (gate closed → fully dry), so
+        // swaps commit on the immediate (dry-rig) path of the state machine.
+        BusSet bs5;
+        bs5.allocate(5, kFrames);
+        bs5.fillSine(5, kFrames, 0.3);
+        CHECK(mgr.setParameterChecked(5, kParamAmpModel, 1.0f), "live model change accepted (swap)");
+        CHECK(mgr.hasPendingConfig(5), "swap in flight until the callback commits");
+        CHECK(!mgr.setParameterChecked(5, kParamCabType, 0.0f), "second change while pending → busy false");
         CHECK(mgr.getParameterChecked(5, kParamAmpModel, v) && v == 1.0f, "desired value visible");
+        mgr.process(bs5.buses.data(), kFrames);   // dry rig: silent immediate commit
+        CHECK(mgr.swapCount(5) == 1, "silent swap committed on the processed block");
+        CHECK(!mgr.hasPendingConfig(5), "committed swap clears the armed + pending cells");
+        CHECK(mgr.reclaimRetired(5), "RETIRED rig reclaimed + new CURRENT adopted");
+        CHECK(mgr.setParameterChecked(5, kParamCabType, 0.0f), "after ack, next swap accepted");
         CHECK(mgr.setParameterChecked(5, kParamDriveGain, 0.2f), "live continuous param accepted");
-        CHECK(!mgr.setParameterChecked(5, kParamCabType, 0.0f), "live cab change must reject");
-        CHECK(mgr.hasPendingConfig(5), "cab change pending too");
-        CHECK(mgr.applyPendingConfig(5), "quiescent apply");
-        CHECK(!mgr.hasPendingConfig(5), "apply clears pending");
+        // The second commit must wait for the first commit's silent priming
+        // window + fade-in completion to return the channel to IDLE
+        // (protocol sequencing, spec §10.3): pump until the ACK moves.
+        int g5 = 0;
+        while (mgr.swapCount(5) < 2 && g5++ < 20) {
+            bs5.fillSine(5, kFrames, 0.3, g5 * kFrames);
+            mgr.process(bs5.buses.data(), kFrames);
+        }
+        CHECK(mgr.swapCount(5) == 2, "second swap committed");
+        CHECK(mgr.reclaimRetired(5), "second retired rig reclaimed");
         CHECK(mgr.getParameterChecked(5, kParamCabType, v) && v == 0.0f, "applied value reported");
+        CHECK(mgr.applyPendingConfig(5), "quiescent apply (empty mailbox) reconciles cleanly");
         CHECK(mgr.setParameterChecked(5, kParamMix, 0.5f), "mix is a live-safe parameter");
 
-        // ── 6: reprepare keeps published channels + values ───────────────
+        // ── 6: reprepare keeps published channels + values; mailboxes drain
+        CHECK(mgr.setParameterChecked(5, kParamAmpModel, 0.0f), "swap accepted before reprepare");
+        CHECK(mgr.swapCount(5) == 2, "not committed — reprepare gate comes first");
         CHECK(mgr.setEffectEnabledChecked(5, true), "enable ch5");
-        CHECK(mgr.reprepareQuiescent(44100.0, kFrames), "reprepare quiescent");
+        CHECK(mgr.reprepareQuiescent(44100.0, kFrames), "reprepare quiescent (drains PENDING: superseded by the staged rebuild)");
+        CHECK(mgr.swapCount(5) == 2, "drain does not fake a commit ACK");
+        CHECK(!mgr.hasPendingConfig(5), "reprepare left no swap in flight");
         CHECK(mgr.isAvailable(5), "ch5 rig survived reprepare");
         CHECK(mgr.effectEnabled(5), "enabled flag unchanged by reprepare");
         CHECK(mgr.getParameterChecked(5, kParamDriveGain, v) && v == 0.2f, "params survived reprepare");
+        CHECK(mgr.getParameterChecked(5, kParamAmpModel, v) && v == 0.0f, "pending model applied via rebuild");
+
         BusSet bs;
         bs.allocate(5, kFrames);
         bs.fillSine(5, kFrames, 0.3);

@@ -331,6 +331,97 @@ A dedicated segmented-convolution harness for the cabinet FFT path lives at
 `app/src/main/cpp/tests/cab_segmented_convolution_test.cpp` (commands and
 expected output: `app/src/main/cpp/tests/README.cab-segmented-convolution.md`).
 
+## Live rig swap (amp model / cabinet on running rigs — spec §10)
+
+`fx_amp_set_model` (`fx_amp_init` memsets amp state, amp.c:676) and
+`fx_cab_generate_ir` (malloc + FFT re-plan, engine.c:514) are NOT live-safe.
+Changing the amp model or cabinet of a running rig therefore goes through
+the two-phase SAFE LIVE SWAP protocol in `GuitarRigManager`; the interim
+"pending flag, apply at quiescence" policy of phase E is removed.
+
+### State table (per channel)
+
+| cell | state | producer (control/worker) | consumer (audio callback) |
+|---|---|---|---|
+| `mPublished[c]` | CURRENT | write only at instantiate/reprepare/quiescent apply (callback quiesced or lifetime-locked lifecycle ops) | sole runtime reader; takes new value ONLY at commit |
+| `mPending[c]` | PENDING | builds the rig fully off-thread, then **CAS nullptr→rig** (fails = busy; never overwrites) | peek-load at top of step; takes it ONLY at commit (`exchange(nullptr)`) |
+| `mRetired[c]` | RETIRED | takes it back ONLY under the quiescent contract (drain/apply); reclaims via `syncAdoptLocked` | stores the old CURRENT exactly once per swap, and only when observed empty; otherwise DEFERs the commit to the next block (spec §10.3 — never drops/overwrites) |
+| `mSwapArmed[c]` | in-flight flag | sets before publishing, clears at commit (and at quiescent drain) | clears at commit |
+| `mSwapCount[c]` | ACK counter | read only (`requestRigSwap` records/benchmarks it) | `+= 1` at commit, release-ordered |
+
+Callback phases (audio-thread-only `mSwapRuntime`, never read by the worker):
+IDLE → (wet rig) FADE_OUT → commit → FADE_IN → IDLE; dry rig commits
+immediately (silent). The fade-out rides the rig's own level-normalized
+dry/wet crossfade with the ramp duration raised to 10 ms
+(`GuitarRigEffect::setRampSeconds`); the fade-in uses the same 10 ms on the
+new rig; the 5 ms rack convention is restored at completion.
+
+### Ownership rules (the two proofs the protocol must satisfy)
+
+1. **No callback UAF (worker never frees what the callback processes):**
+   the callback reads ONLY `mPublished` at any given instant. The worker
+   deletes a rig only via `mEffects[c]` (its single owning cell) and only
+   when that cell's pointer is parked in `mRetired` (pointer-equality
+   guard in `syncAdoptLocked`): a retired rig is by construction NOT
+   `mPublished` (the commit's exchange moved the new rig in BEFORE the
+   old was parked… and the callback reloads the pointer immediately after
+   the state machine before touching it again — TSan verified: a fade
+   completion check once ran on the just-retired pointer, fixed by the
+   re-load). Un-taken `mPending` is worker-owned and is destroyed only
+   under the quiescent contract (`drainAllQuiescent`/`reprepareQuiescent`
+   /`resetChannelRange`/`~GuitarRigManager`), which excludes any callback.
+2. **No double-destroy / single-slot no-overwrite:** every rig has exactly
+   one owner at every instant: worker (owning `unique_ptr`, or the CAS
+   slot it just filled) → callback (only between commit-take and
+   commit-store, a straight line of code) → RETIRED cell → worker deletes
+   via `mEffects.reset(published)` (one delete of the old, adoption of the
+   new, same instant). Publish is CAS (a racing occupied slot is reported
+   busy, the fresh candidate destroyed by its still-owner). `mRetired` is
+   written by the callback exactly once per swap and only from a verified
+   IDLE-retired state; the defensive commit path stashes into an empty
+   retired cell instead of losing a rig. The destructor's `syncAdopt`
+   prevents the ASan-caught "last swapped rig never adopted" leak.
+
+### ACK + busy semantics (UI lane)
+
+`setParameterChecked(kAmpModel|kCabType)` and `requestRigConfig(ch,model,
+cab)` return **true = swap accepted** (it lands within ~2×10 ms of callback
+processing; `swapCount` will advance), **false = busy** (a previous swap
+unconsumed/unreclaimed — honest "применяется на лету" state, also
+`hasPendingConfig(ch)` / `swapArmed(ch)`) **or builder failure** (then
+`errorState(ch)` ≠ Ok, CURRENT keeps running with the old sound). The
+desired row (`mDesired`) is updated on every attempt, accepted or not, so
+a busy/rejected change is never lost; `reprepareQuiescent`/`applyPending
+Config` apply the latest desired config at quiescence (spec §10.4 quiescent
+apply: PENDING → CURRENT directly, old destroyed inline; a superseded
+PENDING is destroyed by the worker, never by the callback). Rack-off does
+not cancel a pending swap — the silent dry commit path lands it (spec
+§10.7). `NativeEngine::shutdown()` detaches the audio callback and then
+calls `mGuitarEffects.drainAllQuiescent()`.
+
+### Measured behavior (host x86-64, gcc 14.2, ASan+UBSan + TSan, 2026-11-23)
+
+`tests/guitar_rig_swap_test.cpp` (see `tests/README.guitar-rig-swap.md`):
+1000 model/cab alternations against an irregular-block callback thread
+(sizes 1,7,16,31,64,512,4096): zero UAF/double-free/leak, frames processed
+== frames fed, swapCount == accepted swaps, all outputs finite, busy
+rejection observed. Click bound: max consecutive-sample |Δ| of the L bus.
+The absolute max|Δ| of any rig here is its own hard-clip edge (measured
+≈0.41 per sample for the high-gain model at defaults — a property of the
+SOUND, not the swap), so the bound is defined against a no-swap sweep of
+EVERY timbre used by the swap schedule at settled full wet: swap-run
+max|Δ| must stay within natural-slew max + 0.05 (measured: see README
+numbers; the swap-run max equals a timbre's natural clip-edge slew, i.e.
+the swap boundaries add no measurable discontinuity). Silent priming
+(4 ms, dry-forced window after commit) exists because without it the
+fresh-engine DC/gate start-up transient enters the mid-ramp fade-in
+directly; the fade itself is per-sample linear at 10 ms each way.
+Determinism: identical swap schedule twice → bit-identical settled output
+(eps 0). TSan: caught one real protocol bug in this lane (fade-completion
+accessing the just-retired rig via a pre-commit pointer — fixed by
+re-loading CURRENT before any post-state-machine access); the post-fix
+re-run is race-free.
+
 ## Limitations / later phases
 
 - Adapter (RT-safe wrapper over the engine), JNI bridge, Kotlin UI: later phases.

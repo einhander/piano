@@ -10,7 +10,8 @@
 //   6  impulse latency                    → first non-zero frame == getLatencyFrames()
 //   7  L-only input                       → R channel bit-identical (independent engines)
 //   8  reprepare + teardown               → clean under ASan leak checks at exit
-//   9  model/cab live change              → pending flag, applied only via applyConfigNow()
+//   9  discrete params + swap-ramp API            → mirror-only live set,
+//      quiescent apply, 10 ms / 5 ms ramp durations measured through wetApplied
 
 #include "effects/guitar/GuitarRigEffect.h"
 
@@ -265,28 +266,41 @@ int main() {
         printf("[8] prepare/reprepare/teardown: ok\n");
     }
 
-    // ── 9: interim model/cab policy (pending flag, quiescent apply) ─────
+    // ── 9: live-swap support API — discrete params mirror only on a live
+    //     rig; engine apply stays quiescent; swap ramp duration is honored
     {
         GuitarRigEffect fx;
         if (!fx.prepare(kSr, kMaxFrames)) { CHECK(false, "prepare failed"); return 1; }
+        fx.setParameter(kParamMix, 0.5f);
         fx.setBypassed(false);
         Stereo s(1024);
         for (int i = 0; i < 1024; ++i) s.l[i] = s.r[i] = std::sin(0.03f * i) * 0.25f;
         warmUp(fx, 1024);
-        CHECK(!fx.hasPendingConfig(), "fresh prepare must leave config clean");
-        fx.setParameter(kParamAmpModel, 1.0f);   // Regent 800
-        fx.setParameter(kParamCabType, 0.0f);    // 1x12 open
-        CHECK(fx.hasPendingConfig(), "live model/cab change must mark pending");
-        fx.process(s.L(), s.R(), 1024);           // audio-rate change ignored
-        CHECK(fx.hasPendingConfig(), "process must not consume the pending flag");
-        CHECK(fx.applyConfigNow(), "quiescent apply must succeed");
-        CHECK(!fx.hasPendingConfig(), "apply must clear the pending flag");
-        fx.process(s.L(), s.R(), 1024);           // new config now audible
+        CHECK(fx.wetApplied() == 0.5f, "settled wet == mix target");
+        CHECK(fx.wetTarget() == 0.5f, "target == mix while engaged");
+        fx.setParameter(kParamAmpModel, 2.0f);   // Regent → Meridian: mirror only
+        CHECK(fx.getParameter(kParamAmpModel) == 2.0f, "live discrete set mirrors");
+        fx.process(s.L(), s.R(), 1024);          // audio-rate: engines untouched
         bool finite = true;
         for (int i = 0; i < 1024; ++i)
             if (!std::isfinite(s.l[i]) || !std::isfinite(s.r[i])) finite = false;
+        CHECK(finite, "rig finite while mirror ≠ engine (pre-apply)");
+        CHECK(fx.applyConfigNow(), "quiescent discrete apply must succeed");
+        fx.process(s.L(), s.R(), 1024);           // new config now in the engines
+        for (int i = 0; i < 1024; ++i)
+            if (!std::isfinite(s.l[i]) || !std::isfinite(s.r[i])) finite = false;
         CHECK(finite, "rig finite after config swap");
-        printf("[9] interim config policy: %s\n", finite ? "ok" : "FAILED");
+        // Swap-fade ramp duration: forced-dry ramp with the 10 ms swap ramp,
+        // then the 5 ms convention restored — measured through wetApplied().
+        fx.setBypassed(true);                     // target 0, wet starts at 0.5
+        fx.setRampSeconds(0.01f);                 // spec §10.3 swap fade-out
+        fx.process(s.L(), s.R(), 48);             // 48 frames @ 48 kHz = 1 ms
+        CHECK(std::fabs(fx.wetApplied() - 0.4f) < 1e-5f, "10 ms ramp: −0.1 in 1 ms");
+        fx.setRampSeconds(0.005f);                // rack convention restored
+        fx.process(s.L(), s.R(), 48);
+        CHECK(std::fabs(fx.wetApplied() - 0.2f) < 1e-5f, "5 ms ramp: −0.2 in 1 ms");
+        printf("[9] live-swap support API (mirror + quiescent apply + ramp): %s\n",
+               finite ? "ok" : "FAILED");
     }
 
     printf("%s (failures: %d)\n", gFailures == 0 ? "ALL PASS" : "FAILURES", gFailures);

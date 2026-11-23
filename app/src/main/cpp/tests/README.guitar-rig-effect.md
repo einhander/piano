@@ -24,9 +24,11 @@ independent mono `fx_engine_t` instances from the vendored 0xFX core
    bleed);
 8. repeated prepare/re-prepare (48k→44.1k) + destruction → ASan leak check
    clean at exit (explicit teardown via scope-exit destructors);
-9. interim config policy: live `amp_model`/`cab_type` changes set the
-   pending flag, are ignored at audio rate, and apply only via
-   `applyConfigNow()` (quiescent path).
+9. live-swap support API: discrete `amp_model`/`cab_type` on a live rig
+   mirror only (the manager's swap protocol owns engine reconfiguration);
+   `applyConfigNow()` reconciles the engines at quiescence; the swap ramp
+   duration is honored — forced-dry fade measured through `wetApplied()`:
+   −0.1 per 1 ms at `setRampSeconds(0.01)`, −0.2 per 1 ms at 0.005.
 
 ## Build + run (ASan + UBSan)
 
@@ -65,6 +67,8 @@ peak frame=63, declared=0`.
   `README.cab-segmented-convolution.md`), so the adapter chunking prefers
   the largest allowed chunks; segmentation itself is bit-exact thanks to
   the overlap-add patch.
-- Interim policy until the live-swap lane: amp model / cab changes are a
-  pending flag, never audio-rate (see the effect header comment for the
-  verified engine.c line references).
+- Live-swap policy (spec §10): amp model / cab changes on a live rig are
+  mirror-only on this object — `GuitarRigManager` builds a replacement rig
+  and swaps it via the CURRENT/PENDING/RETIRED mailbox protocol (see the
+  effect header comment + docs/guitar-fx-port.md §Live rig swap for the
+  verified engine.c line references and the two-phase fade).

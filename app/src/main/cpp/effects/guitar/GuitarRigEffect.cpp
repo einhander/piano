@@ -66,8 +66,9 @@ GuitarRigEffect::~GuitarRigEffect() {
 
 void GuitarRigEffect::releaseEngines() noexcept {
     mPrepared.store(false, std::memory_order_release);
-    mConfigPending.store(false, std::memory_order_release);
+    mRampSeconds.store(0.005f, std::memory_order_relaxed);
     mWetApplied = 0.0f;
+    mPrimeFrames = 0;
     if (mEngineL) { fx_engine_destroy(mEngineL); mEngineL = nullptr; }
     if (mEngineR) { fx_engine_destroy(mEngineR); mEngineR = nullptr; }
     for (int i = 0; i < 3; ++i) { mPedalL[i] = -1; mPedalR[i] = -1; }
@@ -122,8 +123,10 @@ bool GuitarRigEffect::prepare(double sampleRate, int maxFrames) {
     mMaxFrames = maxFrames;
     mChunkFrames = chunk;
     // Applies amp model + cab IR from the current atomics. A prepared rig
-    // always reflects the stored config; later discrete changes go through
-    // the pending flag (see class comment).
+    // always reflects the stored config; later discrete changes never touch
+    // this engine instance — the manager builds a REPLACEMENT rig and swaps
+    // it in via the live-swap protocol (docs/guitar-fx-port.md §Live rig
+    // swap).
     if (!applyConfigNow()) {
         releaseEngines();
         std::free(mDryL); std::free(mDryR);
@@ -172,7 +175,6 @@ bool GuitarRigEffect::applyConfigNow() noexcept {
         // planning failure.
         if (!fx_cab_generate_ir(eng, FX_CHAIN_DEFAULT, &cabParams)) return false;
     }
-    mConfigPending.store(false, std::memory_order_release);
     return true;
 }
 
@@ -212,8 +214,10 @@ void GuitarRigEffect::process(float* left, float* right, int numFrames) noexcept
     const bool bypassed = mBypassed.load(std::memory_order_acquire);
     const float target = bypassed ? 0.0f
                                   : mParams[kParamMix].load(std::memory_order_relaxed);
-    // Fully dry: leave the buffers bit-identical and pay no DSP/FFT at all.
-    if (mWetApplied == 0.0f && target == 0.0f) return;
+    // Fully dry: leave the buffers bit-identical and pay no DSP/FFT at all
+    // — EXCEPT while priming a live-swap rig (startPriming): the engines
+    // MUST see real signal during the silent window, output stays dry.
+    if (mWetApplied == 0.0f && target == 0.0f && mPrimeFrames == 0) return;
 
     applyLiveParams();
 
@@ -221,8 +225,10 @@ void GuitarRigEffect::process(float* left, float* right, int numFrames) noexcept
     // master volume and amp MASTER/VOLUME stay at upstream defaults — see
     // the class comment for why they are NOT repurposed.
     const float outGain = 2.0f * mParams[kParamOutput].load(std::memory_order_relaxed);
-    // 5 ms linear crossfade ramp (rack convention).
-    const float rampStep = static_cast<float>(1.0 / (mSampleRate * 0.005));
+    // 5 ms linear crossfade ramp (rack convention; the manager raises it to
+    // 10 ms for the two fades around a live rig swap — see setRampSeconds).
+    const float rampStep =
+        static_cast<float>(1.0 / (mSampleRate * mRampSeconds.load(std::memory_order_relaxed)));
     const int maxChunk = mChunkFrames > 0 ? mChunkFrames : kMaxEngineBlock;
 
     int off = 0;
@@ -251,6 +257,14 @@ void GuitarRigEffect::process(float* left, float* right, int numFrames) noexcept
             // upstream; the engine only sanitizes its internal bus).
             if (!std::isfinite(outL)) outL = 0.0f;
             if (!std::isfinite(outR)) outR = 0.0f;
+            if (mPrimeFrames > 0) {
+                // Silent priming window (see header): engines were run on
+                // real signal above; emit the untouched dry sample so the
+                // fresh-engine start-up transient never reaches the bus.
+                outL = dryL;
+                outR = dryR;
+                --mPrimeFrames;
+            }
             left[off + i] = outL;
             right[off + i] = outR;
         }
@@ -262,14 +276,12 @@ void GuitarRigEffect::setParameter(uint32_t parameterId, float value) noexcept {
     if (parameterId >= kParamCount) return;
     float v = value;
     if (!guitarRigClampParam(parameterId, v)) return; // non-finite ignored
-    const float old = mParams[parameterId].exchange(v, std::memory_order_acq_rel);
-    if (old == v) return;
-    // Interim policy: model/cab changes on a live prepared engine are NOT
-    // applied at audio rate; mark reconfigure pending for the manager.
-    if (mPrepared.load(std::memory_order_acquire) &&
-        (parameterId == kParamAmpModel || parameterId == kParamCabType)) {
-        mConfigPending.store(true, std::memory_order_release);
-    }
+    // Mirror update only. Continuous params reach the engines via
+    // applyLiveParams() in process(); the discrete kAmpModel/kCabType are
+    // NOT applied to a live engine at all — GuitarRigManager intercepts
+    // them and runs the two-phase live swap (rebuild + mailbox + callback
+    // commit). On a not-yet-prepared rig these values configure prepare().
+    mParams[parameterId].store(v, std::memory_order_relaxed);
 }
 
 float GuitarRigEffect::getParameter(uint32_t parameterId) const noexcept {

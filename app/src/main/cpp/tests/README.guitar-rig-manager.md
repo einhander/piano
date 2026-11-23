@@ -13,12 +13,15 @@ drives `GuitarRigEffect` rigs from the audio callback:
    channel's bus is not touched at all — no copy, no cabinet FFT;
 4. pending-before-instantiate: params (including amp model) set before the
    rig exists are honored at creation and leave no pending config;
-5. interim live policy: amp-model / cab-type changes on a live published
-   rig return `false` (UI surfaces it), stay pending, are ignored at audio
-   rate, and apply via `applyPendingConfig()` at quiescence; continuous
-   params (gain/mix/…) return `true`;
+5. live model/cab swap protocol (spec §10 / docs §Live rig swap): a change on
+   a live published rig returns `true` = ACCEPTED (lands on a processed
+   block), a second change while it is in flight returns `false` (busy),
+   the `swapCount` ACK advances after commit, `reclaimRetired()` frees the
+   RETIRED rig and adopts the new CURRENT, `applyPendingConfig()`
+   reconciles at quiescence; continuous params (gain/mix/…) return `true`;
 6. `reprepareQuiescent` (sample-rate path) keeps published channels,
-   enable flags and parameter values, rig audible and finite afterwards;
+   enable flags and parameter values, DRAINS an in-flight swap (the staged
+   rebuild carries the pending config), rig audible and finite afterwards;
    enable/disable cycles across scopes are leak-free under ASan at exit;
 7. `resetChannelRange(4,4)` clears rig/enabled/rack flags and restores the
    descriptor defaults for the removed range;
