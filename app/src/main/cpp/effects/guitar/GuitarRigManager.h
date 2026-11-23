@@ -55,8 +55,14 @@ namespace guitar {
 //                    clears at commit                                    requests
 //                    (and worker at                                    rejected
 //                    quiescent drain)
-//   mSwapCount[c]    callback +1 at commit         worker (ACK +       completed swaps,
-//                                                  busy tests)         monotonic ACK
+//   mSwapCount[c]    callback +1 at commit         worker (busy tests  COMMITTED swaps only —
+//                                                  + status            see ACK honesty below
+//                                                    reporting)
+//   mSuperseded[c]   worker +1 when an accepted    status reporting    accepted swaps the
+//                    PENDING is DESTROYED off-                        callback never committed:
+//                    thread (quiescent drain /                        superseded by a staged
+//                    staged rebuild, channel                        rebuild / torn down by
+//                    reset)                                           reset (config accounting)
 //
 // Audio-thread state machine (process(), top of the channel's step, runs for
 // EVERY published channel — gate open or not):
@@ -115,6 +121,42 @@ namespace guitar {
 //       apply/drain) additionally require callback quiescence, so an
 //       in-progress fade can never race a free.
 //
+// ACK honesty (supersedes the earlier "monotonic ACK" claim): an accepted
+// swap (requestRigSwap()/setParameterChecked(model|cab) == true) means the
+// config WILL land — either as a COMMIT (mSwapCount++ on a processed block)
+// or as a quiescent SUPERSEDE: reprepareQuiescent()/drainAllQuiescent()
+// destroy the un-taken PENDING and rebuild from the same mDesired row (the
+// staged rig already carries the pending config), resetChannelRange() tears
+// the channel down entirely. mSwapCount counts COMMITTED swaps only; every
+// destruction of an accepted-but-unconsumed PENDING bumps mSupersededCount
+// instead, and the packed rigStatus() below exposes both facts. A rejected
+// request never changes any counter and leaves CURRENT running untouched.
+//
+// ── LOCK-ORDER INVARIANT (audit EVERY lock-taking site against this) ─────
+// Exactly ONE acquisition order is permitted in this class:
+//
+//     mLifetimeMutex  →  mControlBusy        (release in reverse)
+//
+// Control sites (instantiate, reclaimRetired, requestRigSwap ×2 guarded
+// sections, rigStatus, mirrorToRig, the requestRigConfig/setParameterChecked
+// mirror blocks) take both NON-BLOCKING (try_lock + test_and_set) and
+// return false on contention — never block: these run on the UI thread, the
+// MIDI-CC controller thread and the preset-restore path without
+// marshalling (PlaybackService.kt). Quiescent/teardown sites
+// (reprepareQuiescent, drainAllQuiescent, applyPendingConfig,
+// resetChannelRange) hold the lifetime mutex FIRST and only then spin the
+// busy flag; with the single order a flag holder can never be waiting for
+// the mutex, so those spins cannot deadlock. (The previous inversion —
+// requestRigSwap/instantiate/reclaimRetired taking busy→lifetime against
+// the quiescent paths' lifetime→busy — let a UI swap request × audio-device
+// reopen interleave wedge both threads forever behind a closed gate.)
+// Const getters that dereference a published rig (getParameterChecked/
+// isAvailable/effectLatencyFrames) hold the lifetime mutex ONLY — safe
+// because every delete of a published rig happens under that mutex.
+// Control-busy is therefore implied by the mutex for mutual-exclusion
+// purposes; it is kept as the explicit control-section marker the status
+// code reports and to future-proof the invariant.
+//
 // Threading:
 //  - instantiate()/reprepareQuiescent()/resetChannelRange()/
 //    applyPendingConfig()/drainAllQuiescent() are control or worker-thread
@@ -132,12 +174,15 @@ namespace guitar {
 //    fade.)
 //  - kAmpModel/kCabType changes on a live rig call requestRigSwap(): true =
 //    swap accepted (it lands within ~20 ms of callback processing), false =
-//    busy (a previous swap still in flight) or the builder failed (errorState
-//    is set; CURRENT keeps running with its old model). The desired row is
+//    busy (a previous swap still in flight, or a control section is
+//    currently held — retry shortly) or the builder failed (errorState is
+//    set; CURRENT keeps running with its old model). The desired row is
 //    updated either way.
 class GuitarRigManager {
 public:
-    enum ErrorState : int { Ok = 0, AllocationFailed = 1, EngineInitFailed = 2 };
+    // ErrorState codes. BadChannel is returned by errorState() for an
+    // invalid channel id — previously mislabeled AllocationFailed.
+    enum ErrorState : int { Ok = 0, AllocationFailed = 1, EngineInitFailed = 2, BadChannel = 3 };
 
     static constexpr int kChannels = piano::kInstrumentChannelCount;
 
@@ -200,12 +245,16 @@ public:
     // ── Live-swap control surface ───────────────────────────────────────────
     // Worker thread. Serialize a rebuild of the channel's rig from the
     // current mDesired row (amp model + cab + all live params + fresh IR)
-    // and hand it to the callback through the PENDING mailbox. Returns true
-    // = swap accepted (lands on a processed audio block, ~10 ms out/in
+    // and hand it to the callback through the PENDING mailbox. The candidate
+    // is built OFF the control guards (only the reclaim/busy-check and the
+    // publish take them, in the single permitted order) so a long IR build
+    // never stalls the global control path / other channels' knobs. Returns
+    // true = swap accepted (lands on a processed audio block, ~10 ms out/in
     // fades). false = busy (a previous swap not yet consumed AND reclaimed,
-    // or still armed), control-busy, builder failed (errorState set, CURRENT
-    // untouched), or the channel has no published rig (the desired row is
-    // simply honored at the next instantiate — nothing to swap).
+    // or still armed), control-busy (retry shortly), builder failed
+    // (errorState set, CURRENT untouched), or the channel has no published
+    // rig (the desired row is simply honored at the next instantiate —
+    // nothing to swap).
     bool requestRigSwap(int channel);
     // Explicit two-discrete-param form of the same operation (spec §10.2).
     bool requestRigConfig(int channel, int ampModel, int cabType);
@@ -218,13 +267,53 @@ public:
     // lane needs no separate call; exposed for tests/inspection.
     bool reclaimRetired(int channel);
 
-    // Monotonic completed-swap counter for the channel — the ACK of the swap
-    // protocol. Callback bumps at commit.
+    // Monotonic completed-swap counter for the channel — the COMMIT ACK of
+    // the swap protocol (commits ONLY; see ACK honesty in the class doc).
+    // Callback bumps at commit; superseded accepts bump supersededCount().
     uint64_t swapCount(int channel) const noexcept;
+    // Monotonic count of accepted swaps destroyed off-thread by a quiescent
+    // drain (config lands via the staged rebuild) or a channel reset. The
+    // honest counterpart of swapCount for the "accepted ⇒ lands" contract.
+    uint64_t supersededCount(int channel) const noexcept;
     // Swap in flight: PENDING unconsumed OR the request still armed. The UI
     // lane reports "применяется на лету / busy" honestly from this.
     bool hasPendingConfig(int channel) const noexcept;
     bool swapArmed(int channel) const noexcept;
+
+    // ── Control-status surface (JNI nativeGetGuitarRigStatus, spec §10) ───
+    // Honest per-channel swap status for the UI lane. Messaging contract
+    // (docs/guitar-fx-port.md §Live rig swap — Status codes, phase-G UI):
+    //   kStatusBusyControl / kStatusBusySwapInFlight → "busy, retry shortly"
+    //   kStatusBuildFailed / kStatusAllocationFailed → "failed, previous
+    //                                                 sound retained"
+    //   kStatusOk + pending flag                   → "applying (~30 ms)"
+    //   kStatusBadChannel                          → invalid channel / non-
+    //                                                 guitar.rig effect id
+    enum RigStatus : int {
+        kStatusOk = 0,               // settled: no swap in flight, no sticky error
+        kStatusBusySwapInFlight = 1, // armed/pending/retired — retry shortly
+        kStatusBusyControl = 2,      // a control section holds the guards
+        kStatusBuildFailed = 3,      // EngineInitFailed: previous sound retained
+        kStatusAllocationFailed = 4, // builder allocation failure
+        kStatusBadChannel = 5,       // invalid channel id / wrong effect id
+    };
+    // Packed status for the single-int JNI surface: bits 0–3 = RigStatus
+    // code, bits 4–31 = supersededCount saturated to 0x0FFFFFFF. Opportunistic
+    // RETIRED reclaim (worker-side recovery path, see class doc) runs first
+    // when the control guards are free.
+    int rigStatus(int channel);
+    int rigStatus(int channel, uint64_t& supersededOut);
+    static constexpr int kRigStatusSupersededMask = 0x0FFFFFFF;
+    static constexpr int packRigStatus(int code, uint64_t superseded) noexcept {
+        const uint64_t sat = superseded > static_cast<uint64_t>(kRigStatusSupersededMask)
+                                 ? static_cast<uint64_t>(kRigStatusSupersededMask)
+                                 : superseded;
+        return (static_cast<int>(sat) << 4) | (code & 0xF);
+    }
+    static constexpr int decodeRigStatusCode(int packed) noexcept { return packed & 0xF; }
+    static constexpr int decodeRigStatusSuperseded(int packed) noexcept {
+        return static_cast<int>(static_cast<unsigned int>(packed) >> 4);
+    }
 
     // Control/worker thread, ONLY under the quiescent contract (audio
     // stopped/never started — the same gate reprepareQuiescent uses): apply
@@ -251,8 +340,21 @@ public:
 
     // TEST SEAM ONLY (host tests): fail the next rig build (simulates an
     // engine/IR allocation failure so the CURRENT-intact + errorState path
-    // is exercised). Never touched by production code.
-    void setFailNextBuildForTesting(bool fail) noexcept { mFailNextBuild = fail; }
+    // is exercised). Default failure code AllocationFailed. Never touched by
+    // production code.
+    void setFailNextBuildForTesting(bool fail) noexcept {
+        mFailNextBuildCode = fail ? AllocationFailed : -1;
+    }
+    // TEST SEAM ONLY: fail the next rig build with an explicit ErrorState
+    // code (e.g. EngineInitFailed → rigStatus kStatusBuildFailed).
+    void setFailNextBuildCodeForTesting(int code) noexcept { mFailNextBuildCode = code; }
+    // TEST SEAM ONLY: take/release the control guards (lifetime mutex → busy
+    // flag, the single permitted order) from the calling thread so the
+    // BusyControl status code and control-busy rejections are observably
+    // deterministic. Callers on OTHER threads may query while held; querying
+    // from the holding thread itself is undefined (non-recursive mutex).
+    bool tryLockControlForTesting() noexcept;
+    void unlockControlForTesting() noexcept;
 
 private:
     enum SwapPhase : int { kPhaseIdle = 0, kPhaseFadeOut = 1, kPhaseFadeIn = 2 };
@@ -262,10 +364,11 @@ private:
         int phase = kPhaseIdle;
     };
 
-    // Worker paths below. Caller holds lifetime mutex (+ control-busy flag).
-    // Restores the invariant "mEffects[c] owns the published rig": deletes a
-    // RETIRED rig only when it pointer-equals mEffects[c], then adopts
-    // mPublished[c] into mEffects[c]. True if retired was reclaimed.
+    // Worker paths below. Caller holds the lifetime mutex AND the control-busy
+    // flag (single order, see class doc). Restores the invariant
+    // "mEffects[c] owns the published rig": deletes a RETIRED rig only when it
+    // pointer-equals mEffects[c], then adopts mPublished[c] into mEffects[c].
+    // True if retired was reclaimed.
     bool syncAdoptLocked(int channel);
     // Quiescent contract required: sync + destroy an un-taken PENDING +
     // disarm. Used by reprepare/reset/drain/applyPendingConfig.
@@ -273,8 +376,25 @@ private:
     // Callback thread: the commit of the swap protocol (state table above).
     void commitSwapAudio(int channel) noexcept;
 
-    // Caller must hold control-busy + lifetime (reprepare/reset).
+    // Caller must hold control guards (lifetime mutex + busy, single order).
     void releaseChannelLocked(int channel) noexcept;
+
+    // Non-blocking control-section helpers in the ONE permitted order
+    // (lifetime mutex → busy flag). tryLockControl false = contended.
+    bool tryLockControl() noexcept;
+    void unlockControl() noexcept;
+    // Best-effort guarded mirror of a desired value onto the published rig
+    // (FIX C1: the dereference MUST hold the control guards — every delete
+    // site of a published rig holds them too). Takes/releases the guards
+    // itself; safe to call with nothing held.
+    void mirrorToRig(int channel, uint32_t parameterId, float value) noexcept;
+    // armed || pending || retired — the authoritative per-channel in-flight
+    // predicate (atomic reads only, no locks).
+    bool swapInFlight(int channel) const noexcept;
+    // Build a fully prepared swap candidate from the mDesired row at the
+    // given snapshot rate/frames. Returns null on failure (errorState set).
+    // Called OFF the control guards (see requestRigSwap doc).
+    std::unique_ptr<GuitarRigEffect> buildCandidate(int channel, double sampleRate, int maxFrames);
 
     std::array<std::unique_ptr<GuitarRigEffect>, kChannels> mEffects{};
     std::array<std::atomic<GuitarRigEffect*>, kChannels> mPublished{};
@@ -282,6 +402,7 @@ private:
     std::array<std::atomic<GuitarRigEffect*>, kChannels> mRetired{};
     std::array<std::atomic<bool>, kChannels> mSwapArmed{};
     std::array<std::atomic<uint64_t>, kChannels> mSwapCount{};
+    std::array<std::atomic<uint64_t>, kChannels> mSupersededCount{};
     std::array<SwapRuntime, kChannels> mSwapRuntime{};  // audio thread only
     std::array<std::atomic<bool>, kChannels> mRackEnabled{};
     std::array<std::atomic<bool>, kChannels> mEffectEnabled{};
@@ -294,8 +415,8 @@ private:
     std::array<float*, kChannels> mRight{};
     double mSampleRate = 0.0;
     int mMaxFrames = 0;
-    bool mPrepared = false;
-    bool mFailNextBuild = false;  // test seam, control-thread only
+    std::atomic<bool> mPrepared{false};  // atomic: checked guard-free on control paths
+    int mFailNextBuildCode = -1;  // test seam (ErrorState code), control-thread only
     std::atomic_flag mControlBusy = ATOMIC_FLAG_INIT;
     // Control/getter lifetime guard. Audio callback never takes this mutex.
     mutable std::mutex mLifetimeMutex;

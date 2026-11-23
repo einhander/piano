@@ -1319,6 +1319,11 @@ const char* NativeEngine::getGuitarRigParamName(int index) const{
 int NativeEngine::getGuitarRigLatencyFrames(int channel) const{
     return piano::isInstrumentChannel(channel) ? mGuitarEffects.effectLatencyFrames(channel) : 0;
 }
+int NativeEngine::getGuitarRigStatus(int channel){
+    // rigStatus validates the channel itself (BadChannel code) and never
+    // blocks (non-blocking control guards).
+    return mGuitarEffects.rigStatus(channel);
+}
 
 void NativeEngine::addClip(int32_t clipId, int32_t trackId, int64_t startTick, int64_t lengthTicks,
                            const uint8_t* events, int32_t eventCount) {

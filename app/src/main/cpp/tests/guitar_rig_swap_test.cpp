@@ -21,6 +21,30 @@
 //   I6 rack-off landing: a pending swap on a silent (dry) rig commits on
 //     the first processed block without a fade.
 //
+// Concurrency-hardening scenarios (adversarial audit follow-ups T1–T5, the
+// control-path UAF + lock-order fixes):
+//   T1 setter-burst: setParameterChecked/requestRigConfig/instantiate on
+//     ch3 hammering CONCURRENT with repeated reprepareQuiescent +
+//     resetChannelRange and status/getter polls (no process(): the admin
+//     paths require the quiescent contract). Expect: no crash, no leak
+//     (ASan), rejections observed as honest false, drain leaves nothing
+//     in flight.
+//   T2 cross-channel: swap storms on ch2 and ch5 concurrently against the
+//     processing thread — per-channel busy/commit semantics hold under the
+//     global control guards (exactly N commits per channel, no wedge).
+//   T3 segmented callback: TWO process() calls within one logical block
+//     with the PENDING mailbox arriving mid-first-segment (async control
+//     thread) — the commit lands, frames conserved, outputs finite.
+//   T4 busy false→true→false: one accept → in-flight (busy true, second
+//     request honestly rejected) → commit (busy false) advances swapCount
+//     by EXACTLY one and supersededCount by zero; a superseded accept
+//     (quiescent reprepare over a pending swap) bumps supersededCount,
+//     NEVER swapCount.
+//   T5 status-code mapping: every rigStatus code observable at least once
+//     (Ok, BusySwapInFlight, BusyControl, BuildFailed, AllocationFailed,
+//     BadChannel incl. errorState invalid-channel), packed superseded bits
+//     + saturation.
+//
 // Ownership state table under test (CURRENT/PENDING/RETIRED/armed/ACK):
 // see GuitarRigManager.h — this file attacks the table's busy + reclaim
 // rules from the producer side and the fade/commit rules from the consumer.
@@ -374,6 +398,287 @@ int main() {
         CHECK(std::memcmp(a.data(), b.data(), sizeof(float) * a.size()) == 0,
               "I5: identical swap schedule → bit-identical settled output (eps 0)");
         printf("[I5] determinism: ok (%zu tail floats compared bit-exact)\n", a.size());
+    }
+
+    // ── T1: control-thread setter/request burst × quiescent reprepare/reset ─
+    // Adversarial C1 regression (control-path UAF): every dereference of the
+    // published rig from the control surface must run under the control
+    // guards in the single lock order (lifetime → busy). No process() here —
+    // reprepare/reset require the quiescent contract; the poller attacks
+    // status + const getters against the concurrent free sites.
+    {
+        GuitarRigManager mgr;
+        CHECK(mgr.prepare(kSr, kMaxFrames), "T1 prepare");
+        constexpr int ch = 3;
+        std::atomic<bool> stop{false};
+        std::atomic<int> accepted{0}, rejected{0};
+        std::thread setters([&]() {
+            for (int i = 0; i < 6000 && !stop.load(std::memory_order_relaxed); ++i) {
+                bool r = false;
+                switch (i & 3) {
+                    case 0: r = mgr.setParameterChecked(ch, kParamAmpModel, static_cast<float>(i % 3)); break;
+                    case 1: r = mgr.requestRigConfig(ch, i % 3, (i / 3) % 4); break;
+                    case 2: r = mgr.setParameterChecked(ch, kParamCabType, static_cast<float>(i % 4)); break;
+                    default: r = mgr.setParameterChecked(ch, kParamMix, 0.5f); break;
+                }
+                (r ? accepted : rejected).fetch_add(1, std::memory_order_relaxed);
+                if (i % 32 == 0) (void)mgr.instantiate(ch);  // busy-rejection is a valid outcome
+            }
+            stop.store(true, std::memory_order_release);
+        });
+        std::thread admin([&]() {
+            for (int i = 0; !stop.load(std::memory_order_relaxed); ++i) {
+                (void)mgr.reprepareQuiescent((i & 1) ? 44100.0 : kSr, kMaxFrames);
+                (void)mgr.resetChannelRange(2, 4);
+            }
+        });
+        std::thread poller([&]() {
+            float tmp = 0.0f;
+            for (int i = 0; !stop.load(std::memory_order_relaxed); ++i) {
+                (void)mgr.rigStatus(ch);
+                (void)mgr.hasPendingConfig(ch);
+                (void)mgr.swapCount(ch);
+                (void)mgr.supersededCount(ch);
+                (void)mgr.errorState(ch);
+                (void)mgr.getParameterChecked(ch, kParamAmpModel, tmp);  // blocks on lifetime only — bounded
+            }
+        });
+        setters.join();
+        admin.join();
+        poller.join();
+        CHECK(accepted.load() > 0, "T1: accepted work happened");
+        CHECK(rejected.load() > 0, "T1: contention observed as honest false (busy-control / busy-swap)");
+        mgr.drainAllQuiescent();
+        CHECK(!mgr.hasPendingConfig(ch), "T1: quiescent drain leaves nothing in flight");
+        printf("[T1] setter-burst × reprepare/reset + polls: ok (accepted=%d rejected=%d)\n",
+               accepted.load(), rejected.load());
+    }
+
+    // ── T2: concurrent swap storms on ch2 AND ch5 (per-channel semantics) ──
+    // One audio thread processes both buses; two control threads alternate
+    // model/cab on their own channel. The global control guards serialize
+    // sections, but busy/commit semantics are PER CHANNEL: each channel must
+    // reach exactly its own N commits, no wedge, no crosstalk.
+    {
+        constexpr int kA = 2, kB = 5, kN = 40;
+        GuitarRigManager mgr;
+        CHECK(mgr.prepare(kSr, kMaxFrames), "T2 prepare");
+        std::vector<float*> buses(GuitarRigManager::kChannels, nullptr);
+        float* busA = static_cast<float*>(std::malloc(sizeof(float) * kMaxFrames * 2));
+        float* busB = static_cast<float*>(std::malloc(sizeof(float) * kMaxFrames * 2));
+        buses[kA] = busA;
+        buses[kB] = busB;
+        long long fedA = 0, fedB = 0;
+        CHECK(mgr.instantiate(kA) && mgr.setEffectEnabledChecked(kA, true) && mgr.instantiate(kB) &&
+                  mgr.setEffectEnabledChecked(kB, true),
+              "T2 instantiate");
+        mgr.setRackEnabled(kA, true);
+        mgr.setRackEnabled(kB, true);
+        for (int i = 0; i < 4; ++i) {  // settle both fully wet
+            fillSine(busA, 1024, fedA);
+            fillSine(busB, 1024, fedB);
+            mgr.process(buses.data(), 1024);
+        }
+        std::atomic<int> issuedA{0}, issuedB{0};
+        std::atomic<bool> controlDone{false}, gaveUp{false};
+        std::atomic<bool> audioDone{false};
+        Scan t2scan;
+        std::thread ctrlA([&]() {
+            while (issuedA.load() < kN && !gaveUp.load()) {
+                const int n = issuedA.load();
+                if (mgr.requestRigConfig(kA, n % 3, (n / 3) % 4)) issuedA.fetch_add(1);
+                else std::this_thread::yield();
+            }
+        });
+        std::thread ctrlB([&]() {
+            while (issuedB.load() < kN && !gaveUp.load()) {
+                const int n = issuedB.load();
+                if (mgr.requestRigConfig(kB, (n / 2) % 3, n % 4)) issuedB.fetch_add(1);
+                else std::this_thread::yield();
+            }
+        });
+        std::thread audio([&]() {
+            long long fA = fedA, fB = fedB;
+            for (int blocks = 0; blocks < kN * 200; ++blocks) {
+                const int n = kPatternSizes[blocks % 10];
+                fillSine(busA, n, fA);
+                fillSine(busB, n, fB);
+                mgr.process(buses.data(), n);
+                t2scan.observe(busA, n);
+                if (mgr.swapCount(kA) >= kN && mgr.swapCount(kB) >= kN) { audioDone.store(true); break; }
+            }
+            fedA = fA;
+            fedB = fB;
+            audioDone.store(true);
+        });
+        ctrlA.join();
+        ctrlB.join();
+        // Let the audio thread land the issued swaps before stopping it.
+        while (!audioDone.load() && !gaveUp.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        gaveUp.store(true);
+        audio.join();
+        CHECK(mgr.swapCount(kA) >= kN, "T2: ch2 landed all its own swaps");
+        CHECK(mgr.swapCount(kB) >= kN, "T2: ch5 landed all its own swaps (per-channel busy, no wedge)");
+        CHECK(t2scan.allFinite, "T2: all ch2 output finite");
+        CHECK(mgr.reclaimRetired(kA) || !mgr.swapArmed(kA), "T2: ch2 reclaimable state");
+        CHECK(mgr.reclaimRetired(kB) || !mgr.swapArmed(kB), "T2: ch5 reclaimable state");
+        std::free(busA);
+        std::free(busB);
+        printf("[T2] cross-channel concurrent swaps (ch2+ch5, N=%d): ok\n", kN);
+    }
+
+    // ── T3: segmented callback — two process() calls in one block, pending ─
+    // PENDING arrives (async control thread) DURING the first segment of a
+    // logical 512-frame block: the state machine must commit across the
+    // segmentation, conserve every fed frame, stay finite.
+    {
+        GuitarRigManager mgr;
+        CHECK(mgr.prepare(kSr, kMaxFrames), "T3 prepare");
+        std::vector<float*> buses(GuitarRigManager::kChannels, nullptr);
+        float* ch = static_cast<float*>(std::malloc(sizeof(float) * kMaxFrames * 2));
+        buses[kChannel] = ch;
+        long long fed = 0;
+        CHECK(mgr.instantiate(kChannel) && mgr.setEffectEnabledChecked(kChannel, true), "T3 enable");
+        mgr.setRackEnabled(kChannel, true);
+        for (int i = 0; i < 4; ++i) { fillSine(ch, 1024, fed); mgr.process(buses.data(), 1024); }
+        const uint64_t ack0 = mgr.swapCount(kChannel);
+        std::atomic<bool> accepted3{false};
+        std::thread ctl([&]() { accepted3.store(mgr.requestRigConfig(kChannel, 1, 2)); });
+        // One logical block = TWO segments (the arrival races segment 1).
+        fillSine(ch, 256, fed);
+        mgr.process(buses.data(), 256);
+        fillSine(ch, 256, fed);
+        mgr.process(buses.data(), 256);
+        ctl.join();
+        CHECK(accepted3.load(), "T3: request during a segmented block accepted");
+        long long processed = 512;  // the two segments above fed exactly what they process
+        int guard = 0;
+        while (mgr.swapCount(kChannel) == ack0 && guard++ < 500) {
+            fillSine(ch, 256, fed);
+            mgr.process(buses.data(), 256);
+            processed += 256;
+        }
+        CHECK(mgr.swapCount(kChannel) == ack0 + 1, "T3: commit lands across segmented blocks");
+        CHECK(processed == fed - 1024 * 4, "T3: frames conserved (every fed frame processed)");
+        bool finite = true;
+        for (int i = 0; i < 512; ++i)
+            if (!std::isfinite(ch[i * 2]) || !std::isfinite(ch[i * 2 + 1])) finite = false;
+        CHECK(finite, "T3: segmented output finite");
+        CHECK(mgr.reclaimRetired(kChannel), "T3: retired reclaimed");
+        std::free(ch);
+        printf("[T3] segmented callback (2 process() per block): ok\n");
+    }
+
+    // ── T4: busy false→true→false lands EXACTLY one new rig; supersede ─────
+    {
+        GuitarRigManager mgr;
+        CHECK(mgr.prepare(kSr, kMaxFrames), "T4 prepare");
+        std::vector<float*> buses(GuitarRigManager::kChannels, nullptr);
+        float* ch = static_cast<float*>(std::malloc(sizeof(float) * kMaxFrames * 2));
+        buses[kChannel] = ch;
+        long long fed = 0;
+        CHECK(mgr.instantiate(kChannel) && mgr.setEffectEnabledChecked(kChannel, true), "T4 enable");
+        mgr.setRackEnabled(kChannel, true);
+        for (int i = 0; i < 4; ++i) { fillSine(ch, 1024, fed); mgr.process(buses.data(), 1024); }
+        CHECK(!mgr.hasPendingConfig(kChannel), "T4: busy=false at rest");
+        CHECK(mgr.requestRigConfig(kChannel, 1, 0), "T4: request accepted");
+        CHECK(mgr.hasPendingConfig(kChannel), "T4: busy=true while in flight");
+        CHECK(!mgr.requestRigConfig(kChannel, 2, 1), "T4: second request rejected (busy)");
+        const uint64_t ack0 = mgr.swapCount(kChannel);
+        const uint64_t sup0 = mgr.supersededCount(kChannel);
+        int guard = 0;
+        while (mgr.swapCount(kChannel) == ack0 && guard++ < 500) {
+            fillSine(ch, 4096, fed);
+            mgr.process(buses.data(), 4096);
+        }
+        CHECK(mgr.swapCount(kChannel) == ack0 + 1, "T4: exactly ONE new rig committed");
+        CHECK(mgr.supersededCount(kChannel) == sup0, "T4: a commit is not a supersession");
+        CHECK(!mgr.hasPendingConfig(kChannel), "T4: busy=false again after commit");
+        CHECK(mgr.reclaimRetired(kChannel), "T4: reclaim");
+        // Supersede leg (audio stopped → quiescent contract holds): an
+        // accepted swap destroyed by the staged rebuild bumps superseded,
+        // NEVER swapCount (the ACK-honesty contract).
+        CHECK(mgr.requestRigConfig(kChannel, 2, 1), "T4: second accept (quiescent)");
+        CHECK(mgr.hasPendingConfig(kChannel), "T4: busy=true again");
+        CHECK(mgr.reprepareQuiescent(kSr, kMaxFrames), "T4: staged rebuild supersedes");
+        CHECK(!mgr.hasPendingConfig(kChannel), "T4: supersede clears the mailbox");
+        CHECK(mgr.swapCount(kChannel) == ack0 + 1, "T4: NO fake commit ACK for a superseded swap");
+        CHECK(mgr.supersededCount(kChannel) == sup0 + 1, "T4: supersession accounted honestly");
+        CHECK(GuitarRigManager::decodeRigStatusCode(mgr.rigStatus(kChannel)) == GuitarRigManager::kStatusOk,
+              "T4: status Ok after the supersede (config landed via the rebuild)");
+        CHECK(mgr.isAvailable(kChannel), "T4: rebuilt rig live");
+        std::free(ch);
+        printf("[T4] busy-cycle lands one rig + honest supersede accounting: ok\n");
+    }
+
+    // ── T5: status-code mapping — every code observable at least once ───────
+    {
+        using Rig = GuitarRigManager;
+        GuitarRigManager mgr;
+        CHECK(mgr.prepare(kSr, kMaxFrames), "T5 prepare");
+        // BadChannel (FIX M4: invalid channel gets its OWN code, not
+        // AllocationFailed) — plus errorState consistency.
+        CHECK(Rig::decodeRigStatusCode(mgr.rigStatus(-7)) == Rig::kStatusBadChannel, "T5: status(-7)=BadChannel");
+        CHECK(Rig::decodeRigStatusCode(mgr.rigStatus(Rig::kChannels)) == Rig::kStatusBadChannel,
+              "T5: status(kChannels)=BadChannel");
+        CHECK(mgr.errorState(-7) == Rig::BadChannel, "T5: errorState(-7)=BadChannel");
+        // Ok baseline (prepared, nothing in flight, no error).
+        CHECK(Rig::decodeRigStatusCode(mgr.rigStatus(0)) == Rig::kStatusOk, "T5: Ok baseline");
+        CHECK(mgr.instantiate(0) && mgr.setEffectEnabledChecked(0, true), "T5: enable");
+        // BusySwapInFlight (armed + PENDING, callback never runs).
+        CHECK(mgr.requestRigConfig(0, 1, 1), "T5: accept");
+        CHECK(Rig::decodeRigStatusCode(mgr.rigStatus(0)) == Rig::kStatusBusySwapInFlight,
+              "T5: BusySwapInFlight observable");
+        CHECK(mgr.swapCount(0) == 0, "T5: quiescent accept commits nothing");
+        // Ok + pending-flag messaging state after a quiescent APPLY: the
+        // config lands (swapCount and supersededCount both stay 0 — an apply
+        // is a direct landing, honest accounting).
+        CHECK(mgr.applyPendingConfig(0), "T5: quiescent apply");
+        CHECK(Rig::decodeRigStatusCode(mgr.rigStatus(0)) == Rig::kStatusOk, "T5: Ok after apply");
+        // AllocationFailed via the boolean seam.
+        mgr.setFailNextBuildForTesting(true);
+        CHECK(!mgr.requestRigConfig(0, 2, 2), "T5: allocation failure rejected");
+        CHECK(Rig::decodeRigStatusCode(mgr.rigStatus(0)) == Rig::kStatusAllocationFailed,
+              "T5: AllocationFailed observable");
+        CHECK(mgr.errorState(0) == Rig::AllocationFailed, "T5: errorState AllocationFailed");
+        // BuildFailed (EngineInitFailed) via the code seam.
+        mgr.setFailNextBuildCodeForTesting(Rig::EngineInitFailed);
+        CHECK(!mgr.requestRigConfig(0, 0, 0), "T5: engine failure rejected");
+        CHECK(Rig::decodeRigStatusCode(mgr.rigStatus(0)) == Rig::kStatusBuildFailed,
+              "T5: BuildFailed observable");
+        CHECK(mgr.errorState(0) == Rig::EngineInitFailed, "T5: errorState EngineInitFailed");
+        // BusyControl via the guard seam (queried FROM ANOTHER THREAD — the
+        // holding thread must not re-enter its own guards).
+        CHECK(mgr.tryLockControlForTesting(), "T5: control seam held");
+        int busyCode = -1;
+        bool busyRej = true;
+        std::thread probe([&]() {
+            busyCode = Rig::decodeRigStatusCode(mgr.rigStatus(0));
+            busyRej = !mgr.requestRigSwap(0);
+        });
+        probe.join();
+        CHECK(busyCode == Rig::kStatusBusyControl, "T5: BusyControl observable");
+        CHECK(busyRej, "T5: control-busy rejects swap requests");
+        mgr.unlockControlForTesting();
+        CHECK(Rig::decodeRigStatusCode(mgr.rigStatus(0)) == Rig::kStatusBuildFailed,
+              "T5: sticky error survives the probe, cleared only by a new accept");
+        // An accepted swap clears the error state and counts superseded via
+        // the packed bits when a drain destroys it (the phase-G readout).
+        CHECK(mgr.requestRigConfig(0, 1, 0), "T5: accept clears error");
+        CHECK(Rig::decodeRigStatusCode(mgr.rigStatus(0)) == Rig::kStatusBusySwapInFlight, "T5: busy again");
+        mgr.drainAllQuiescent();
+        uint64_t sup = 0;
+        const int packed = mgr.rigStatus(0, sup);
+        CHECK(Rig::decodeRigStatusCode(packed) == Rig::kStatusOk && sup == 1 &&
+                  Rig::decodeRigStatusSuperseded(packed) == 1,
+              "T5: drain-supersede visible via the packed superseded bits");
+        // Packing: saturation + round-trip.
+        CHECK(Rig::decodeRigStatusSuperseded(Rig::packRigStatus(Rig::kStatusOk, 1ULL << 40)) == 0x0FFFFFFF,
+              "T5: packed superseded saturates");
+        CHECK(Rig::decodeRigStatusCode(Rig::packRigStatus(4, 12345)) == 4 &&
+                  Rig::decodeRigStatusSuperseded(Rig::packRigStatus(4, 12345)) == 12345,
+              "T5: pack round-trip");
+        printf("[T5] status-code mapping (all 6 codes): ok\n");
     }
 
     printf("%s (failures: %d)\n", gFailures == 0 ? "ALL PASS" : "FAILURES", gFailures);

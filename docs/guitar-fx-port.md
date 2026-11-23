@@ -347,7 +347,31 @@ the two-phase SAFE LIVE SWAP protocol in `GuitarRigManager`; the interim
 | `mPending[c]` | PENDING | builds the rig fully off-thread, then **CAS nullptr→rig** (fails = busy; never overwrites) | peek-load at top of step; takes it ONLY at commit (`exchange(nullptr)`) |
 | `mRetired[c]` | RETIRED | takes it back ONLY under the quiescent contract (drain/apply); reclaims via `syncAdoptLocked` | stores the old CURRENT exactly once per swap, and only when observed empty; otherwise DEFERs the commit to the next block (spec §10.3 — never drops/overwrites) |
 | `mSwapArmed[c]` | in-flight flag | sets before publishing, clears at commit (and at quiescent drain) | clears at commit |
-| `mSwapCount[c]` | ACK counter | read only (`requestRigSwap` records/benchmarks it) | `+= 1` at commit, release-ordered |
+| `mSwapCount[c]` | COMMIT counter | read only | `+= 1` at commit, release-ordered — commits ONLY (see ACK honesty) |
+| `mSuperseded[c]` | supersede counter | `+= 1` when an accepted PENDING is destroyed off-thread (quiescent drain / staged rebuild, channel reset) | never touched |
+
+### Lock-order invariant (audited)
+
+Exactly ONE acquisition order exists in `GuitarRigManager`:
+**`mLifetimeMutex` → `mControlBusy`** (release in reverse). Control sites
+(`instantiate`, `reclaimRetired`, `requestRigSwap` ×2 guarded sections,
+`rigStatus`, `mirrorToRig`, the guarded mirror blocks of
+`setParameterChecked`/`requestRigConfig`) take both **non-blocking**
+(`try_lock` + `test_and_set`) and return false on contention — the JNI
+control surface is called unmarshalled from the UI thread, the MIDI-CC
+controller thread and the preset-restore path, so it must never block.
+Quiescent/teardown sites (`reprepareQuiescent`, `drainAllQuiescent`,
+`applyPendingConfig`, `resetChannelRange`) hold the mutex first and only
+then spin the flag; with the single order a flag holder can never be
+waiting for the mutex, so the spin cannot deadlock. Const getters
+dereferencing a published rig (`getParameterChecked`/`isAvailable`/
+`effectLatencyFrames`) hold the lifetime mutex only — safe because every
+delete of a published rig holds it. The previous inversion (control paths
+busy→lifetime against quiescent paths lifetime→busy) could wedge a UI swap
+request × audio-device reopen forever behind a closed gate; the swap
+candidate is also built OFF the guards (phase-2 of `requestRigSwap`) so a
+long IR build no longer stalls the global control path or other channels'
+knobs.
 
 Callback phases (audio-thread-only `mSwapRuntime`, never read by the worker):
 IDLE → (wet rig) FADE_OUT → commit → FADE_IN → IDLE; dry rig commits
@@ -382,30 +406,79 @@ new rig; the 5 ms rack convention is restored at completion.
    retired cell instead of losing a rig. The destructor's `syncAdopt`
    prevents the ASan-caught "last swapped rig never adopted" leak.
 
-### ACK + busy semantics (UI lane)
+### ACK + busy semantics (UI lane) — honest accounting
 
 `setParameterChecked(kAmpModel|kCabType)` and `requestRigConfig(ch,model,
-cab)` return **true = swap accepted** (it lands within ~2×10 ms of callback
-processing; `swapCount` will advance), **false = busy** (a previous swap
-unconsumed/unreclaimed — honest "применяется на лету" state, also
-`hasPendingConfig(ch)` / `swapArmed(ch)`) **or builder failure** (then
-`errorState(ch)` ≠ Ok, CURRENT keeps running with the old sound). The
+cab)` return **true = swap accepted**, **false = busy** (a previous swap
+unconsumed/unreclaimed — `hasPendingConfig(ch)`/`swapArmed(ch)`; OR a
+control section currently held — retry shortly) **or builder failure**
+(`errorState(ch)` ≠ Ok, CURRENT keeps running with the old sound). The
 desired row (`mDesired`) is updated on every attempt, accepted or not, so
-a busy/rejected change is never lost; `reprepareQuiescent`/`applyPending
-Config` apply the latest desired config at quiescence (spec §10.4 quiescent
-apply: PENDING → CURRENT directly, old destroyed inline; a superseded
-PENDING is destroyed by the worker, never by the callback). Rack-off does
-not cancel a pending swap — the silent dry commit path lands it (spec
-§10.7). `NativeEngine::shutdown()` detaches the audio callback and then
-calls `mGuitarEffects.drainAllQuiescent()`.
+a busy/rejected change is never lost.
 
-### Measured behavior (host x86-64, gcc 14.2, ASan+UBSan + TSan, 2026-11-23)
+**ACK honesty:** an accepted swap means the config WILL land — but
+`swapCount` counts **commits only**. An accepted swap the callback never
+consumed can be superseded at quiescence: `reprepareQuiescent`/
+`drainAllQuiescent` destroy the un-taken PENDING and rebuild from the same
+`mDesired` row (the staged rig already carries the pending config — spec
+§10.4 quiescent apply: PENDING → CURRENT directly, old destroyed inline; a
+superseded PENDING is destroyed by the worker, never by the callback), and
+`resetChannelRange` tears the channel down. Every such destruction bumps
+`supersededCount`, so the invariant is exactly: *accepted ⇒ config lands
+(commit or supersede-with-staged-rebuild); swapCount counts commits only*.
+Neither counter ever advances for a rejected request. Rack-off does not
+cancel a pending swap — the silent dry commit path lands it (spec §10.7).
+`NativeEngine::shutdown()` detaches the audio callback and then calls
+`mGuitarEffects.drainAllQuiescent()`.
+
+**Retired-defer recovery (M5-hardening):** if a commit defers on an
+occupied RETIRED slot (spec §10.3 defensive fallback), the channel is
+recovered by the next worker action that opportunistically reclaims:
+`requestRigSwap` (guarded sync-adopt), `instantiate`, and the status poll
+`rigStatus` all reclaim; `applyPendingConfig`/`drainAllQuiescent`/
+`resetChannelRange` reclaim or destroy inline under the quiescent contract
+(reset also clears a deferred armed flag via `releaseChannelLocked`). The
+defensive null-published commit branch ALWAYS clears the armed flag now
+(pending restash → PENDING cell keeps the in-flight record; the config
+recovers via re-instantiate or a counted supersede on the next drain).
+
+### Status codes — `nativeGetGuitarRigStatus(channel, effectId)`
+
+The JNI surface (dispatched on the existing `"guitar.rig"` instrument-effect
+pattern; non-blocking, any thread) exports the real swap state as one
+packed `int`: **bits 0–3** status code, **bits 4–31** monotonic
+`supersededCount` saturated to 0x0FFFFFFF. Codes (`GuitarRigManager::
+RigStatus`): `0 Ok` (settled, no swap in flight, no sticky error),
+`1 BusySwapInFlight` (armed / pending / unreclaimed retired),
+`2 BusyControl` (a control section holds the guards — the request itself
+would return false right now), `3 BuildFailed` (`errorState EngineInitFailed`),
+`4 AllocationFailed` (`errorState AllocationFailed`), `5 BadChannel`
+(invalid channel id or a non-`guitar.rig` effect id — `errorState(-1)`
+maps to its own `BadChannel` code too, previously mislabeled
+AllocationFailed). The poll opportunistically reclaims a deferred RETIRED
+rig when the guards are free.
+
+**Phase-G UI messaging contract:** `BusyControl`/`BusySwapInFlight` →
+"busy, retry shortly"; `BuildFailed`/`AllocationFailed` → "failed,
+previous sound retained"; `Ok` + pending flag → "applying (~30 ms)";
+`BadChannel` → programming error (wrong id), show nothing. A supersede is
+silent by design (the config landed through the rebuild) — surface it only
+as counter progress, never as a failure.
+
+### Measured behavior (host x86-64, gcc 14.2, ASan+UBSan + TSan, 2026-11-24)
 
 `tests/guitar_rig_swap_test.cpp` (see `tests/README.guitar-rig-swap.md`):
 1000 model/cab alternations against an irregular-block callback thread
 (sizes 1,7,16,31,64,512,4096): zero UAF/double-free/leak, frames processed
 == frames fed, swapCount == accepted swaps, all outputs finite, busy
-rejection observed. Click bound: max consecutive-sample |Δ| of the L bus.
+rejection observed (re-run after the lock-order/control-guard hardening:
+max|Δ| swap-run 0.450213 vs natural 0.433210, bound 0.483210; 38 783 739
+frames; ALL PASS). Hardening scenarios T1–T5 (control-path UAF storm,
+cross-channel concurrency, segmented callback, honest busy-cycle +
+supersede accounting, full status-code mapping) all green under
+ASan+UBSan; the T1 storm (setters × reprepare/reset × status polls) is
+also TSan-clean — zero ThreadSanitizer warnings, single lock order
+verified. Click bound: max consecutive-sample |Δ| of the L bus.
 The absolute max|Δ| of any rig here is its own hard-clip edge (measured
 ≈0.41 per sample for the high-gain model at defaults — a property of the
 SOUND, not the swap), so the bound is defined against a no-swap sweep of

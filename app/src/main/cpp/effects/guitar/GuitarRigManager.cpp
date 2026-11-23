@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <memory>
+#include <mutex>
 #include <thread>
 
 namespace piano {
@@ -19,13 +21,39 @@ std::array<float, kParamCount> rigDefaultParams() {
     return out;
 }
 
-// Blocking control-flag lock (worker-thread paths only).
+// Blocking control-flag lock — QUIESCENT/TEARDOWN paths only, and only
+// while the LIFETIME MUTEX is already held (single lock order, class doc:
+// lifetime → busy, always). A busy holder never waits for the mutex (every
+// flag acquisition first owns the mutex), so this spin cannot deadlock.
 struct BusyLock {
     std::atomic_flag& flag;
     explicit BusyLock(std::atomic_flag& f) : flag(f) {
         while (flag.test_and_set(std::memory_order_acquire)) std::this_thread::yield();
     }
     ~BusyLock() { flag.clear(std::memory_order_release); }
+};
+
+// Non-blocking control-section guard in the ONE permitted order: lifetime
+// mutex FIRST (try_lock), then the control-busy flag (test_and_set).
+// held()==false means contended — the caller returns false (retry) and NEVER
+// blocks: control paths run unmarshalled on the UI thread, the MIDI-CC
+// controller thread and the preset-restore path. Release order is the
+// inverse (flag cleared here, mutex released by the unique_lock dtor after).
+struct ControlGuard {
+    std::unique_lock<std::mutex> lifetime;
+    std::atomic_flag& flag;
+    bool flagHeld = false;
+    ControlGuard(std::mutex& m, std::atomic_flag& f)
+        : lifetime(m, std::try_to_lock), flag(f) {
+        if (lifetime.owns_lock())
+            flagHeld = !flag.test_and_set(std::memory_order_acquire);
+    }
+    ~ControlGuard() {
+        if (flagHeld) flag.clear(std::memory_order_release);
+    }
+    bool held() const noexcept { return flagHeld; }
+    ControlGuard(const ControlGuard&) = delete;
+    ControlGuard& operator=(const ControlGuard&) = delete;
 };
 
 } // namespace
@@ -38,6 +66,7 @@ GuitarRigManager::GuitarRigManager() {
         mRetired[c].store(nullptr, std::memory_order_relaxed);
         mSwapArmed[c].store(false, std::memory_order_relaxed);
         mSwapCount[c].store(0, std::memory_order_relaxed);
+        mSupersededCount[c].store(0, std::memory_order_relaxed);
         mRackEnabled[c].store(false, std::memory_order_relaxed);
         mEffectEnabled[c].store(false, std::memory_order_relaxed);
         mErrorState[c].store(Ok, std::memory_order_relaxed);
@@ -64,9 +93,29 @@ GuitarRigManager::~GuitarRigManager() {
     }
 }
 
+bool GuitarRigManager::tryLockControl() noexcept {
+    // Single order: lifetime mutex first, busy flag second.
+    if (!mLifetimeMutex.try_lock()) return false;
+    if (mControlBusy.test_and_set(std::memory_order_acquire)) {
+        // Unreachable under the single order (a flag holder always holds the
+        // mutex, so mutex owners find the flag free) — defensive anyway.
+        mLifetimeMutex.unlock();
+        return false;
+    }
+    return true;
+}
+
+void GuitarRigManager::unlockControl() noexcept {
+    mControlBusy.clear(std::memory_order_release);
+    mLifetimeMutex.unlock();
+}
+
+bool GuitarRigManager::tryLockControlForTesting() noexcept { return tryLockControl(); }
+void GuitarRigManager::unlockControlForTesting() noexcept { unlockControl(); }
+
 bool GuitarRigManager::prepare(double sampleRate, int maxFrames) {
     if (sampleRate <= 0.0 || !std::isfinite(sampleRate) || maxFrames <= 0) return false;
-    if (mPrepared) return sampleRate == mSampleRate && maxFrames == mMaxFrames;
+    if (mPrepared.load(std::memory_order_acquire)) return sampleRate == mSampleRate && maxFrames == mMaxFrames;
     std::array<float*, kChannels> left{}, right{};
     for (int c = 0; c < kChannels; ++c) {
         left[c] = static_cast<float*>(std::malloc(sizeof(float) * static_cast<size_t>(maxFrames)));
@@ -80,12 +129,13 @@ bool GuitarRigManager::prepare(double sampleRate, int maxFrames) {
     mRight = right;
     mSampleRate = sampleRate;
     mMaxFrames = maxFrames;
-    mPrepared = true;
+    mPrepared.store(true, std::memory_order_release);
     return true;
 }
 
 bool GuitarRigManager::reprepareQuiescent(double sampleRate, int maxFrames) {
     if (sampleRate <= 0.0 || !std::isfinite(sampleRate) || maxFrames <= 0) return false;
+    // LOCK ORDER: lifetime mutex first, control-busy second (class invariant).
     std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
     BusyLock busy(mControlBusy);
     // Drain all swap mailboxes FIRST (quiescent contract holds: this runs
@@ -141,13 +191,14 @@ bool GuitarRigManager::reprepareQuiescent(double sampleRate, int maxFrames) {
     }
     mSampleRate = sampleRate;
     mMaxFrames = maxFrames;
-    mPrepared = true;
+    mPrepared.store(true, std::memory_order_release);
     return !anyFailed;
 }
 
 // ── swap-protocol worker helpers ──────────────────────────────────────────
-// Lifetime mutex held by the caller at every site below; where noted, the
-// quiescent contract (audio callback not running) as well.
+// Lifetime mutex + control-busy flag held by the caller (single lock order)
+// at every site below; where noted, the quiescent contract (audio callback
+// not running) as well.
 
 bool GuitarRigManager::syncAdoptLocked(int channel) {
     // Restore the invariant "mEffects[c] uniquely owns the CURRENT rig"
@@ -180,7 +231,14 @@ void GuitarRigManager::drainChannelQuiescentLocked(int channel) {
     // Spec §10.4: a PENDING the callback never consumed is destroyed BY THE
     // WORKER here (superseded by the caller's rebuild / apply / teardown).
     GuitarRigEffect* pending = mPending[channel].exchange(nullptr, std::memory_order_acq_rel);
-    if (pending) delete pending;
+    if (pending) {
+        // ACK honesty: an accepted-unconsumed swap is not a lost swap (the
+        // caller's staged rebuild lands its config from the same mDesired
+        // row) but it was never COMMITTED, so it accounts on
+        // mSupersededCount, not mSwapCount.
+        mSupersededCount[channel].fetch_add(1, std::memory_order_relaxed);
+        delete pending;
+    }
     GuitarRigEffect* retired = mRetired[channel].exchange(nullptr, std::memory_order_acq_rel);
     if (retired) {
         // Reachable only when syncAdopt rejected a corrupt state. Proof of
@@ -203,18 +261,26 @@ void GuitarRigManager::drainChannelQuiescentLocked(int channel) {
 
 bool GuitarRigManager::reclaimRetired(int channel) {
     if (channel < 0 || channel >= kChannels) return false;
-    if (mControlBusy.test_and_set(std::memory_order_acquire)) return false;
-    struct Unlock {
-        std::atomic_flag& f;
-        ~Unlock() { f.clear(std::memory_order_release); }
-    } unlock{mControlBusy};
-    std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
+    // Single lock order: lifetime mutex → busy flag, non-blocking.
+    ControlGuard guard(mLifetimeMutex, mControlBusy);
+    if (!guard.held()) return false;  // control contended — caller retries
     return syncAdoptLocked(channel);
 }
 
 uint64_t GuitarRigManager::swapCount(int channel) const noexcept {
     if (channel < 0 || channel >= kChannels) return 0;
     return mSwapCount[channel].load(std::memory_order_acquire);
+}
+
+uint64_t GuitarRigManager::supersededCount(int channel) const noexcept {
+    if (channel < 0 || channel >= kChannels) return 0;
+    return mSupersededCount[channel].load(std::memory_order_acquire);
+}
+
+bool GuitarRigManager::swapInFlight(int channel) const noexcept {
+    return mSwapArmed[channel].load(std::memory_order_acquire) ||
+           mPending[channel].load(std::memory_order_acquire) != nullptr ||
+           mRetired[channel].load(std::memory_order_acquire) != nullptr;
 }
 
 bool GuitarRigManager::swapArmed(int channel) const noexcept {
@@ -233,61 +299,89 @@ bool GuitarRigManager::hasPendingConfig(int channel) const noexcept {
     return false;
 }
 
-bool GuitarRigManager::requestRigSwap(int channel) {
-    if (channel < 0 || channel >= kChannels || !mPrepared) return false;
-    if (mControlBusy.test_and_set(std::memory_order_acquire)) return false;  // control busy
-    struct Unlock {
-        std::atomic_flag& f;
-        ~Unlock() { f.clear(std::memory_order_release); }
-    } unlock{mControlBusy};
-    std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
-    // Serialize: reclaim a completed swap's retired rig (live-safe: the
-    // callback parked it and never reads the RETIRED cell) BEFORE the busy
-    // test, so a finished swap never wedges the channel.
-    syncAdoptLocked(channel);
-    if (mSwapArmed[channel].load(std::memory_order_acquire) ||
-        mPending[channel].load(std::memory_order_acquire) != nullptr ||
-        mRetired[channel].load(std::memory_order_acquire) != nullptr) {
-        return false;  // busy: previous swap still in flight / unreclaimed
-    }
-    GuitarRigEffect* pub = mPublished[channel].load(std::memory_order_acquire);
-    if (!pub) return true;  // nothing live: the desired row is honored at instantiate
+std::unique_ptr<GuitarRigEffect> GuitarRigManager::buildCandidate(int channel, double sampleRate,
+                                                                  int maxFrames) {
     // Spec §10.2: copy the FULL desired config (incl. current live params)
     // and build a complete rig OFF the callback thread — both mono engines,
     // pedals pre-created bypassed, amp model + fresh synthetic IR via
-    // prepare()'s applyConfigNow, every param value from mDesired.
+    // prepare()'s applyConfigNow, every param value from mDesired. The row
+    // is read per-parameter atomically WITHOUT the guards: concurrent
+    // mirror writes may interleave, but every read value is a valid desired
+    // value and any later rebuild sees the newest row.
     auto candidate = std::make_unique<GuitarRigEffect>();
     for (int i = 0; i < kParamCount; ++i)
         candidate->setParameter(static_cast<uint32_t>(i),
                                 mDesired[channel][i].load(std::memory_order_relaxed));
-    if (mFailNextBuild) {  // test seam: simulate a builder allocation failure
-        mFailNextBuild = false;
-        mErrorState[channel].store(AllocationFailed, std::memory_order_release);
-        return false;  // CURRENT untouched
+    if (mFailNextBuildCode >= 0) {  // test seam: simulate a builder failure
+        const int code = mFailNextBuildCode;
+        mFailNextBuildCode = -1;
+        mErrorState[channel].store(code, std::memory_order_release);
+        return nullptr;
     }
-    if (!candidate->prepare(mSampleRate, mMaxFrames) || !candidate->isAvailable()) {
+    if (!candidate->prepare(sampleRate, maxFrames) || !candidate->isAvailable()) {
         mErrorState[channel].store(EngineInitFailed, std::memory_order_release);
-        return false;  // builder failure: CURRENT untouched, UI-visible error
+        return nullptr;  // builder failure: CURRENT untouched, UI-visible error
     }
-    // Arm FIRST (single producer of this cell), then hand over PENDING with
-    // a single-slot CAS, NOT a plain store: the busy test above raced the
-    // callback (which can take PENDING only at commit, but the worker's own
-    // syncAdopt ran before that commit could park the retired rig), so the
-    // slot may legitimately differ from the loaded state. A non-empty
-    // mailbox at CAS time = busy. The candidate is still worker-owned here,
-    // so destroy it and report busy — an unconsumed PENDING is NEVER
-    // overwritten or lost (spec §10.2).
-    mSwapArmed[channel].store(true, std::memory_order_relaxed);
-    GuitarRigEffect* expected = nullptr;
-    if (!mPending[channel].compare_exchange_strong(expected, candidate.get(),
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_acquire)) {
-        mSwapArmed[channel].store(false, std::memory_order_release);
-        return false;  // busy: slot occupied (re-checked reclaim first)
+    return candidate;
+}
+
+bool GuitarRigManager::requestRigSwap(int channel) {
+    if (channel < 0 || channel >= kChannels || !mPrepared.load(std::memory_order_acquire)) return false;
+    double rateSnapshot = 0.0;
+    int framesSnapshot = 0;
+    // Phase 1 — guarded checks + recovery (lifetime → busy, non-blocking).
+    {
+        ControlGuard guard(mLifetimeMutex, mControlBusy);
+        if (!guard.held()) return false;  // control-busy: retry shortly
+        // Serialize: reclaim a completed swap's retired rig (live-safe: the
+        // callback parked it and never reads the RETIRED cell) BEFORE the
+        // busy test, so a finished swap — or one DEFERRED on an occupied
+        // retired slot (process()'s §10.3 fallback) — never wedges the
+        // channel. This is the documented worker-side recovery path.
+        syncAdoptLocked(channel);
+        if (swapInFlight(channel)) return false;  // busy: previous swap in flight / unreclaimed
+        GuitarRigEffect* pub = mPublished[channel].load(std::memory_order_acquire);
+        if (!pub) return true;  // nothing live: the desired row is honored at instantiate
+        // Snapshot the build geometry under the guards: the candidate is
+        // built off-thread below, and a concurrent reprepareQuiescent may
+        // change it (re-checked in phase 3).
+        rateSnapshot = mSampleRate;
+        framesSnapshot = mMaxFrames;
     }
-    candidate.release();  // ownership: worker until the callback takes it
-    mErrorState[channel].store(Ok, std::memory_order_release);
-    return true;
+    // Phase 2 — build the candidate OFF the control guards (the IR/FFT-heavy
+    // part of a request): a long build never stalls the global control path
+    // or another channel's knobs (FIX: reduce the control-busy stall). The
+    // single-slot CAS in phase 3 is the authoritative publish anyway.
+    std::unique_ptr<GuitarRigEffect> candidate = buildCandidate(channel, rateSnapshot, framesSnapshot);
+    if (!candidate) return false;  // builder failure: errorState set, CURRENT untouched
+    // Phase 3 — publish under the guards. The mailbox may have filled while
+    // the candidate built (a racing accepted swap) → busy, discard.
+    {
+        ControlGuard guard(mLifetimeMutex, mControlBusy);
+        if (!guard.held()) return false;  // candidate discarded (unique_ptr)
+        syncAdoptLocked(channel);
+        if (swapInFlight(channel)) return false;  // occupied between phases = busy
+        GuitarRigEffect* pub = mPublished[channel].load(std::memory_order_acquire);
+        if (!pub) return true;   // torn down meanwhile: row honored at instantiate
+        if (mSampleRate != rateSnapshot || mMaxFrames != framesSnapshot)
+            return false;  // geometry moved (reprepare): stale-rate candidate discarded, retry
+        // Arm FIRST (single producer of this cell), then hand over PENDING
+        // with a single-slot CAS, NOT a plain store: a non-empty mailbox at
+        // CAS time = busy. The candidate is still worker-owned here, so
+        // destroy it and report busy — an unconsumed PENDING is NEVER
+        // overwritten or lost (spec §10.2).
+        mSwapArmed[channel].store(true, std::memory_order_relaxed);
+        GuitarRigEffect* expected = nullptr;
+        if (!mPending[channel].compare_exchange_strong(expected, candidate.get(),
+                                                       std::memory_order_acq_rel,
+                                                       std::memory_order_acquire)) {
+            mSwapArmed[channel].store(false, std::memory_order_release);
+            return false;  // busy: slot occupied
+        }
+        candidate.release();  // ownership: worker until the callback takes it
+        mErrorState[channel].store(Ok, std::memory_order_release);
+        return true;
+    }
 }
 
 bool GuitarRigManager::requestRigConfig(int channel, int ampModel, int cabType) {
@@ -297,15 +391,26 @@ bool GuitarRigManager::requestRigConfig(int channel, int ampModel, int cabType) 
     const float cab = static_cast<float>(cabType);
     mDesired[channel][kParamAmpModel].store(model, std::memory_order_release);
     mDesired[channel][kParamCabType].store(cab, std::memory_order_release);
-    if (GuitarRigEffect* pub = mPublished[channel].load(std::memory_order_acquire)) {
-        pub->setParameter(kParamAmpModel, model);  // mirror only, not engine
-        pub->setParameter(kParamCabType, cab);
-    }
+    {
+        // GUARDED mirror write (FIX C1): dereferencing the published rig
+        // without the control guards raced the quiescent free sites (which
+        // hold both). Best-effort: under contention the desired row already
+        // carries the new values and the swap candidate (or the next
+        // instantiate) is built from it, so the change is not lost.
+        ControlGuard guard(mLifetimeMutex, mControlBusy);
+        if (guard.held()) {
+            if (GuitarRigEffect* pub = mPublished[channel].load(std::memory_order_acquire)) {
+                pub->setParameter(kParamAmpModel, model);  // mirror only, not engine
+                pub->setParameter(kParamCabType, cab);
+            }
+        }
+    }  // guards RELEASED here — requestRigSwap takes them itself (non-recursive)
     return requestRigSwap(channel);
 }
 
 bool GuitarRigManager::applyPendingConfig(int channel) {
     if (channel < 0 || channel >= kChannels) return false;
+    // LOCK ORDER: lifetime mutex first, control-busy second (class invariant).
     std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
     BusyLock busy(mControlBusy);
     if (!mPublished[channel].load(std::memory_order_acquire)) return false;
@@ -315,7 +420,9 @@ bool GuitarRigManager::applyPendingConfig(int channel) {
     bool ok;
     // Spec §10.4: with an un-taken PENDING, apply it to CURRENT directly —
     // destroy the old rig inline (mEffects is its only owner here) and
-    // install the worker-built replacement.
+    // install the worker-built replacement. This is a DIRECT LANDING of the
+    // accepted config (not a commit, so no mSwapCount bump; not a
+    // supersession, so no mSupersededCount bump — the config landed).
     GuitarRigEffect* pending = mPending[channel].exchange(nullptr, std::memory_order_acq_rel);
     if (pending) {
         // The candidate snapshots mDesired at REQUEST time; a live param
@@ -354,21 +461,58 @@ void GuitarRigManager::drainAllQuiescent() {
     // Shutdown / sample-rate-gate path (NativeEngine calls this with the
     // audio callback detached). Mailboxes hold worker-owned objects; the
     // callback provably references none of them.
+    // LOCK ORDER: lifetime mutex first, control-busy second (class invariant).
     std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
     BusyLock busy(mControlBusy);
     for (int c = 0; c < kChannels; ++c) drainChannelQuiescentLocked(c);
 }
 
+int GuitarRigManager::rigStatus(int channel) {
+    uint64_t superseded = 0;
+    return rigStatus(channel, superseded);
+}
+
+int GuitarRigManager::rigStatus(int channel, uint64_t& supersededOut) {
+    if (channel < 0 || channel >= kChannels) {
+        supersededOut = 0;
+        return packRigStatus(kStatusBadChannel, 0);
+    }
+    supersededOut = mSupersededCount[channel].load(std::memory_order_acquire);
+    int code = kStatusOk;
+    {
+        // LOCK ORDER: lifetime mutex → busy flag, non-blocking (this is a
+        // UI-lane poll; it must never block behind a rebuild).
+        ControlGuard guard(mLifetimeMutex, mControlBusy);
+        if (!guard.held()) return packRigStatus(kStatusBusyControl, supersededOut);
+        // Worker-side RECOVERY PATH (spec §10.3 retired-occupancy DEFER): a
+        // commit deferred on an occupied RETIRED slot leaves the channel
+        // dry-stuck until the next worker action; the status poll reclaims
+        // it here, exactly like requestRigSwap's and instantiate's opportunistic
+        // syncAdopt. applyPendingConfig/reset/drain also clear the deferred
+        // state (and releaseChannelLocked clears the armed flag).
+        syncAdoptLocked(channel);
+        const int err = mErrorState[channel].load(std::memory_order_acquire);
+        if (swapInFlight(channel))
+            code = kStatusBusySwapInFlight;  // armed / pending / unreclaimed retired
+        else if (err == EngineInitFailed)
+            code = kStatusBuildFailed;       // previous sound retained
+        else if (err == AllocationFailed)
+            code = kStatusAllocationFailed;  // previous sound retained
+        else
+            code = kStatusOk;
+        supersededOut = mSupersededCount[channel].load(std::memory_order_acquire);
+    }
+    return packRigStatus(code, supersededOut);
+}
+
 // ── lifecycle + control surface ───────────────────────────────────────────
 
 bool GuitarRigManager::instantiate(int channel) {
-    if (channel < 0 || channel >= kChannels || !mPrepared) return false;
-    if (mControlBusy.test_and_set(std::memory_order_acquire)) return false;
-    struct Unlock {
-        std::atomic_flag& f;
-        ~Unlock() { f.clear(std::memory_order_release); }
-    } unlock{mControlBusy};
-    std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
+    if (channel < 0 || channel >= kChannels || !mPrepared.load(std::memory_order_acquire)) return false;
+    // Single lock order: lifetime mutex → busy flag, non-blocking. Control
+    // contention surfaces as false = busy (retry), matching the JNI contract.
+    ControlGuard guard(mLifetimeMutex, mControlBusy);
+    if (!guard.held()) return false;
     syncAdoptLocked(channel);  // a completed swap may have changed CURRENT
     auto& effect = mEffects[channel];
     if (effect) {
@@ -419,28 +563,49 @@ bool GuitarRigManager::rackEnabled(int channel) const noexcept {
            mRackEnabled[channel].load(std::memory_order_acquire);
 }
 
+void GuitarRigManager::mirrorToRig(int channel, uint32_t parameterId, float value) noexcept {
+    // FIX C1: the published-rig dereference runs under the control guards —
+    // reprepareQuiescent / resetChannelRange / applyPendingConfig free the
+    // rig precisely under those locks, and const getters take the mutex
+    // alone. Best-effort: under contention nothing is lost — mDesired (the
+    // single source of truth) already holds the value, and the next swap
+    // candidate / instantiate applies it.
+    ControlGuard guard(mLifetimeMutex, mControlBusy);
+    if (!guard.held()) return;
+    if (GuitarRigEffect* effect = mPublished[channel].load(std::memory_order_acquire)) {
+        // Mirror the desired value on the live rig (getParameterChecked
+        // reports the DESIRED config, not the engine-confirmed one, until
+        // a swap commits).
+        effect->setParameter(parameterId, value);
+    }
+}
+
 bool GuitarRigManager::setParameterChecked(int channel, uint32_t parameterId, float value) noexcept {
     if (channel < 0 || channel >= kChannels || parameterId >= kParamCount) return false;
     float v = value;
     if (!guitarRigClampParam(parameterId, v)) return false;
+    // The desired row is the single source of truth: record FIRST, always,
+    // guard-free (atomics), so a rejected/contended call never loses the
+    // change.
     mDesired[channel][parameterId].store(v, std::memory_order_release);
-    GuitarRigEffect* effect = mPublished[channel].load(std::memory_order_acquire);
-    if (effect) {
-        // Mirror the desired value on the live rig (getParameterChecked
-        // reports the DESIRED config, not the engine-confirmed one, until
-        // a swap commits).
-        effect->setParameter(parameterId, v);
-        // Spec §10.6: the discrete model/cab params INITIATE a live swap.
-        // true = accepted (lands on a processed block); false = busy or
-        // builder failure (errorState set; old rig keeps running).
-        if (parameterId == kParamAmpModel || parameterId == kParamCabType)
-            return requestRigSwap(channel);
-    }
+    // Guarded live-rig mirror (FIX C1 — the raw dereference raced the
+    // quiescent free sites).
+    mirrorToRig(channel, parameterId, v);
+    // Spec §10.6: the discrete model/cab params INITIATE a live swap.
+    // true = accepted (lands on a processed block); false = busy (swap in
+    // flight OR control section held; retry shortly) or builder failure
+    // (errorState set; old rig keeps running). Guards are taken INSIDE
+    // requestRigSwap — the mutex/flag are non-recursive, never hold them
+    // across this call.
+    if (parameterId == kParamAmpModel || parameterId == kParamCabType)
+        return requestRigSwap(channel);
     return true;
 }
 
 bool GuitarRigManager::getParameterChecked(int channel, uint32_t parameterId, float& value) const noexcept {
     if (channel < 0 || channel >= kChannels || parameterId >= kParamCount) return false;
+    // Lifetime mutex only: every delete of a published rig holds it (single
+    // order audit — see class doc), so the dereference cannot UAF.
     std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
     const GuitarRigEffect* effect = mPublished[channel].load(std::memory_order_acquire);
     value = effect ? effect->getParameter(parameterId)
@@ -485,7 +650,10 @@ bool GuitarRigManager::isAvailable(int channel) const noexcept {
 }
 
 int GuitarRigManager::errorState(int channel) const noexcept {
-    if (channel < 0 || channel >= kChannels) return AllocationFailed;
+    // Invalid channels have their OWN code (previously mislabeled
+    // AllocationFailed — the UI lane must not read "allocation failure"
+    // for a wrong channel id).
+    if (channel < 0 || channel >= kChannels) return BadChannel;
     return mErrorState[channel].load(std::memory_order_acquire);
 }
 
@@ -504,7 +672,12 @@ void GuitarRigManager::commitSwapAudio(int channel) noexcept {
     // the worker has not reclaimed the previous swap — unreachable under the
     // busy rules (an accepted request implies retired was empty and only one
     // swap can be in flight); DEFER and retry on the next processed block
-    // rather than dropping or overwriting the retired rig.
+    // rather than dropping or overwriting the retired rig. The DEFER leaves
+    // the channel parked (dry, mid-fade) until a worker action reclaims the
+    // RETIRED rig — recovery: requestRigSwap (opportunistic syncAdopt),
+    // instantiate, rigStatus (poll-driven reclaim), applyPendingConfig /
+    // drain / reset (quiescent); reset also clears the armed flag via
+    // releaseChannelLocked.
     if (mRetired[channel].load(std::memory_order_acquire) != nullptr) return;
     GuitarRigEffect* pending = mPending[channel].exchange(nullptr, std::memory_order_acq_rel);
     if (!pending) {
@@ -527,28 +700,38 @@ void GuitarRigManager::commitSwapAudio(int channel) noexcept {
         // rig back if the slot is still empty; otherwise stash it in the
         // EMPTY retired slot so the worker's quiescent drain proves it
         // unowned and frees it — the callback never deletes, never loses.
+        // (If BOTH stash slots are occupied the candidate is unreachable
+        // from this non-deleting thread and leaks — accepted for this
+        // provably-unreachable defensive branch: no test path reaches it.)
         GuitarRigEffect* expected = nullptr;
         if (!mPending[channel].compare_exchange_strong(expected, pending,
                                                        std::memory_order_acq_rel,
                                                        std::memory_order_acquire)) {
             expected = nullptr;
-            if (mRetired[channel].compare_exchange_strong(expected, pending,
-                                                          std::memory_order_acq_rel,
-                                                          std::memory_order_acquire)) {
-                mSwapArmed[channel].store(false, std::memory_order_release);
-                mSwapRuntime[channel].phase = kPhaseIdle;
-            }
+            mRetired[channel].compare_exchange_strong(expected, pending,
+                                                      std::memory_order_acq_rel,
+                                                      std::memory_order_acquire);
         }
+        // NEVER leave the channel ARMED after a failed commit (the previous
+        // success paths returned with armed still set → a permanent wedge,
+        // since a null-published channel is skipped by process() and the
+        // flag would reject every future request): the flag is only ever
+        // cleared here. An un-taken restash into PENDING still reads as
+        // in-flight through hasPendingConfig()/rigStatus() (the PENDING cell
+        // is the authoritative record), and recovers via re-instantiate or
+        // the quiescent drain (counted superseded).
+        mSwapArmed[channel].store(false, std::memory_order_release);
+        mSwapRuntime[channel].phase = kPhaseIdle;
         return;
     }
     mRetired[channel].store(old, std::memory_order_release);  // one store per swap
-    mSwapCount[channel].fetch_add(1, std::memory_order_acq_rel);  // ACK (§10.5c)
+    mSwapCount[channel].fetch_add(1, std::memory_order_acq_rel);  // COMMIT ACK (§10.5c)
     mSwapArmed[channel].store(false, std::memory_order_release);
     mSwapRuntime[channel].phase = kPhaseFadeIn;
 }
 
 void GuitarRigManager::process(float* const buses[kChannels], int frames) noexcept {
-    if (!buses || frames <= 0 || !mPrepared || frames > mMaxFrames) return;
+    if (!buses || frames <= 0 || !mPrepared.load(std::memory_order_acquire) || frames > mMaxFrames) return;
     for (int channel = 0; channel < kChannels; ++channel) {
         float* bus = buses[channel];
         if (!bus) continue;
@@ -648,16 +831,22 @@ void GuitarRigManager::releaseChannelLocked(int channel) noexcept {
 
 bool GuitarRigManager::resetChannelRange(int first, int count) noexcept {
     if (first < 0 || count < 0 || first > kChannels || count > kChannels - first) return false;
+    // LOCK ORDER: lifetime mutex first, control-busy second (class invariant).
     std::lock_guard<std::mutex> lifetimeLock(mLifetimeMutex);
     BusyLock busy(mControlBusy);
     for (int c = first; c < first + count; ++c) {
         // Quiesced: mailboxes hold worker-owned rigs, free them BEFORE
-        // releasing the channel so neither the effect nor a rig leaks.
+        // releasing the channel so neither the effect nor a rig leaks. An
+        // un-taken PENDING (accepted swap) dies here: the channel is torn
+        // down, so it is accounted superseded (never committed).
         GuitarRigEffect* pending = mPending[c].exchange(nullptr, std::memory_order_acq_rel);
-        if (pending) delete pending;
+        if (pending) {
+            mSupersededCount[c].fetch_add(1, std::memory_order_relaxed);
+            delete pending;
+        }
         GuitarRigEffect* retired = mRetired[c].exchange(nullptr, std::memory_order_acq_rel);
         if (retired && (!mEffects[c] || mEffects[c].get() != retired)) delete retired;
-        releaseChannelLocked(c);
+        releaseChannelLocked(c);  // clears the deferred armed flag too
     }
     return true;
 }

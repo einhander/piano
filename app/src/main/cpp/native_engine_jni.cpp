@@ -1253,6 +1253,13 @@ JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeIsI
 JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeResetInstrumentDelay(JNIEnv*,jclass,jint c){auto* e=NativeEngine::getInstance();if(!e||c<0||c>127||!e->isInstrumentDelayPrepared())return JNI_FALSE;e->resetInstrumentDelay(c);return JNI_TRUE;}
 JNIEXPORT jboolean JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeResetInstrumentChannelRange(JNIEnv*,jclass,jint first,jint count){auto* e=NativeEngine::getInstance();return e&&e->resetInstrumentChannelRange(first,count)?JNI_TRUE:JNI_FALSE;}
 JNIEXPORT jint JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeGetInstrumentEffectLatencyFrames(JNIEnv* env,jclass,jint c,jstring id){auto* e=NativeEngine::getInstance();std::string s;auto p=instrumentId(env,id,s);if(PIANO_GUITAR_RIG(e,p))return e->getGuitarRigLatencyFrames(c);return e&&p?e->getInstrumentEffectLatencyFrames(c,p):0;}
+// Live-swap status for the guitar rig (spec §10; docs/guitar-fx-port.md
+// §Live rig swap — Status codes). Returns the PACKED int: bits 0-3 = RigStatus
+// code (0 Ok, 1 BusySwapInFlight, 2 BusyControl, 3 BuildFailed,
+// 4 AllocationFailed, 5 BadChannel), bits 4-31 = monotonic supersededCount
+// saturated to 0x0FFFFFFF. Non-blocking; LSP slot ids have no swap protocol
+// and map to BadChannel.
+JNIEXPORT jint JNICALL Java_com_piano_sequencer_NativeEngineBridge_nativeGetGuitarRigStatus(JNIEnv* env,jclass,jint c,jstring id){auto* e=NativeEngine::getInstance();std::string s;auto p=instrumentId(env,id,s);if(PIANO_GUITAR_RIG(e,p))return e->getGuitarRigStatus(c);return piano::guitar::GuitarRigManager::packRigStatus(piano::guitar::GuitarRigManager::kStatusBadChannel,0);}
 
 // Launch quantization
 JNIEXPORT void JNICALL

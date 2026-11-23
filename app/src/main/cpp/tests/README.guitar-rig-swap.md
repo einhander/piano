@@ -41,6 +41,41 @@ over CURRENT → PENDING → RETIRED mailboxes:
 - **I6 rack-off landing**: after the disable ramp completes (rig fully
   dry), a pending swap commits silently on the first processed block.
 
+## Concurrency-hardening scenarios (T1–T5 — control-path UAF + lock-order fixes)
+
+The adversarial audit follow-ups (control-thread dereference guard, single
+lock order `lifetime mutex → control-busy`, honest status export):
+
+- **T1 setter-burst**: `setParameterChecked` (model/cab/mix) +
+  `requestRigConfig` + `instantiate` hammering one channel from a control
+  thread **concurrently** with repeated `reprepareQuiescent` (48k↔44.1k) +
+  `resetChannelRange` from an admin thread, plus a status/getter poller
+  (`rigStatus`, `hasPendingConfig`, `swapCount`, `supersededCount`,
+  `errorState`, `getParameterChecked`). No `process()` — the admin paths
+  require the quiescent contract. Asserts: no crash / no UAF / no leak
+  (ASan), some control calls legitimately return false under contention
+  (busy-control or busy-swap), final drain leaves nothing in flight;
+- **T2 cross-channel**: 40-accept swap storms on ch2 AND ch5 from two
+  control threads against one processing thread — asserts PER-CHANNEL
+  busy/commit semantics under the global control guards (each channel
+  lands exactly its own commits, no wedge; the single lock order serializes
+  sections, not semantics);
+- **T3 segmented callback**: TWO `process()` calls within one logical block
+  while the PENDING mailbox arrives (async control thread) mid-first-segment
+  — the commit lands across the segmentation, every fed frame processed,
+  outputs finite;
+- **T4 busy false→true→false**: one accept (busy true, second request
+  honestly rejected) → commit (busy false) advances `swapCount` by EXACTLY
+  one and `supersededCount` by zero; a quiescent-reprepare supersede bumps
+  `supersededCount`, NEVER `swapCount` (the ACK-honesty contract);
+- **T5 status-code mapping**: every packed `rigStatus` code observable at
+  least once — `Ok`, `BusySwapInFlight`, `BusyControl` (held via the
+  `tryLockControlForTesting` seam, queried from another thread),
+  `BuildFailed` (`setFailNextBuildCodeForTesting(EngineInitFailed)`),
+  `AllocationFailed` (boolean seam), `BadChannel` (± out-of-range ids, and
+  `errorState(-1) == BadChannel` — invalid channels have their own code),
+  plus the packed superseded bits, saturation and round-trip.
+
 ## Build + run (ASan + UBSan)
 
 From the repo root — same object set as `README.guitar-rig-manager.md`:
@@ -65,32 +100,38 @@ g++ -std=c++17 -g -O1 -fPIC -fsanitize=address,undefined -fno-omit-frame-pointer
 ## Expected
 
 `ALL PASS (failures: 0)`, exit 0, no ASan/UBSan reports. Observed host
-x86-64, gcc 14.2 (2026-11-23), two ASan runs + one TSan run:
+x86-64, gcc 14.2 (2026-11-24, hardening commit — control-guarded derefs +
+single lock order + packed `rigStatus`), ASan+UBSan:
 
 ```
-I4 max|Δ|L natural-timbres=0.433210 swap-run=0.448972 bound=0.483210 (margin 0.050)
-[I4] stress 1000 swaps: frames=38512103 busy-spins=33250 ok  (ASan, final commit tree)
-[I4] stress 1000 swaps: frames=38559219 busy-spins=35234 ok  (ASan, same code)
-swap-run max|Δ| observed range across runs: 0.433194 .. 0.450086 (bound 0.483210)
+I4 max|Δ|L natural-timbres=0.433210 swap-run=0.450213 bound=0.483210 (margin 0.050)
+[I4] stress 1000 swaps: frames=38783739 busy-spins=26671 ok
 [I5] determinism: ok (85834 tail floats compared bit-exact)
-ASAN_EXIT=0 / TSAN: ALL PASS, 0 warnings, swap-run max|Δ| 0.433194 ≤ natural 0.433210
+[T1] setter-burst × reprepare/reset + polls: ok (accepted=1501 rejected=4499)
+[T2] cross-channel concurrent swaps (ch2+ch5, N=40): ok
+[T3] segmented callback (2 process() per block): ok
+[T4] busy-cycle lands one rig + honest supersede accounting: ok
+[T5] status-code mapping (all 6 codes): ok
+ALL PASS (failures: 0)
 ```
 
 The swap-run max|Δ| sits at or below the natural hard-clip edge of the
-high-gain timbre (0.433 — a property of the sound, not the swap; the
-absolute maxΔ is reached inside settled wet audio, not at a swap
-boundary). The documented bound is natural-slew max + 0.05. The protocol
-commits only at wet==0 (output == exact dry passthrough at that instant),
-runs the fresh engine silently for 4 ms (priming) before the 10 ms
-fade-in, so the swap boundaries contribute no measurable discontinuity.
+high-gain timbre (0.433 — a property of the sound, not the swap). The
+documented bound is natural-slew max + 0.05. T1's rejected≈75% reflects
+the honest non-blocking control path: under concurrent reprepare/reset
+(both heavy, guard-holding ops) control calls return busy-false rather
+than ever dereferencing a possibly-freed rig — the exact adversarial
+interleaving the pre-fix code lost.
 
 ## TSan note
 
 `-fsanitize=thread` build of this exact test (all engine C objects
-recompiled) runs under `setarch $(uname -m) -R` (plain TSan aborts at
-startup on this kernel with `FATAL: unexpected memory mapping`). Result:
-ALL PASS, **zero** ThreadSanitizer warnings. TSan in this lane earned
-its keep: it caught a real use-after-retire (the fade-completion check
-accessing the pre-commit rig pointer after the commit handed that rig to
-RETIRED — the worker was concurrently deleting it); fixed by re-loading
-`mPublished` before any post-state-machine access.
+recompiled, `SWAPSAN=thread`) runs under `setarch $(uname -m) -R` (plain
+TSan aborts at startup on this kernel with `FATAL: unexpected memory
+mapping`). Result: ALL PASS, **zero** ThreadSanitizer warnings — including
+the T1 reprepare×setter×poll storm, which is the direct lock-order/UAF
+regression probe (TSan flags both mutex-order inversions and plain data
+races). TSan in this lane previously earned its keep: it caught a real
+use-after-retire (the fade-completion check accessing the pre-commit rig
+pointer after the commit handed that rig to RETIRED — fixed by re-loading
+`mPublished` before any post-state-machine access).

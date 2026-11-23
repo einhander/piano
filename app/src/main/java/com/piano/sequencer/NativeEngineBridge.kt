@@ -335,6 +335,14 @@ object NativeEngineBridge {
     external fun nativeGetInstrumentEffectParamCount(effectId: String): Int
     external fun nativeGetInstrumentEffectParamInfo(effectId: String, index: Int): FloatArray?
     external fun nativeGetInstrumentEffectParamName(effectId: String, index: Int): String
+    /**
+     * Guitar rig live-swap status (effectId must be "guitar.rig"; other ids
+     * map to code BadChannel). Non-blocking, callable from any thread.
+     * Packed int: bits 0-3 = status code (0 Ok, 1 BusySwapInFlight,
+     * 2 BusyControl, 3 BuildFailed, 4 AllocationFailed, 5 BadChannel),
+     * bits 4-31 = monotonic supersededCount saturated to 0x0FFFFFFF.
+     */
+    external fun nativeGetGuitarRigStatus(channel: Int, effectId: String): Int
     // Shared FX control facade. All setters and native metadata queries run on worker threads.
     external fun nativeSetSharedFxParameter(scope: String, parameterId: Int, value: Float): Boolean
     external fun nativeGetSharedFxParameter(scope: String, parameterId: Int): Float

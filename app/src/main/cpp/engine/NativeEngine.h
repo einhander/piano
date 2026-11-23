@@ -219,6 +219,10 @@ public:
                                bool& toggled) const;
     const char* getGuitarRigParamName(int index) const;
     int getGuitarRigLatencyFrames(int channel) const;
+    // Packed live-swap status (piano::guitar::GuitarRigManager::rigStatus):
+    // bits 0-3 RigStatus code, bits 4-31 supersededCount (saturated). Valid
+    // for any channel value — invalid ids map to kStatusBadChannel inside.
+    int getGuitarRigStatus(int channel);
     bool setInstrumentEffectEnabled(int channel, const char* effectId, bool enabled);
     bool isInstrumentEffectEnabled(int channel, const char* effectId) const;
     bool isInstrumentEffectAvailable(int channel, const char* effectId) const;
