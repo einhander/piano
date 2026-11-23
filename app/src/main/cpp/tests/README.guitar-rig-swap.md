@@ -74,7 +74,40 @@ lock order `lifetime mutex → control-busy`, honest status export):
   `BuildFailed` (`setFailNextBuildCodeForTesting(EngineInitFailed)`),
   `AllocationFailed` (boolean seam), `BadChannel` (± out-of-range ids, and
   `errorState(-1) == BadChannel` — invalid channels have their own code),
-  plus the packed superseded bits, saturation and round-trip.
+  plus the packed superseded bits, saturation and round-trip;
+- **T6 discrete-config dedupe (m6, phase-G pre-requisite)**: the manager
+  tracks `mAppliedConfig` — the packed `(ampModel, cabType)` pair the CURRENT
+  engine provably runs with. The key is captured from an IMMUTABLE
+  build-time snapshot carried by each swap candidate
+  (`GuitarRigEffect::setBuildConfigSnapshot`, written by `buildCandidate`,
+  consumed by the commit BEFORE publishing and before clearing `armed`; reading the candidate's live mirror at commit
+  time was tried first and T2 caught it racing the next accepted request's
+  mirror — a corrupted, ahead-of-commit key enabled false dedupes that
+  silently dropped requested changes). Landing sites: instantiate, staged
+  reprepare rebuild, swap commit (candidate snapshot), quiescent apply; a
+  rejected/failed request never writes it, so retries after a failure keep
+  attempting. `requestRigConfig()` and
+  `setParameterChecked(kParamAmpModel|kParamCabType)` with the pair equal to
+  the applied config and no swap in flight return TRUE as a no-op without
+  building a candidate. T6 asserts: repeated same-value sets leave
+  `swapCount`, `supersededCount`, the mailbox and the status code frozen —
+  structurally zero candidate builds, hence zero allocation growth (the swap
+  candidate is the ONLY allocation path of a discrete set; ASan
+  additionally confirms leak-clean exit); an in-flight identical request is
+  NOT masked into a fake true (honest busy-false preserved); a builder
+  failure leaves the key at the retained old pair, so the retry re-attempts
+  and only the first successful commit re-arms the dedupe;
+  `resetChannelRange` clears the key, `instantiate` re-records it.
+  T2 (cross-channel storm) doubles as the dedupe race regression: under the
+  concurrent ctrlA/ctrlB accept-commit-mirror interleaving it must still land
+  all 40 swaps per channel (a corrupted key shows up as accepted-but-never-
+  committed writes there first).
+  Consequences for the older scenarios: the I4 stress model cycle is offset
+  by 1 (its first request must be a real change, not a dedupe no-op, or
+  `swapCount == 1000` cannot hold) and the I5 determinism schedule uses
+  per-parameter cycles `(2s+1)%3` / `(3s+1)%4` so every request differs from
+  the applied config — otherwise the run would "deterministically" swap
+  nothing.
 
 ## Build + run (ASan + UBSan)
 
@@ -104,14 +137,15 @@ x86-64, gcc 14.2 (2026-11-24, hardening commit — control-guarded derefs +
 single lock order + packed `rigStatus`), ASan+UBSan:
 
 ```
-I4 max|Δ|L natural-timbres=0.433210 swap-run=0.450213 bound=0.483210 (margin 0.050)
-[I4] stress 1000 swaps: frames=38783739 busy-spins=26671 ok
+I4 max|Δ|L natural-timbres=0.433210 swap-run=0.450100 bound=0.483210 (margin 0.050)
+[I4] stress 1000 swaps: frames=38727374 busy-spins=28888 ok
 [I5] determinism: ok (85834 tail floats compared bit-exact)
-[T1] setter-burst × reprepare/reset + polls: ok (accepted=1501 rejected=4499)
+[T1] setter-burst × reprepare/reset + polls: ok (accepted=2029 rejected=3971)
 [T2] cross-channel concurrent swaps (ch2+ch5, N=40): ok
 [T3] segmented callback (2 process() per block): ok
 [T4] busy-cycle lands one rig + honest supersede accounting: ok
 [T5] status-code mapping (all 6 codes): ok
+[T6] discrete-config dedupe (m6): ok
 ALL PASS (failures: 0)
 ```
 

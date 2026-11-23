@@ -164,6 +164,18 @@ public:
                    ? 0.0f
                    : mParams[kParamMix].load(std::memory_order_relaxed);
     }
+    // ── m6 dedupe support (GuitarRigManager only) ───────────────────────────
+    // Immutable discrete-config snapshot this rig was BUILT with: the packed
+    // (ampModel<<2|cabType) pair read from the desired row by the manager's
+    // buildCandidate(). The commit records it into the manager's applied-config
+    // key — reading the live mirror at commit time is NOT safe: the next
+    // accepted request mirrors into the just-committed rig and would corrupt
+    // the key (false dedupe = silently dropped change; T2 in
+    // tests/guitar_rig_swap_test.cpp is the regression probe). Set once by
+    // the builder before the rig is ever published; read-only afterwards.
+    void setBuildConfigSnapshot(int packed) noexcept { mBuildConfigSnapshot = packed; }
+    int buildConfigSnapshot() const noexcept { return mBuildConfigSnapshot; }
+
     // ── Silent engine priming after a live-swap commit ────────────────────
     // A freshly prepared rig's internal state (amp DC-blocker / power-sag /
     // gate / cab overlap buffers) starts at zero, so its FIRST blocks of a
@@ -223,6 +235,11 @@ private:
     float mWetApplied = 0.0f;
     // Audio-thread-owned silent-priming countdown (see startPriming()).
     int mPrimeFrames = 0;
+    // Builder-only immutable config snapshot (see setBuildConfigSnapshot()).
+    // Written once before publish by GuitarRigManager::buildCandidate,
+    // never by the audio path; plain int is fine (single writer, publish
+    // boundary is the mPublished exchange / ownership transfer).
+    int mBuildConfigSnapshot = -1;
 };
 
 } // namespace guitar

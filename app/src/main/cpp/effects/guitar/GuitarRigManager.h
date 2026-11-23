@@ -121,6 +121,20 @@ namespace guitar {
 //       apply/drain) additionally require callback quiescence, so an
 //       in-progress fade can never race a free.
 //
+// DISCRETE-CONFIG DEDUPE (m6, phase-G pre-requisite): MIDI-CC and UI re-send
+// discrete model/cab values that often already equal the applied rig config;
+// a full rebuild per unchanged CC write is waste with a fade attached.
+// requestRigConfig() and setParameterChecked(model|cab) therefore compare
+// the requested (ampModel, cabType) PAIR against mAppliedConfig — the config
+// the CURRENT engine provably runs with (see member) — and when it matches
+// AND no swap is in flight, return TRUE as a no-op without building a
+// candidate (zero allocations). The desired row + mirror still update (they
+// converge to the same values). A request made while a swap is in flight is
+// NEVER deduped — it surfaces the honest busy false, so the UI contract
+// (false = retry) cannot be masked. A builder failure leaves mAppliedConfig
+// at the untouched old config, so the retry after a failure is never
+// deduped away.
+//
 // ACK honesty (supersedes the earlier "monotonic ACK" claim): an accepted
 // swap (requestRigSwap()/setParameterChecked(model|cab) == true) means the
 // config WILL land — either as a COMMIT (mSwapCount++ on a processed block)
@@ -257,6 +271,8 @@ public:
     // nothing to swap).
     bool requestRigSwap(int channel);
     // Explicit two-discrete-param form of the same operation (spec §10.2).
+    // DEDUPE (m6): with (ampModel, cabType) equal to the CURRENT rig's applied
+    // config and no swap in flight, returns true without building anything.
     bool requestRigConfig(int channel, int ampModel, int cabType);
 
     // Worker thread, LIVE-SAFE (no quiescence needed): if a completed swap
@@ -279,6 +295,19 @@ public:
     // lane reports "применяется на лету / busy" honestly from this.
     bool hasPendingConfig(int channel) const noexcept;
     bool swapArmed(int channel) const noexcept;
+
+    // ── Discrete-config dedupe (m6 — see the class comment) ────────────────
+    // Pack a discrete (ampModel, cabType) rig-config pair as tracked in
+    // mAppliedConfig (model<<2|cab, 0..15).
+    static constexpr int packModelCab(int ampModel, int cabType) noexcept {
+        return (ampModel << 2) | cabType;
+    }
+    // Packed discrete config the CURRENT engine provably runs with
+    // (-1 = no published rig / not reconciled). Exposed for tests/status.
+    int appliedConfig(int channel) const noexcept;
+    // true = a request for this (model, cab) pair is a real no-op: a rig is
+    // published, provably runs exactly this config, and no swap is in flight.
+    bool discreteConfigDeduped(int channel, int ampModel, int cabType) const noexcept;
 
     // ── Control-status surface (JNI nativeGetGuitarRigStatus, spec §10) ───
     // Honest per-channel swap status for the UI lane. Messaging contract
@@ -410,6 +439,18 @@ private:
     // source of truth for pending-before-instantiate parameter honoring and
     // for building swap candidates.
     std::array<std::array<std::atomic<float>, kParamCount>, kChannels> mDesired{};
+    // Discrete (ampModel, cabType) config the CURRENT engine provably runs
+    // with, packed by packModelCab; -1 = no rig / not reconciled (never
+    // dedupe). Updated ONLY at config-landing sites (instantiate, staged
+    // reprepare rebuild, swap commit ← the candidate's immutable
+    // buildConfigSnapshot(), quiescent apply) — never on a rejected or
+    // failed request, so a retry after a failure always re-attempts. At the
+    // commit it is stored BEFORE publishing the rig and BEFORE clearing the
+    // armed flag, so any control thread that observes the channel settled
+    // (armed==false, PENDING empty) also observes the key of the rig CURRENT
+    // actually runs (no false dedupe of a request that a still-unlanded
+    // change would need to re-arm).
+    std::array<std::atomic<int>, kChannels> mAppliedConfig{};
     std::array<std::atomic<int>, kChannels> mErrorState{};
     std::array<float*, kChannels> mLeft{};
     std::array<float*, kChannels> mRight{};

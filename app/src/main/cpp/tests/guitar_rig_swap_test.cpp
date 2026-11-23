@@ -44,6 +44,13 @@
 //     (Ok, BusySwapInFlight, BusyControl, BuildFailed, AllocationFailed,
 //     BadChannel incl. errorState invalid-channel), packed superseded bits
 //     + saturation.
+//   T6 discrete-config dedupe (m6): repeated same-value model/cab sets while
+//     settled are true no-ops (swapCount + supersededCount frozen, no pending,
+//     status Ok — structurally zero candidate builds ⇒ zero allocations, ASan
+//     leak-clean exit); an in-flight identical request still surfaces honest
+//     busy-false; a builder failure leaves the applied-config key at the old
+//     rig so retries re-attempt and the first successful commit re-arms the
+//     dedupe; channel reset clears the key, instantiate re-records it.
 //
 // Ownership state table under test (CURRENT/PENDING/RETIRED/armed/ACK):
 // see GuitarRigManager.h — this file attacks the table's busy + reclaim
@@ -309,11 +316,14 @@ int main() {
         std::atomic<bool> audioGaveUp{false};
 
         std::thread control([&]() {
-            // Amp-model / cab-type alternation, spec §10.8.
+            // Amp-model / cab-type alternation, spec §10.8. Model cycle is
+            // offset by 1 so the FIRST request (rig born with model 0) is a
+            // real change, not an m6 dedupe no-op; consecutive same-parameter
+            // requests always differ, so no accepted swap ever dedupes.
             for (int n = 0; n < kSwaps; ++n) {
                 const bool isModel = (n % 2) == 0;
                 const uint32_t id = isModel ? kParamAmpModel : kParamCabType;
-                const float val = isModel ? static_cast<float>((n / 2) % 3)
+                const float val = isModel ? static_cast<float>((1 + n / 2) % 3)
                                           : static_cast<float>((n / 2) % 4);
                 while (!mgr.setParameterChecked(kChannel, id, val)) {
                     ++busySpins;
@@ -377,9 +387,18 @@ int main() {
                 // Single-threaded: request accepted → consumed by the very
                 // next processed block → reclaimed by the following request.
                 if (b % 40 == 20) {
+                    // m6-safe schedule: per-parameter value cycles are offset
+                    // so every request differs from that parameter's currently
+                    // APPLIED config (same-value requests are honest dedupe
+                    // no-ops and would silently disable the swap determinism
+                    // under test). Cab cycle (3s+1)%4 and model cycle (2s+1)%3
+                    // both give consecutive distinct values over 15 steps.
+                    const bool wantCab = ((b / 40) % 2) != 0;
+                    const int step = b / 40;
+                    const float val = wantCab ? static_cast<float>((step * 3 + 1) % 4)
+                                              : static_cast<float>((step * 2 + 1) % 3);
                     const bool ok = mgr.setParameterChecked(
-                        kChannel, (b / 40) % 2 ? kParamCabType : kParamAmpModel,
-                        static_cast<float>(b % 4));
+                        kChannel, wantCab ? kParamCabType : kParamAmpModel, val);
                     if (!ok) { ++gFailures; printf("FAIL det request b=%d\n", b); }
                 }
                 const int n = kPatternSizes[b % 10];
@@ -679,6 +698,94 @@ int main() {
                   Rig::decodeRigStatusSuperseded(Rig::packRigStatus(4, 12345)) == 12345,
               "T5: pack round-trip");
         printf("[T5] status-code mapping (all 6 codes): ok\n");
+    }
+
+    // ── T6: discrete-config dedupe (m6) — same-value sets never rebuild ─────
+    // The phase-G pre-requisite: repeated identical model/cab writes (a CC
+    // knob at rest, or a preset re-apply) must be true no-ops while settled.
+    // The applied-config key comes from each candidate's immutable BUILD-TIME
+    // snapshot (never its live mirror — the next request's mirror would race
+    // the commit, and T2 is the regression probe for exactly that). "Zero
+    // allocations growth" is proven structurally: the ONLY allocation a
+    // discrete set can cause is the swap candidate (buildCandidate), and the
+    // checks below show no candidate was ever requested (swapCount and
+    // supersededCount frozen, mailbox empty, status Ok). ASan leak-clean exit
+    // confirms nothing un-freed was created either.
+    {
+        using Rig = GuitarRigManager;
+        GuitarRigManager mgr;
+        CHECK(mgr.prepare(kSr, kMaxFrames), "T6 prepare");
+        std::vector<float*> buses(GuitarRigManager::kChannels, nullptr);
+        float* ch = static_cast<float*>(std::malloc(sizeof(float) * kMaxFrames * 2));
+        buses[kChannel] = ch;
+        long long fed = 0;
+        CHECK(mgr.instantiate(kChannel) && mgr.setEffectEnabledChecked(kChannel, true), "T6 enable");
+        mgr.setRackEnabled(kChannel, true);
+        for (int i = 0; i < 4; ++i) { fillSine(ch, 1024, fed); mgr.process(buses.data(), 1024); }
+        const uint64_t c0 = mgr.swapCount(kChannel), s0 = mgr.supersededCount(kChannel);
+        CHECK(c0 == 0, "T6: baseline, nothing committed yet");
+        // Born config = descriptor defaults (model 0, cab 2): the identical
+        // request is accepted as a NO-OP — no swap armed, counters frozen.
+        CHECK(mgr.appliedConfig(kChannel) == Rig::packModelCab(0, 2), "T6: applied config recorded at instantiate");
+        CHECK(mgr.requestRigConfig(kChannel, 0, 2), "T6: same-config request deduped (true)");
+        CHECK(mgr.swapCount(kChannel) == c0, "T6: dedupe commits nothing");
+        CHECK(mgr.supersededCount(kChannel) == s0, "T6: dedupe is not a supersession");
+        CHECK(!mgr.hasPendingConfig(kChannel), "T6: dedupe arms nothing");
+        CHECK(Rig::decodeRigStatusCode(mgr.rigStatus(kChannel)) == Rig::kStatusOk, "T6: status stays Ok");
+        CHECK(mgr.setParameterChecked(kChannel, kParamAmpModel, 0.0f), "T6: same model no-op (true)");
+        CHECK(mgr.setParameterChecked(kChannel, kParamCabType, 2.0f), "T6: same cab no-op (true)");
+        CHECK(mgr.swapCount(kChannel) == c0 && !mgr.hasPendingConfig(kChannel),
+              "T6: no-ops via the setter path create no swap either");
+        // A REAL change lands and becomes the new applied config.
+        CHECK(mgr.requestRigConfig(kChannel, 1, 2), "T6: real change accepted");
+        CHECK(mgr.hasPendingConfig(kChannel), "T6: differing config arms the swap (not deduped)");
+        int g = 0;
+        while (mgr.swapCount(kChannel) == c0 && g++ < 500) { fillSine(ch, 4096, fed); mgr.process(buses.data(), 4096); }
+        CHECK(mgr.swapCount(kChannel) == c0 + 1, "T6: real change committed");
+        CHECK(mgr.reclaimRetired(kChannel), "T6: reclaim");
+        CHECK(mgr.appliedConfig(kChannel) == Rig::packModelCab(1, 2), "T6: applied config follows the commit");
+        // Repeated same-value writes of the JUST-COMMITTED config: no-ops.
+        for (int i = 0; i < 3; ++i) {
+            CHECK(mgr.setParameterChecked(kChannel, kParamAmpModel, 1.0f), "T6: repeat model no-op");
+            CHECK(mgr.setParameterChecked(kChannel, kParamCabType, 2.0f), "T6: repeat cab no-op");
+            CHECK(mgr.requestRigConfig(kChannel, 1, 2), "T6: repeat config no-op");
+        }
+        CHECK(mgr.swapCount(kChannel) == c0 + 1, "T6: swapCount unchanged by repeated same-value sets");
+        CHECK(mgr.supersededCount(kChannel) == s0, "T6: supersededCount unchanged by dedupe");
+        // BUSY protection: an in-flight identical request is NOT deduped to a
+        // fake true — it surfaces the honest busy false (UI contract).
+        CHECK(mgr.requestRigConfig(kChannel, 2, 1), "T6: different config accepted");
+        CHECK(!mgr.requestRigConfig(kChannel, 2, 1),
+              "T6: same-value while in flight → busy false (dedupe must not mask busy)");
+        g = 0;
+        while (mgr.swapCount(kChannel) == c0 + 1 && g++ < 1000) { fillSine(ch, 4096, fed); mgr.process(buses.data(), 4096); }
+        CHECK(mgr.swapCount(kChannel) == c0 + 2, "T6: second real change committed");
+        CHECK(mgr.reclaimRetired(kChannel), "T6: reclaim second");
+        CHECK(mgr.requestRigConfig(kChannel, 2, 1), "T6: now the same config IS a no-op");
+        CHECK(mgr.swapCount(kChannel) == c0 + 2, "T6: post-commit repeat commits nothing");
+        // Builder failure does NOT poison the dedupe key: the applied config
+        // stays the old rig's, so the failed values keep re-attempting until
+        // one actually lands.
+        mgr.setFailNextBuildForTesting(true);
+        CHECK(!mgr.requestRigConfig(kChannel, 0, 3), "T6: failed build rejected");
+        CHECK(mgr.appliedConfig(kChannel) == Rig::packModelCab(2, 1),
+              "T6: failure leaves applied config at the retained old pair");
+        CHECK(mgr.requestRigConfig(kChannel, 0, 3), "T6: retry after failure is NOT deduped, seam one-shot → accepted");
+        g = 0;
+        while (mgr.swapCount(kChannel) == c0 + 2 && g++ < 1000) { fillSine(ch, 4096, fed); mgr.process(buses.data(), 4096); }
+        CHECK(mgr.swapCount(kChannel) == c0 + 3, "T6: retry after failure landed");
+        CHECK(mgr.reclaimRetired(kChannel), "T6: reclaim third");
+        CHECK(mgr.requestRigConfig(kChannel, 0, 3), "T6: the failed-then-committed config dedupes now");
+        CHECK(mgr.swapCount(kChannel) == c0 + 3, "T6: dedupe after the landed retry commits nothing extra");
+        // Channel teardown clears the key; a fresh instantiate re-records it
+        // from the reset row (defaults 0/2), and that dedupes again.
+        CHECK(mgr.resetChannelRange(kChannel, 1), "T6: reset");
+        CHECK(mgr.appliedConfig(kChannel) == -1, "T6: reset clears the dedupe key");
+        CHECK(mgr.instantiate(kChannel), "T6: re-instantiate from the reset row");
+        CHECK(mgr.requestRigConfig(kChannel, 0, 2), "T6: defaults dedupe after reset+instantiate");
+        CHECK(mgr.swapCount(kChannel) == c0 + 3, "T6: reset+re-instantiate committed nothing new");
+        std::free(ch);
+        printf("[T6] discrete-config dedupe (m6): ok\n");
     }
 
     printf("%s (failures: %d)\n", gFailures == 0 ? "ALL PASS" : "FAILURES", gFailures);

@@ -21,6 +21,14 @@ std::array<float, kParamCount> rigDefaultParams() {
     return out;
 }
 
+// Reader-side rounding of an integer descriptor param stored in an atomic row
+// or rig mirror (writes are already quantized by guitarRigClampParam; mirrors
+// GuitarRigEffect::ampModelIndex()/cabTypeIndex()).
+inline int intParam(float value) noexcept {
+    const int v = static_cast<int>(value + 0.5f);
+    return v < 0 ? 0 : v;
+}
+
 // Blocking control-flag lock — QUIESCENT/TEARDOWN paths only, and only
 // while the LIFETIME MUTEX is already held (single lock order, class doc:
 // lifetime → busy, always). A busy holder never waits for the mutex (every
@@ -70,6 +78,7 @@ GuitarRigManager::GuitarRigManager() {
         mRackEnabled[c].store(false, std::memory_order_relaxed);
         mEffectEnabled[c].store(false, std::memory_order_relaxed);
         mErrorState[c].store(Ok, std::memory_order_relaxed);
+        mAppliedConfig[c].store(-1, std::memory_order_relaxed);
         for (int i = 0; i < kParamCount; ++i)
             mDesired[c][i].store(defaults[i], std::memory_order_relaxed);
     }
@@ -183,10 +192,18 @@ bool GuitarRigManager::reprepareQuiescent(double sampleRate, int maxFrames) {
     for (int c = 0; c < kChannels; ++c) {
         mEffects[c] = std::move(staged[c]);
         if (mEffects[c]) {
+            // The staged rig was built FROM the mDesired row; key first (see
+            // instantiate — lock-free dedupe readers must never pair a fresh
+            // published pointer with a stale key).
+            mAppliedConfig[c].store(
+                packModelCab(intParam(mDesired[c][kParamAmpModel].load(std::memory_order_relaxed)),
+                             intParam(mDesired[c][kParamCabType].load(std::memory_order_relaxed))),
+                std::memory_order_release);
             mPublished[c].store(mEffects[c].get(), std::memory_order_release);
             mErrorState[c].store(Ok, std::memory_order_release);
         } else if (failed[c]) {
             mErrorState[c].store(EngineInitFailed, std::memory_order_release);
+            mAppliedConfig[c].store(-1, std::memory_order_release);  // released (dry)
         }
     }
     mSampleRate = sampleRate;
@@ -299,6 +316,25 @@ bool GuitarRigManager::hasPendingConfig(int channel) const noexcept {
     return false;
 }
 
+int GuitarRigManager::appliedConfig(int channel) const noexcept {
+    if (channel < 0 || channel >= kChannels) return -1;
+    return mAppliedConfig[channel].load(std::memory_order_acquire);
+}
+
+bool GuitarRigManager::discreteConfigDeduped(int channel, int ampModel,
+                                             int cabType) const noexcept {
+    if (channel < 0 || channel >= kChannels) return false;
+    if (ampModel < 0 || ampModel > 2 || cabType < 0 || cabType > 3) return false;
+    // Busy check FIRST: the commit clears `armed` only after storing the key,
+    // so an acquire-read of false guarantees the following key read sees at
+    // least the committed candidate's config (never a pre-commit value).
+    if (hasPendingConfig(channel)) return false;  // honest busy path instead
+    const int applied = mAppliedConfig[channel].load(std::memory_order_acquire);
+    if (applied < 0) return false;                // no rig / not reconciled
+    if (!mPublished[channel].load(std::memory_order_acquire)) return false;
+    return applied == packModelCab(ampModel, cabType);
+}
+
 std::unique_ptr<GuitarRigEffect> GuitarRigManager::buildCandidate(int channel, double sampleRate,
                                                                   int maxFrames) {
     // Spec §10.2: copy the FULL desired config (incl. current live params)
@@ -309,9 +345,15 @@ std::unique_ptr<GuitarRigEffect> GuitarRigManager::buildCandidate(int channel, d
     // mirror writes may interleave, but every read value is a valid desired
     // value and any later rebuild sees the newest row.
     auto candidate = std::make_unique<GuitarRigEffect>();
-    for (int i = 0; i < kParamCount; ++i)
-        candidate->setParameter(static_cast<uint32_t>(i),
-                                mDesired[channel][i].load(std::memory_order_relaxed));
+    // Capture the exact discrete pair baked into THIS candidate (the row may
+    // move again afterwards; the candidate is frozen at these values).
+    int modelUsed = 0, cabUsed = 0;
+    for (int i = 0; i < kParamCount; ++i) {
+        const float v = mDesired[channel][i].load(std::memory_order_relaxed);
+        candidate->setParameter(static_cast<uint32_t>(i), v);
+        if (i == kParamAmpModel) modelUsed = intParam(v);
+        if (i == kParamCabType) cabUsed = intParam(v);
+    }
     if (mFailNextBuildCode >= 0) {  // test seam: simulate a builder failure
         const int code = mFailNextBuildCode;
         mFailNextBuildCode = -1;
@@ -322,6 +364,11 @@ std::unique_ptr<GuitarRigEffect> GuitarRigManager::buildCandidate(int channel, d
         mErrorState[channel].store(EngineInitFailed, std::memory_order_release);
         return nullptr;  // builder failure: CURRENT untouched, UI-visible error
     }
+    // Success: bake the immutable build-time config into the candidate before
+    // it can be published (requestRigSwap only CAS-publishes after this
+    // returns; the mPending release-CAS + the callback's acquire exchange make
+    // the snapshot visible to the commit's read).
+    candidate->setBuildConfigSnapshot(packModelCab(modelUsed, cabUsed));
     return candidate;
 }
 
@@ -405,6 +452,11 @@ bool GuitarRigManager::requestRigConfig(int channel, int ampModel, int cabType) 
             }
         }
     }  // guards RELEASED here — requestRigSwap takes them itself (non-recursive)
+    // m6 dedupe: pair equals the config the CURRENT rig provably runs and
+    // nothing is in flight → accepted no-op, no candidate is built (repeated
+    // same-value CC writes never rebuild). The row + mirror above are already
+    // at these values, so state stays coherent.
+    if (discreteConfigDeduped(channel, ampModel, cabType)) return true;
     return requestRigSwap(channel);
 }
 
@@ -441,6 +493,20 @@ bool GuitarRigManager::applyPendingConfig(int channel) {
         // (covers a builder failure that left the live rig unconfigured,
         // and the legacy quiescent-apply usage).
         ok = mEffects[channel] && mEffects[channel]->applyConfigNow();
+    }
+    // m6 dedupe key follows the landing: on success the engine now runs the
+    // published rig's own discrete config (the pending branch re-synced it
+    // from the row before applying); on failure the engine state is unknown
+    // (IR gen may have died mid-way) → -1 = never dedupe until next landing.
+    if (ok) {
+        const GuitarRigEffect* pub = mPublished[channel].load(std::memory_order_acquire);
+        mAppliedConfig[channel].store(
+            pub ? packModelCab(intParam(pub->getParameter(kParamAmpModel)),
+                               intParam(pub->getParameter(kParamCabType)))
+                : -1,
+            std::memory_order_release);
+    } else {
+        mAppliedConfig[channel].store(-1, std::memory_order_release);
     }
     GuitarRigEffect* retired = mRetired[channel].exchange(nullptr, std::memory_order_acq_rel);
     if (retired) {
@@ -531,6 +597,13 @@ bool GuitarRigManager::instantiate(int channel) {
         return false;
     }
     effect = std::move(candidate);
+    // m6 dedupe key FIRST (recorded from the row this rig was built from,
+    // under the same guards): a lock-free dedupe reader that sees the rig
+    // published always sees the matching key (defaults to -1 never dedupe).
+    mAppliedConfig[channel].store(
+        packModelCab(intParam(mDesired[channel][kParamAmpModel].load(std::memory_order_relaxed)),
+                     intParam(mDesired[channel][kParamCabType].load(std::memory_order_relaxed))),
+        std::memory_order_release);
     mPublished[channel].store(effect.get(), std::memory_order_release);
     mErrorState[channel].store(Ok, std::memory_order_release);
     return true;
@@ -596,9 +669,16 @@ bool GuitarRigManager::setParameterChecked(int channel, uint32_t parameterId, fl
     // flight OR control section held; retry shortly) or builder failure
     // (errorState set; old rig keeps running). Guards are taken INSIDE
     // requestRigSwap — the mutex/flag are non-recursive, never hold them
-    // across this call.
-    if (parameterId == kParamAmpModel || parameterId == kParamCabType)
+    // across this call. m6 dedupe: a discrete write that leaves the whole
+    // (model, cab) pair at the CURRENT rig's applied config with nothing in
+    // flight is a true no-op — no swap is started (the row + mirror above
+    // already carry it).
+    if (parameterId == kParamAmpModel || parameterId == kParamCabType) {
+        const int model = intParam(mDesired[channel][kParamAmpModel].load(std::memory_order_relaxed));
+        const int cab = intParam(mDesired[channel][kParamCabType].load(std::memory_order_relaxed));
+        if (discreteConfigDeduped(channel, model, cab)) return true;
         return requestRigSwap(channel);
+    }
     return true;
 }
 
@@ -690,6 +770,16 @@ void GuitarRigManager::commitSwapAudio(int channel) noexcept {
     pending->startPriming(mSampleRate > 0.0
                               ? static_cast<int>(mSampleRate * kSwapPrimeSeconds + 0.5)
                               : 0);
+    // m6 dedupe key: record the CANDIDATE'S BUILD-TIME snapshot BEFORE it is
+    // published (never the rig mirror — the next accepted request mirrors into
+    // the committed rig before this function's tail, which corrupted the key
+    // under concurrent load) and BEFORE the armed clear below, so a worker
+    // that observes the channel settled (armed==false) necessarily observes
+    // the key of the rig CURRENT actually runs. The defensive null-old branch
+    // below may leave a key ahead of an engine that never published, but an
+    // unpublished channel is never deduped, and re-instantiate / reset
+    // overwrite the key.
+    mAppliedConfig[channel].store(pending->buildConfigSnapshot(), std::memory_order_release);
 
     // THE swap: one atomic exchange moves PENDING into CURRENT and yields
     // the old CURRENT (which this thread just stopped processing, wet==0).
@@ -726,7 +816,7 @@ void GuitarRigManager::commitSwapAudio(int channel) noexcept {
     }
     mRetired[channel].store(old, std::memory_order_release);  // one store per swap
     mSwapCount[channel].fetch_add(1, std::memory_order_acq_rel);  // COMMIT ACK (§10.5c)
-    mSwapArmed[channel].store(false, std::memory_order_release);
+    mSwapArmed[channel].store(false, std::memory_order_release);  // after the key store above
     mSwapRuntime[channel].phase = kPhaseFadeIn;
 }
 
@@ -824,6 +914,7 @@ void GuitarRigManager::releaseChannelLocked(int channel) noexcept {
     mEffectEnabled[channel].store(false, std::memory_order_release);
     mErrorState[channel].store(Ok, std::memory_order_release);
     mSwapArmed[channel].store(false, std::memory_order_release);
+    mAppliedConfig[channel].store(-1, std::memory_order_release);  // no rig: never dedupe
     const std::array<float, kParamCount> defaults = rigDefaultParams();
     for (int i = 0; i < kParamCount; ++i)
         mDesired[channel][i].store(defaults[i], std::memory_order_relaxed);

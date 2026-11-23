@@ -431,6 +431,19 @@ cancel a pending swap — the silent dry commit path lands it (spec §10.7).
 `NativeEngine::shutdown()` detaches the audio callback and then calls
 `mGuitarEffects.drainAllQuiescent()`.
 
+**Discrete-config dedupe (m6, phase-G pre-requisite):** the manager tracks
+the packed `(ampModel, cabType)` pair the CURRENT engine provably runs with
+(`mAppliedConfig`, updated only at config-landing sites: instantiate, staged
+reprepare rebuild, swap commit, quiescent apply). A `requestRigConfig()` or
+`setParameterChecked(kAmpModel|kCabType)` whose pair equals that applied
+config AND leaves no swap in flight returns true as a NO-OP without
+building (repeated same-value CC writes never rebuild the rig — zero
+allocations); the desired row + mirror still update. An in-flight identical
+request is never deduped to a fake true (honest busy-false preserved), and
+a builder failure leaves the key at the retained old config, so the retry
+after a failure always re-attempts. Live param mirror behavior is otherwise
+unchanged.
+
 **Retired-defer recovery (M5-hardening):** if a commit defers on an
 occupied RETIRED slot (spec §10.3 defensive fallback), the channel is
 recovered by the next worker action that opportunistically reclaims:
