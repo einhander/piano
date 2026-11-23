@@ -112,6 +112,8 @@ add_library(native-lib SHARED
     effects/SharedStereoDelay.cpp
     effects/InstrumentDelayBank.cpp
     effects/InstrumentEffectManager.cpp
+    effects/guitar/GuitarRigParams.cpp
+    effects/guitar/GuitarRigEffect.cpp
     effects/ladspa/LadspaEffect.cpp
     effects/ladspa/LadspaRegistry.cpp
     effects/lsp/LspEffectFactory.cpp
