@@ -7,8 +7,9 @@ JNI surface and UI.
 
 - URL: <https://github.com/averagenative/0xFX>
 - Pinned SHA: `5b248779c96dce6e64d0ed29cfa598014dc4d3c4` (upstream 0xFX 1.3.0)
-- Vendored under `app/src/main/cpp/third_party/0xFX/` (unmodified; full file
-  list in `third_party/0xFX/UPSTREAM.txt`).
+- Vendored under `app/src/main/cpp/third_party/0xFX/` (byte-identical to
+  upstream except the recorded patch in §Patches; full file list in
+  `third_party/0xFX/UPSTREAM.txt`).
 - Licenses: 0xFX MIT (`LICENSE`); cJSON MIT, dr_wav Public-Domain-or-MIT-0,
   KissFFT BSD-3-Clause (`LICENSES/`).
 
@@ -261,9 +262,36 @@ Bullet list only; full RT audit is a later phase.
 
 ## Patches
 
-_None._ Copied sources are byte-identical to upstream at the pinned SHA; all
-build configuration lives in the app CMakeLists (`fx0_engine` target). Any
-future deviation must be recorded here with the reason.
+### `patches/cab_ir-segmented-overlap-add.patch` — cabinet overlap-add tail truncation
+
+- **Symptom:** identical sample streams produced different audio depending on
+  the callback block size. Measured pre-fix with
+  `app/src/main/cpp/tests/cab_segmented_convolution_test.cpp` (impulse @0,
+  8192 frames, engine config: 48k, BRIT_CRUNCH gain 0, cab 4X12_STRAIGHT
+  fs=70/b=0.5/r=0.6, mic DI, gate defaults; reference segmentation
+  [4096,4096], ref peak 0.001031): max abs diff vs reference — `[512×16]`
+  1.415e-5, `[64×128]` 6.489e-4, variable `[1,17,31,64,…]` 1.019e-3 against
+  eps 1e-6. Cabinet-only unit runs vs float64 ground truth (IR peak
+  normalized 0.4): 4096-segmentation 6.0e-8 (correct), `[512×16]` 3.34e-3,
+  `[64×128]` 0.209, variable 0.400 (up to 100 % of tail peak lost). Running
+  the same matrix with the cab bypassed gave diff exactly 0.0 for every
+  segmentation → divergence came solely from the cabinet, not the
+  sample-sequential amp/mic/gate biquads (see "Hot-path call inventory").
+- **Root cause:** `fx_cab_process()` wrote the new convolution tail into
+  `overlap_buf` by OVERWRITE (`overlap_buf[i] = time_buf[n+i]*scale`) each
+  block. The tail head is block-alignment correct, but with a 2048-sample IR
+  the tail (2047 samples) spills past any block shorter than that; the part
+  beyond the next block's emission window was discarded instead of carried.
+  `fft_size` sizing itself is fine (`8192 ≥ 4096+2048−1`; scenario C).
+- **Fix:** proper overlap-add accumulation — after emitting
+  `out[i] = conv[i] + overlap[i]`, rotate the leftover carry forward by n
+  (`memmove`), zero the vacated tail (`memset`), then ADD (not replace) the
+  new tail. For uniform `n == block_size` the leftover is always zero, so
+  nominal engine behavior is bit-identical to upstream.
+- **Measured after fix (same harness, ASan+UBSan and -O2):** all scenario-A
+  diffs 0.000000000 (bit-exact vs reference); all four A2 segmentations match
+  ground truth within 6.0e-8; scenarios B and C PASS; exit 0, no sanitizer
+  reports.
 
 ## Build
 
@@ -295,7 +323,13 @@ gcc -std=gnu99 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
 `fx_pedal_set_param(e, p, 0, 0.5f)` → `fx_engine_process` on 64 zero frames →
 `fx_engine_destroy`. Result: `SMOKE OK pedal_id=1`, exit 0, no ASan/UBSan
 reports. The engine creates without extra setup; no allocation-honesty issues
-at create/process/destroy.
+at create/process/destroy. The file is not committed; it is recreated verbatim
+from this description whenever needed. Re-verified after the `cab_ir` overlap-
+add patch with the identical command and result (2026-11-23).
+
+A dedicated segmented-convolution harness for the cabinet FFT path lives at
+`app/src/main/cpp/tests/cab_segmented_convolution_test.cpp` (commands and
+expected output: `app/src/main/cpp/tests/README.cab-segmented-convolution.md`).
 
 ## Limitations / later phases
 

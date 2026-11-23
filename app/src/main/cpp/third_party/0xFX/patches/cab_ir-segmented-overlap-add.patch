@@ -1,0 +1,27 @@
+--- a/src/engine/internal/cab_ir.c
++++ b/src/engine/internal/cab_ir.c
+@@ -652,13 +652,18 @@
+         buf[i] = cab->time_buf[i] * scale + cab->overlap_buf[i];
+     }
+ 
+-    /* Store the tail (samples n..fft_size-1) for next block */
++    /* Rotate the leftover carry forward by n: a tail longer than this block
++     * (or the next block) must survive past the emitted window, so the old
++     * overlap is shifted — not dropped — before the new tail is merged. */
+     int tail_len = fft_size - n;
++    memmove(cab->overlap_buf, cab->overlap_buf + n,
++            sizeof(float) * (size_t)tail_len);
++    memset(cab->overlap_buf + tail_len, 0, sizeof(float) * (size_t)n);
++
++    /* ADD this block's convolution tail (samples n..fft_size-1) into the
++     * carried tail; overwriting here truncates the reverb tail whenever the
++     * block is shorter than the IR. */
+     for (int i = 0; i < tail_len; i++) {
+-        cab->overlap_buf[i] = cab->time_buf[n + i] * scale;
+-    }
+-    /* Zero the rest of overlap in case block size changes */
+-    for (int i = tail_len; i < fft_size; i++) {
+-        cab->overlap_buf[i] = 0.0f;
++        cab->overlap_buf[i] += cab->time_buf[n + i] * scale;
+     }
+ }
