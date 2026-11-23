@@ -1,0 +1,36 @@
+0xFX vendored DSP core
+======================
+upstream URL : https://github.com/averagenative/0xFX
+pinned SHA   : 5b248779c96dce6e64d0ed29cfa598014dc4d3c4 (HEAD of master at fetch time)
+upstream ver : 0xFX 1.3.0 (project() VERSION in CMakeLists.txt)
+copy date    : 2026-11-23
+upstream lic : MIT (see LICENSE; Copyright (c) 2026 Dan Michael)
+
+Copied files (DSP-necessary subset of the fx_engine + fx_core targets only):
+  src/engine/fx_engine.h                 — public API (only header downstream may include)
+  src/engine/internal/engine.c           — engine lifecycle + fx_engine_process
+  src/engine/internal/engine_internal.h  — internal structs, FX_MAX_BLOCK_SIZE=4096
+  src/engine/internal/amp.c              — amp models
+  src/engine/internal/biquad.c           — biquad helpers
+  src/engine/internal/noise_gate.c       — input-stage gate
+  src/engine/internal/tuner.c            — always-on tuner (fed in process)
+  src/engine/internal/pedals.c           — all pedal DSP + param metadata
+  src/engine/internal/studio.c           — studio processors
+  src/engine/internal/cab_ir.c           — cab IR (defines DR_WAV_IMPLEMENTATION)
+  src/engine/internal/mic_sim.c          — mic simulation
+  src/engine/internal/preset.c           — .0xfx JSON presets (uses cJSON)
+  src/engine/internal/looper.c           — 9-slot looper (uses dr_wav for export)
+  src/engine/internal/looper.h
+  src/core/log.c src/core/log.h          — logger referenced by engine sources
+  deps/cJSON.c deps/cJSON.h              — MIT (LICENSES/CJSON-MIT.txt)
+  deps/dr_wav.h                          — Public Domain OR MIT-0 (LICENSES/DR_WAV-PD-OR-MIT0.txt)
+  deps/kissfft/{_kiss_fft_guts.h,kiss_fft.c,kiss_fft.h,kiss_fft_log.h,kiss_fftr.c,kiss_fftr.h}
+                                         — BSD-3-Clause (LICENSES/KISSFFT-BSD-3-CLAUSE.txt)
+
+Excluded (not needed to compile/link the engine): src/gui, src/standalone,
+src/plugin, src/audio, deps/SDL2*, deps/imgui, deps/cplug, deps/nfd,
+deps/shine, deps/miniaudio.h, deps/stb_image.h, resources, presets, tools,
+tests, openspec, tasks, CI. src/core/crash.c excluded (no engine reference).
+
+Patches: none (unmodified copy; build integration lives in the app's
+CMakeLists.txt as target fx0_engine — see docs/guitar-fx-port.md).
