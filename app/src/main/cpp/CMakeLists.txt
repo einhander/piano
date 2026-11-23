@@ -114,6 +114,7 @@ add_library(native-lib SHARED
     effects/InstrumentEffectManager.cpp
     effects/guitar/GuitarRigParams.cpp
     effects/guitar/GuitarRigEffect.cpp
+    effects/guitar/GuitarRigManager.cpp
     effects/ladspa/LadspaEffect.cpp
     effects/ladspa/LadspaRegistry.cpp
     effects/lsp/LspEffectFactory.cpp

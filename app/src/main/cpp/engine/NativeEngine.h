@@ -27,6 +27,7 @@
 #include "synth/InstrumentChannelContract.h"
 #include "effects/EffectChain.h"
 #include "effects/InstrumentEffectManager.h"
+#include "effects/guitar/GuitarRigManager.h"
 #include "effects/SharedStereoDelay.h"
 #include "effects/InstrumentDelayBank.h"
 #include "audio/Mp3AudioRecorder.h"
@@ -205,6 +206,19 @@ public:
     int loadInstrumentEffectBundle(const char* soPath);
     bool setInstrumentRackEnabled(int channel, bool enabled);
     bool isInstrumentRackEnabled(int channel) const;
+    // Guitar rig ("guitar.rig") control surface, dispatched from the generic
+    // instrument-effect JNI functions (single rig per channel, 12 params).
+    bool setGuitarRigEnabled(int channel, bool enabled);
+    bool isGuitarRigEnabled(int channel) const;
+    bool isGuitarRigAvailable(int channel) const;
+    bool setGuitarRigParameter(int channel, int parameterId, float value);
+    float getGuitarRigParameter(int channel, int parameterId) const;
+    int getGuitarRigParamCount() const;
+    bool getGuitarRigParamInfo(int index, uint32_t& id, float& minValue, float& maxValue,
+                               float& defaultValue, bool& logarithmic, bool& integer,
+                               bool& toggled) const;
+    const char* getGuitarRigParamName(int index) const;
+    int getGuitarRigLatencyFrames(int channel) const;
     bool setInstrumentEffectEnabled(int channel, const char* effectId, bool enabled);
     bool isInstrumentEffectEnabled(int channel, const char* effectId) const;
     bool isInstrumentEffectAvailable(int channel, const char* effectId) const;
@@ -440,6 +454,10 @@ private:
     // passthrough — the engine behaves exactly as before LSP integration.
     piano::EffectChain mMasterEffects;
     piano::InstrumentEffectManager mInstrumentEffects;
+    // Per-channel 0xFX guitar rig inserts. Declared next to the instrument
+    // rack; destroyed with the engine after the audio callback is stopped
+    // (no fx_engine_destroy is ever reachable from the callback).
+    piano::guitar::GuitarRigManager mGuitarEffects;
     SharedStereoDelay mSharedDelay;
     InstrumentDelayBank mInstrumentDelays;
     std::atomic<bool> mSharedDelayPrepared{false};

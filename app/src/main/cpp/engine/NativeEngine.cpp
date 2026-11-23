@@ -53,6 +53,7 @@ bool NativeEngine::resetInstrumentChannelRange(int first, int count) {
     FluidSynthEngine::WorkerAccessGuard workerAccess(*mSynth);
     if (!mSynth->resetChannelRange(first, count)) return false;
     if (!mInstrumentEffects.resetChannelRange(first, count)) return false;
+    if (!mGuitarEffects.resetChannelRange(first, count)) return false;
     return mInstrumentDelays.resetChannelRange(first, count);
 }
 
@@ -144,6 +145,11 @@ bool NativeEngine::init(int sampleRate, int bufferSize) {
     mMasterEffects.prepare(sampleRate, mMaxSynthFrames);
     const bool insertsReady = mInstrumentEffects.prepare(sampleRate, mMaxSynthFrames);
     const bool delayReady = mInstrumentDelays.prepare(sampleRate, mMaxSynthFrames);
+    // Guitar rigs prepare right after the instrument inserts. Their result
+    // deliberately does NOT gate insertsReady/rate-graph health: a rig that
+    // cannot prepare leaves its channels dry (isAvailable()==false) without
+    // degrading the piano path.
+    mGuitarEffects.prepare(sampleRate, mMaxSynthFrames);
     mSharedDelayPrepared.store(false, std::memory_order_release); // legacy shared path retired
     mRateGraph.initialize(insertsReady && delayReady, insertsReady && delayReady ? 0 : (insertsReady ? 4 : 3));
     for (auto& send : mDelaySendTargets) send.store(0.0f, std::memory_order_relaxed);
@@ -585,8 +591,16 @@ bool NativeEngine::finishSampleRateTransition(void* context, int sampleRate) {
 
 bool NativeEngine::prepareRateInserts(void* context, int sampleRate) {
     auto* engine = static_cast<NativeEngine*>(context);
-    return engine && engine->mInstrumentEffects.reprepareQuiescent(
+    if (!engine) return false;
+    const bool inserts = engine->mInstrumentEffects.reprepareQuiescent(
         static_cast<double>(sampleRate), engine->mMaxSynthFrames);
+    // Same worker gate, same quiescent sequence. A guitar rebuild failure
+    // releases only the affected rigs (dry); it must not fail the whole
+    // sample-rate transition for the piano graph, so the result is recorded
+    // per-channel in the manager, not AND-ed into the graph status.
+    engine->mGuitarEffects.reprepareQuiescent(static_cast<double>(sampleRate),
+                                              engine->mMaxSynthFrames);
+    return inserts;
 }
 
 bool NativeEngine::prepareRateDelay(void* context, int sampleRate) {
@@ -809,7 +823,7 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
                 for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
                 float* sharedReturn = mSynthReturnBuffer.data() + offset * 2;
                 renderSynthSegment(mSynthSegmentPtrs, sharedReturn, eventOffset - offset);
-                measureStageCpu(stageCpuNs[1], [&] { mInstrumentEffects.process(mSynthSegmentPtrs,eventOffset-offset); });
+                measureStageCpu(stageCpuNs[1], [&] { mInstrumentEffects.process(mSynthSegmentPtrs,eventOffset-offset); mGuitarEffects.process(mSynthSegmentPtrs,eventOffset-offset); });
                 float* delayBuses[piano::kInstrumentChannelCount];
                 for (int ch=0; ch<piano::kInstrumentChannelCount; ++ch) delayBuses[ch]=mSynthSegmentPtrs[ch];
                 measureStageCpu(stageCpuNs[2], [&] {
@@ -831,7 +845,7 @@ void NativeEngine::onAudioFrame(float* output, int numFrames) {
             for (int ch = 0; ch < piano::kInstrumentChannelCount; ++ch) mSynthSegmentPtrs[ch] = mSynthChannelPtrs[ch] + offset * 2;
             float* sharedReturn = mSynthReturnBuffer.data() + offset * 2;
             renderSynthSegment(mSynthSegmentPtrs, sharedReturn, safeFrames - offset);
-            measureStageCpu(stageCpuNs[1], [&] { mInstrumentEffects.process(mSynthSegmentPtrs,safeFrames-offset); });
+            measureStageCpu(stageCpuNs[1], [&] { mInstrumentEffects.process(mSynthSegmentPtrs,safeFrames-offset); mGuitarEffects.process(mSynthSegmentPtrs,safeFrames-offset); });
             float* delayBuses[piano::kInstrumentChannelCount];
             for (int ch=0; ch<piano::kInstrumentChannelCount; ++ch) delayBuses[ch]=mSynthSegmentPtrs[ch];
             measureStageCpu(stageCpuNs[2], [&] {
@@ -1234,6 +1248,8 @@ int NativeEngine::loadInstrumentEffectBundle(const char* path) {
 bool NativeEngine::setInstrumentRackEnabled(int c,bool on){
     if(!piano::isInstrumentChannel(c))return false;
     mInstrumentEffects.setRackEnabled(c,on);
+    // The guitar rig shares the instrument rack gate (same process gating).
+    mGuitarEffects.setRackEnabled(c,on);
     // Keep the per-channel vibrato in step with its rack: turning the rack
     // OFF mutes the generator offsets temporarily (the stored desired state
     // is KEPT), turning it ON re-pushes the stored state — mirroring how the
@@ -1258,6 +1274,43 @@ const char* NativeEngine::getInstrumentEffectParamName(const char* id,int i)cons
 int NativeEngine::getInstrumentEffectLatencyFrames(int c,const char* id)const{
     return id && std::strcmp(id,piano::lsp::kIdClipper)==0
         ? mInstrumentEffects.effectLatencyFrames(c,piano::lsp::kSlotClipper) : 0;
+}
+
+// ── Guitar rig ("guitar.rig") generic instrument-effect surface ──────────
+// Dispatched from native_engine_jni.cpp before the LSP slot-table path.
+bool NativeEngine::setGuitarRigEnabled(int channel, bool enabled){
+    return piano::isInstrumentChannel(channel) && mGuitarEffects.setEffectEnabledChecked(channel, enabled);
+}
+bool NativeEngine::isGuitarRigEnabled(int channel) const{
+    return piano::isInstrumentChannel(channel) && mGuitarEffects.effectEnabled(channel);
+}
+bool NativeEngine::isGuitarRigAvailable(int channel) const{
+    return piano::isInstrumentChannel(channel) && mGuitarEffects.isAvailable(channel);
+}
+bool NativeEngine::setGuitarRigParameter(int channel, int parameterId, float value){
+    return piano::isInstrumentChannel(channel) && parameterId >= 0 &&
+        mGuitarEffects.setParameterChecked(channel, static_cast<uint32_t>(parameterId), value);
+}
+float NativeEngine::getGuitarRigParameter(int channel, int parameterId) const{
+    float v = std::numeric_limits<float>::quiet_NaN();
+    if (piano::isInstrumentChannel(channel) && parameterId >= 0)
+        mGuitarEffects.getParameterChecked(channel, static_cast<uint32_t>(parameterId), v);
+    return v;
+}
+int NativeEngine::getGuitarRigParamCount() const{
+    return mGuitarEffects.paramCount();
+}
+bool NativeEngine::getGuitarRigParamInfo(int index, uint32_t& id, float& minValue, float& maxValue,
+                                        float& defaultValue, bool& logarithmic, bool& integer,
+                                        bool& toggled) const{
+    return mGuitarEffects.paramInfo(index, id, minValue, maxValue, defaultValue,
+                                    logarithmic, integer, toggled);
+}
+const char* NativeEngine::getGuitarRigParamName(int index) const{
+    return mGuitarEffects.paramName(index);
+}
+int NativeEngine::getGuitarRigLatencyFrames(int channel) const{
+    return piano::isInstrumentChannel(channel) ? mGuitarEffects.effectLatencyFrames(channel) : 0;
 }
 
 void NativeEngine::addClip(int32_t clipId, int32_t trackId, int64_t startTick, int64_t lengthTicks,
