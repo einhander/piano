@@ -8,8 +8,8 @@ import org.junit.Test
 class InstrumentFxPresentationTest {
     @Test fun insertCardOrderPreservesExistingSlotsAndAppendsNewStableIds() {
         assertEquals(listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper",
-            "lsp.filter", "lsp.phaser", "lsp.flanger", "piano.tremolo"), instrumentInsertCardIds)
-        assertEquals(9, instrumentInsertCardIds.distinct().size)
+            "lsp.filter", "lsp.phaser", "lsp.flanger", "piano.tremolo", "guitar.rig"), instrumentInsertCardIds)
+        assertEquals(10, instrumentInsertCardIds.distinct().size)
     }
 
     @Test fun tremoloPresentationAddsUnitsWithoutChangingNativeMetadata() {
@@ -140,6 +140,54 @@ class InstrumentFxPresentationTest {
             assertEquals("Dry/Wet", p.displayName)
             assertEquals("%", p.unit)
             assertEquals(null, p.scale)
+        }
+    }
+
+    @Test fun guitarPresentationNamesDiscretesWithTextChoicesAndKeepsNativeMetadata() {
+        // Discrete selectors: human names + text-name choices, NO unit, and
+        // all native bounds/defaults/types untouched (ranges are native-owned).
+        val driveType = instrumentPresentation("guitar.rig", EffectParameter("0", "Drive Type",
+            EffectParameterValue(1f), 0f, 3f, 0f, EffectParameterType.INTEGER, false))
+        assertEquals("Drive type", driveType.displayName)
+        assertEquals(null, driveType.unit)
+        assertEquals(listOf(0f to "Off", 1f to "Jade Drive", 2f to "Rodent", 3f to "Mammoth Fuzz"), driveType.enumValues)
+        assertEquals(0f, driveType.minimum, 0f)
+        assertEquals(3f, driveType.maximum, 0f)
+        assertEquals(0f, driveType.defaultValue, 0f)
+        assertEquals(EffectParameterType.INTEGER, driveType.type)
+        val ampModel = instrumentPresentation("guitar.rig", EffectParameter("3", "Amp Model",
+            EffectParameterValue(0f), 0f, 2f, 0f, EffectParameterType.INTEGER, false))
+        assertEquals("Amp model", ampModel.displayName)
+        assertEquals(null, ampModel.unit)
+        assertEquals(listOf(0f to "British Crunch", 1f to "Regent 800", 2f to "Meridian High Gain"), ampModel.enumValues)
+        assertEquals(2f, ampModel.maximum, 0f)
+        val cabType = instrumentPresentation("guitar.rig", EffectParameter("8", "Cabinet",
+            EffectParameterValue(2f), 0f, 3f, 2f, EffectParameterType.INTEGER, false))
+        assertEquals("Cabinet", cabType.displayName)
+        assertEquals(null, cabType.unit)
+        assertEquals(listOf(0f to "1×12 Open", 1f to "2×12 Closed", 2f to "4×12 Straight", 3f to "4×12 Slant"), cabType.enumValues)
+        assertEquals("4×12 Straight", instrumentValueLabel(cabType, 2f))
+        assertEquals("Mammoth Fuzz", instrumentValueLabel(driveType, 3f))
+        // Toggled cabinet engage stays a native BOOLEAN without unit additions.
+        val cabOn = instrumentPresentation("guitar.rig", EffectParameter("9", "Cabinet Engaged",
+            EffectParameterValue(1f), 0f, 1f, 1f, EffectParameterType.BOOLEAN, false))
+        assertEquals("Cabinet on", cabOn.displayName)
+        assertEquals(null, cabOn.unit)
+        assertEquals(EffectParameterType.BOOLEAN, cabOn.type)
+        assertEquals(1f, cabOn.defaultValue, 0f)
+        // Float sliders: names only, no unit/scale injection, native bounds pass through.
+        listOf(
+            "1" to "Drive", "2" to "Tone", "4" to "Gain", "5" to "Bass", "6" to "Mid",
+            "7" to "Treble", "10" to "Output", "11" to "Mix"
+        ).forEach { (id, name) ->
+            val p = instrumentPresentation("guitar.rig", EffectParameter(id, "Native $id",
+                EffectParameterValue(.5f), 0f, 1f, .5f, EffectParameterType.FLOAT, false))
+            assertEquals(name, p.displayName)
+            assertEquals(null, p.unit)
+            assertEquals(null, p.scale)
+            assertEquals(0f, p.minimum, 0f)
+            assertEquals(1f, p.maximum, 0f)
+            assertEquals(EffectParameterType.FLOAT, p.type)
         }
     }
 

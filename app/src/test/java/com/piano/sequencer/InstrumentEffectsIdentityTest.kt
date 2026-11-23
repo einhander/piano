@@ -38,14 +38,17 @@ class InstrumentEffectsIdentityTest {
         assertNotEquals(main, file)
     }
 
-    @Test fun startupRestoresDelayEvenWhenOptionalRackBundleUnavailable() {
+    @Test fun startupRestoresRacksAndDelayEvenWhenOptionalBundleUnavailable() {
+        // Rack restore runs unconditionally: the built-in "guitar.rig" must
+        // restore without the optional LADSPA bundle (spec §13.1); the LSP
+        // gating lives inside restoreInstruments, not in the fan-out.
         val calls = mutableListOf<String>()
         EffectStateRestore.restoreInstrumentStartup(
             bundleAvailable = false,
             restoreRacks = { calls += "rack" },
             restoreDelays = { calls += "delay" }
         )
-        assertEquals(listOf("delay"), calls)
+        assertEquals(listOf("rack", "delay"), calls)
         calls.clear()
         EffectStateRestore.restoreInstrumentStartup(true, { calls += "rack" }, { calls += "delay" })
         assertEquals(listOf("rack", "delay"), calls)

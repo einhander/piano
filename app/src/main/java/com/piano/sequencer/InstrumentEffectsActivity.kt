@@ -93,6 +93,18 @@ class InstrumentEffectsActivity : AppCompatActivity() {
     private var presetMenu: AlertDialog? = null
     private var presetMenuContent: LinearLayout? = null
     private val presetDisabledViews = java.util.IdentityHashMap<View, Boolean>()
+    // ── Guitar FX (guitar.rig) live-swap status messaging — phase-G contract
+    // (docs/guitar-fx-port.md §Live rig swap — Status codes): Busy* → "Busy —
+    // retry shortly" (transient), BuildFailed/AllocationFailed → "Failed —
+    // previous sound retained" (sticky until the next successful action),
+    // accepted change (pending) → "Applying…" with ONE delayed re-read
+    // (~150 ms), BadChannel → programming error, show nothing. Mutated on the
+    // worker only (submit{}), rendered through guitarMessage(). ────────────
+    private var guitarStickyFailure: String? = null
+    private var guitarTransient: String? = null
+    private var guitarPresetRetry: Pair<GuitarRigPresets.Preset, Int>? = null
+    private val guitarStatusRefresh = Runnable { submit { svc -> refreshGuitarStatus(svc) } }
+    private fun guitarMessage(): String? = guitarStickyFailure ?: guitarTransient
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder) {
             if (isFinishing || isDestroyed) return
@@ -151,6 +163,7 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         presetDialog?.dismiss()
         presetMenu?.dismiss()
         presetDisabledViews.clear()
+        feedbackHandler.removeCallbacks(guitarStatusRefresh)
         service?.let { ccController.detach(this@InstrumentEffectsActivity, it) }
         service = null
         if (bound) unbindService(connection)
@@ -209,7 +222,12 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         val release = runCatching { svc.getChannelRelease(absolute) }.getOrNull()
         val vibrato = runCatching { svc.getChannelVibrato(absolute) }.getOrNull()
         val instances = EFFECTS.mapIndexed { slot, (id, title) ->
-            val available = svc.isInstrumentEffectAvailable(absoluteChannel(), id)
+            // guitar.rig is built-in DSP with a lazy per-channel rig (mirrors
+            // the manager's tremolo rule: custom C++ DSP, no LSP bundle). Its
+            // native descriptor table existing is what makes the card
+            // operable, before/without the lazily instantiated rig.
+            val available = svc.isInstrumentEffectAvailable(absoluteChannel(), id) ||
+                (id == GUITAR_RIG_EFFECT_ID && svc.getInstrumentEffectParamCount(id) > 0)
             val parameters = if (!available) emptyList() else (0 until svc.getInstrumentEffectParamCount(id)).mapNotNull { index ->
                 val info = svc.getInstrumentEffectParamInfo(id, index) ?: return@mapNotNull null
                 if (info.size < 7) return@mapNotNull null
@@ -323,11 +341,19 @@ class InstrumentEffectsActivity : AppCompatActivity() {
                 instance.enabled && rack -> R.string.master_effects_enabled_state
                 else -> R.string.master_effects_bypassed_state
             })))
+            if (id == GUITAR_RIG_EFFECT_ID) guitarMessage()?.let { card.addView(label(it)) }
             if (instance.enabled && !rack) card.addView(label("Insert enabled, but instrument rack is bypassed. Enable the rack above to hear it."))
             if (instance.available) card.addView(parameterControl(id, EffectParameter("-1", "Insert enabled", EffectParameterValue(if (instance.enabled) 1f else 0f), 0f, 1f, 0f, EffectParameterType.BOOLEAN, false)))
             val controls = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 visibility = if (id in expanded) View.VISIBLE else View.GONE
+            }
+            if (id == GUITAR_RIG_EFFECT_ID) {
+                // Small dedicated sub-block: swap behaviour caption + the
+                // preset row. Pickers/sliders/toggles stay on the generic
+                // parameter mechanism (enum presentation drives the dialogs).
+                controls.addView(label(getString(R.string.instrument_effects_guitar_hint)))
+                controls.addView(guitarPresetRow())
             }
             if (id == "lsp.filter") {
                 controls.addView(label("Gain at 0 dB leaves Bell and shelves neutral. Allpass changes phase, not amplitude. Gain and Width appear only for applicable types."))
@@ -848,6 +874,11 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             val rack = svc.isInstrumentRackEnabled(setId, channel)
             failureDetail = "${EFFECTS.firstOrNull { it.first == id }?.second?.let { getString(it) } ?: id}: ${if (enabled) "enable" else "bypass"} rejected on channel ${channel + 1}. ${if (available) "Native command failed." else "Native effect unavailable."} Copy App Log from the main screen."
             AppLogger.error("InstrumentEffects", "$failureDetail effect=$id available=$available rackEnabled=$rack requested=$enabled")
+            if (id == GUITAR_RIG_EFFECT_ID)
+                guitarMessageAfterDiscrete(svc, accepted = false)
+        } else if (id == GUITAR_RIG_EFFECT_ID) {
+            guitarStickyFailure = null
+            guitarTransient = null
         }
         return accepted
     }
@@ -860,7 +891,129 @@ class InstrumentEffectsActivity : AppCompatActivity() {
             else -> svc.setInstrumentEffectParameter(setId, channel, id, index, raw)
         }
         if (success) ccController.manualParameterChanged(channel, id, p.stableId, raw, scope(id), targetSetId = setId)
+        // Live-swap status messaging for the two discrete selectors that
+        // initiate a rig swap (amp model / cab type); the others (drive type,
+        // toggles, floats) are live-safe mirrors and need no swap state.
+        if (id == GUITAR_RIG_EFFECT_ID && index in GuitarRigPresets.swapTriggerParameterIds)
+            guitarMessageAfterDiscrete(svc, success)
         return success
+    }
+
+    // ── Guitar FX status messaging + presets (worker-thread call sites) ────
+
+    /** Unpacks bits 0-3 of the packed rigStatus (docs §Status codes; JNI is non-blocking). */
+    private fun guitarStatusCode(svc: PlaybackService): Int =
+        svc.getGuitarRigStatus(absoluteChannel(), GUITAR_RIG_EFFECT_ID) and GUITAR_STATUS_CODE_MASK
+
+    /**
+     * Contract mapping after a discrete write (picker / preset / enable):
+     * failed codes → sticky "failed, previous sound retained"; rejected →
+     * transient "busy, retry shortly"; accepted → "applying" + ONE delayed
+     * refresh; BadChannel → programming error, surface nothing.
+     */
+    private fun guitarMessageAfterDiscrete(svc: PlaybackService, accepted: Boolean) {
+        when (val code = guitarStatusCode(svc)) {
+            GUITAR_STATUS_BAD_CHANNEL -> Unit
+            GUITAR_STATUS_BUILD_FAILED, GUITAR_STATUS_ALLOCATION_FAILED -> {
+                guitarTransient = null
+                guitarStickyFailure = getString(R.string.instrument_effects_guitar_failed)
+            }
+            else -> if (!accepted) {
+                guitarStickyFailure = null
+                guitarTransient = getString(R.string.instrument_effects_guitar_busy)
+            } else {
+                guitarStickyFailure = null
+                // Accepted + already settled (Ok ⇒ deduped or committed and
+                // reclaimed by this poll) shows nothing; pending shows the
+                // applying hint until the ONE delayed re-read settles it.
+                guitarTransient = if (code == GUITAR_STATUS_OK) null
+                else getString(R.string.instrument_effects_guitar_applying)
+                feedbackHandler.removeCallbacks(guitarStatusRefresh)
+                feedbackHandler.postDelayed(guitarStatusRefresh, GUITAR_STATUS_REFRESH_MS)
+            }
+        }
+    }
+
+    /** The ONE delayed re-read: settles the message and runs the preset's single retry. */
+    private fun refreshGuitarStatus(svc: PlaybackService) {
+        guitarPresetRetry?.let { (preset, index) ->
+            guitarPresetRetry = null
+            applyGuitarPreset(svc, preset, startIndex = index, isRetry = true) // the ONE retry, busy stays surfaced
+        }
+        when (guitarStatusCode(svc)) {
+            // Ok after a sticky failure means a later accept cleared the
+            // manager's error state — the contract's "next successful action".
+            GUITAR_STATUS_OK -> { guitarTransient = null; guitarStickyFailure = null }
+            GUITAR_STATUS_BUILD_FAILED, GUITAR_STATUS_ALLOCATION_FAILED -> {
+                guitarTransient = null
+                guitarStickyFailure = getString(R.string.instrument_effects_guitar_failed)
+            }
+            GUITAR_STATUS_BAD_CHANNEL -> Unit
+            else -> guitarTransient = getString(R.string.instrument_effects_guitar_busy)
+        }
+        renderSnapshot(svc)
+    }
+
+    /**
+     * Writes a sound preset via the generic setter path (each accepted write
+     * persists). Live-safe params go first, discrete amp model/cab last, so
+     * the whole preset is at most one live swap; a discrete write rejected as
+     * busy is retried ONCE on the status-clearing delayed refresh (native
+     * serializes swaps per channel), otherwise the busy message stands.
+     * NEVER touches the enabled flag.
+     */
+    private fun applyGuitarPreset(
+        svc: PlaybackService,
+        preset: GuitarRigPresets.Preset,
+        startIndex: Int = 0,
+        isRetry: Boolean = false
+    ): Boolean {
+        var index = startIndex
+        while (index < preset.parameters.size) {
+            val (parameterId, value) = preset.parameters[index]
+            val ok = svc.setInstrumentEffectParameter(setId, channel, GUITAR_RIG_EFFECT_ID, parameterId, value)
+            if (!ok) {
+                failureDetail = null
+                guitarTransient = getString(R.string.instrument_effects_guitar_busy)
+                if (parameterId in GuitarRigPresets.swapTriggerParameterIds && !isRetry) {
+                    guitarPresetRetry = preset to index
+                    feedbackHandler.removeCallbacks(guitarStatusRefresh)
+                    feedbackHandler.postDelayed(guitarStatusRefresh, GUITAR_STATUS_REFRESH_MS)
+                }
+                return false
+            }
+            ccController.manualParameterChanged(channel, GUITAR_RIG_EFFECT_ID, parameterId.toString(), value, scope(GUITAR_RIG_EFFECT_ID), targetSetId = setId)
+            index++
+        }
+        guitarStickyFailure = null
+        // A preset can arm a swap (and the retry does too): settle the message
+        // through the same ONE delayed re-read path.
+        guitarMessageAfterDiscrete(svc, accepted = true)
+        return true
+    }
+
+    /** One row of three small preset buttons inside the Guitar card. */
+    private fun guitarPresetRow(): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = android.view.Gravity.CENTER_VERTICAL
+        setPadding(0, dp(4), 0, 0)
+        addView(label(getString(R.string.instrument_effects_guitar_presets)))
+        listOf(
+            GuitarRigPresets.classicRock to R.string.instrument_effects_guitar_preset_classic_rock,
+            GuitarRigPresets.hardRock to R.string.instrument_effects_guitar_preset_hard_rock,
+            GuitarRigPresets.modernMetal to R.string.instrument_effects_guitar_preset_modern_metal
+        ).forEach { (preset, labelRes) ->
+            addView(Button(this@InstrumentEffectsActivity).apply {
+                com.piano.sequencer.ui.UiControlStyle.apply(this)
+                text = getString(labelRes)
+                contentDescription = "${getString(labelRes)} guitar preset"
+                minWidth = 0
+                minimumWidth = 0
+                maxWidth = dp(110)
+                layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+                setOnClickListener { submit { svc -> applyGuitarPreset(svc, preset); renderSnapshot(svc) } }
+            })
+        }
     }
 
     private fun parameterControl(id: String, p: EffectParameter): View = LinearLayout(this).apply {
@@ -1189,11 +1342,23 @@ class InstrumentEffectsActivity : AppCompatActivity() {
         const val EXTRA_SET_ID = "instrument_effects_set_id"
         const val EXTRA_SET_NAME = "instrument_effects_set_name"
         const val EXTRA_CHANNEL = "instrument_effects_channel"
+        /** Status re-read delay after an accepted discrete change (~150 ms:
+         *  swap fade ~20 ms + priming, plus scheduling slack). */
+        private const val GUITAR_STATUS_REFRESH_MS = 150L
+        /** rigStatus packed bits: 0-3 code, 4-31 supersededCount (docs/guitar-fx-port.md). */
+        private const val GUITAR_STATUS_CODE_MASK = 0xF
+        // RigStatus codes (GuitarRigManager.h): 0 Ok, 1 BusySwapInFlight,
+        // 2 BusyControl, 3 BuildFailed, 4 AllocationFailed, 5 BadChannel.
+        private const val GUITAR_STATUS_OK = 0
+        private const val GUITAR_STATUS_BUILD_FAILED = 3
+        private const val GUITAR_STATUS_ALLOCATION_FAILED = 4
+        private const val GUITAR_STATUS_BAD_CHANNEL = 5
+        private const val GUITAR_RIG_EFFECT_ID = "guitar.rig"
         private val EFFECTS = instrumentInsertCardIds.zip(listOf(
             R.string.master_effects_eq, R.string.master_effects_compressor, R.string.master_effects_limiter,
             R.string.instrument_effects_chorus, R.string.instrument_effects_clipper,
             R.string.instrument_effects_filter, R.string.instrument_effects_phaser, R.string.instrument_effects_flanger,
-            R.string.instrument_effects_tremolo))
+            R.string.instrument_effects_tremolo, R.string.instrument_effects_guitar))
     }
 }
 

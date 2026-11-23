@@ -1561,13 +1561,15 @@ class MainActivity : AppCompatActivity(), RuntimeDiagnosticsDelegate {
         }
         EffectStateRestore.restoreInstrumentStartup(
             bundleAvailable = count > 0,
-            restoreRacks = { EffectStateRestore.restoreInstruments(this, svc, true) },
+            // Pass the real availability: LSP inserts restore only with the
+            // bundle; the built-in guitar.rig restores regardless (§13.1).
+            restoreRacks = { EffectStateRestore.restoreInstruments(this, svc, count > 0) },
             restoreDelays = { EffectStateRestore.restoreInstrumentDelays(this, svc) }
         )
         InstrumentReleasePreferences.restoreStartup(this, svc)
         InstrumentVibratoPreferences.restoreStartup(this, svc)
         if (count <= 0) {
-            AppLogger.warn("MainActivity", "Instrument LSP effects unavailable; saved rack state retained")
+            AppLogger.warn("MainActivity", "Instrument LSP effects unavailable; LSP rack state retained (built-in Guitar FX restored)")
         }
     }
 

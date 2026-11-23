@@ -5,7 +5,7 @@ import com.piano.sequencer.midi.sharedFxParameterFromNativeInfo
 /** Order is the native instrument slot identity; append, never reorder. */
 internal val instrumentInsertCardIds = listOf(
     "lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper",
-    "lsp.filter", "lsp.phaser", "lsp.flanger", "piano.tremolo"
+    "lsp.filter", "lsp.phaser", "lsp.flanger", "piano.tremolo", "guitar.rig"
 )
 
 /** Worker-only at call sites. Instrument cards never contain global effects. */
@@ -69,6 +69,25 @@ internal fun instrumentPresentation(effect: String, p: EffectParameter): EffectP
     "piano.tremolo" -> when (p.stableId.toInt()) {
         410 -> p.copy(displayName = "Rate", unit = "Hz")
         411 -> p.copy(displayName = "Depth", unit = "%")
+        else -> p
+    }
+    // Guitar rig (built-in 0xFX DSP). Names only — ranges, defaults and the
+    // integer/toggle flags are owned by the native descriptor table
+    // (GuitarRigParams.cpp); discrete selectors get NO unit. Enum label
+    // tables follow GuitarRigParams.h kDriveType*/kAmpModel*/kCabType* codes.
+    "guitar.rig" -> when (p.stableId.toInt()) {
+        0 -> p.copy(displayName = "Drive type", enumValues = listOf("Off", "Jade Drive", "Rodent", "Mammoth Fuzz").mapIndexed { i, name -> i.toFloat() to name })
+        1 -> p.copy(displayName = "Drive")
+        2 -> p.copy(displayName = "Tone")
+        3 -> p.copy(displayName = "Amp model", enumValues = listOf("British Crunch", "Regent 800", "Meridian High Gain").mapIndexed { i, name -> i.toFloat() to name })
+        4 -> p.copy(displayName = "Gain")
+        5 -> p.copy(displayName = "Bass")
+        6 -> p.copy(displayName = "Mid")
+        7 -> p.copy(displayName = "Treble")
+        8 -> p.copy(displayName = "Cabinet", enumValues = listOf("1×12 Open", "2×12 Closed", "4×12 Straight", "4×12 Slant").mapIndexed { i, name -> i.toFloat() to name })
+        9 -> p.copy(displayName = "Cabinet on")
+        10 -> p.copy(displayName = "Output")
+        11 -> p.copy(displayName = "Mix")
         else -> p
     }
     else -> p

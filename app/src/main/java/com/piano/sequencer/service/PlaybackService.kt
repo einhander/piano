@@ -774,6 +774,16 @@ class PlaybackService : Service(), AudioManager.OnAudioFocusChangeListener {
     fun getInstrumentEffectParamCount(effectId: String): Int = NativeEngineBridge.nativeGetInstrumentEffectParamCount(effectId)
     fun getInstrumentEffectParamInfo(effectId: String, index: Int): FloatArray? = NativeEngineBridge.nativeGetInstrumentEffectParamInfo(effectId, index)
     fun getInstrumentEffectParamName(effectId: String, index: Int): String = NativeEngineBridge.nativeGetInstrumentEffectParamName(effectId, index)
+    /**
+     * Guitar rig live-swap status (effectId "guitar.rig"; other ids map to the
+     * BadChannel code). Direct JNI passthrough like the sibling instrument
+     * effect methods — invoke from worker threads. Packed int: bits 0-3 =
+     * status code (0 Ok, 1 BusySwapInFlight, 2 BusyControl, 3 BuildFailed,
+     * 4 AllocationFailed, 5 BadChannel), bits 4-31 = monotonic supersededCount
+     * saturated to 0x0FFFFFFF (docs/guitar-fx-port.md §Live rig swap).
+     */
+    fun getGuitarRigStatus(channel: Int, effectId: String): Int =
+        NativeEngineBridge.nativeGetGuitarRigStatus(channel, effectId)
     /** Shared FX control methods are direct JNI calls; invoke only from worker threads. */
     fun setSharedFxParameter(scope: String, parameterId: Int, value: Float): Boolean =
         NativeEngineBridge.nativeSetSharedFxParameter(scope, parameterId, value)

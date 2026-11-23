@@ -12,16 +12,20 @@ import com.piano.sequencer.midi.legacyInstrumentMigrationNeeded
 /** Shared preference restoration for a newly loaded master effect chain. */
 internal object EffectStateRestore {
     const val INSTRUMENT_VERSION = 1
-    internal val instrumentIds = listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper", "lsp.filter", "lsp.phaser", "lsp.flanger", "piano.tremolo")
+    // "guitar.rig" is the built-in 0xFX DSP insert: same v1 key scheme (no
+    // format bump), restored even when the optional LADSPA bundle is missing
+    // (spec §13.1).
+    internal val instrumentIds = listOf("lsp.parametric_eq", "lsp.compressor", "lsp.limiter", "lsp.chorus", "lsp.clipper", "lsp.filter", "lsp.phaser", "lsp.flanger", "piano.tremolo", "guitar.rig")
+    internal const val BUILTIN_GUITAR_RIG_ID = "guitar.rig"
     private val sharedParamIds = mapOf("native.delay" to 0..5, "fluidsynth.reverb" to 0..4)
 
-    /** Startup fan-out. Delay restore is independent of optional LSP rack availability. */
+    /** Startup fan-out. Delay restore is independent of optional LSP rack availability. Rack restore runs unconditionally too: it gates the built-in guitar rig (whose parameters persist under the same keys), and gates the LSP-dependent part internally (spec §13.1). */
     internal fun restoreInstrumentStartup(
-        bundleAvailable: Boolean,
+        @Suppress("UNUSED_PARAMETER") bundleAvailable: Boolean,
         restoreRacks: () -> Unit,
         restoreDelays: () -> Unit
     ) {
-        if (bundleAvailable) restoreRacks()
+        restoreRacks()
         restoreDelays()
     }
 
@@ -37,7 +41,9 @@ internal object EffectStateRestore {
     /** Restore off-thread after loading instrument bundle; parameter writes precede lazy instantiation. */
     fun restoreInstruments(context: Context, service: PlaybackService, bundleAvailable: Boolean) {
         val prefs = context.getSharedPreferences("piano_prefs", Context.MODE_PRIVATE)
-        if (!bundleAvailable || prefs.getInt("instrument_fx_schema_version", 0) != INSTRUMENT_VERSION) return
+        // The LADSPA bundle is OPTIONAL (spec §13.1): without it the LSP inserts
+        // are skipped below, but the built-in "guitar.rig" still restores.
+        if (prefs.getInt("instrument_fx_schema_version", 0) != INSTRUMENT_VERSION) return
         val sets = FileInstrumentSetStore.get(context).all()
         sets.filter { it.channelBase !in 16..112 }.forEach {
             AppLogger.warn("EffectStateRestore", "Unsupported persisted instrument set id=${it.id} base=${it.channelBase}; restore skipped")
@@ -51,6 +57,8 @@ internal object EffectStateRestore {
             val rackOn = prefs.getBoolean(instrumentIdentityRackKey(setId, local), false)
             service.setInstrumentRackEnabled(channel, rackOn)
             for (id in instrumentIds) {
+                // Params first, then enabled (order below is the existing one).
+                if (id != BUILTIN_GUITAR_RIG_ID && !bundleAvailable) continue
                 val count = runCatching { service.getInstrumentEffectParamCount(id) }.getOrDefault(0)
                 for (index in 0 until count) {
                     val info = runCatching { service.getInstrumentEffectParamInfo(id, index) }.getOrNull() ?: continue
