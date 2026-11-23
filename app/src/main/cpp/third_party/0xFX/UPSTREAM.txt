@@ -32,5 +32,7 @@ src/plugin, src/audio, deps/SDL2*, deps/imgui, deps/cplug, deps/nfd,
 deps/shine, deps/miniaudio.h, deps/stb_image.h, resources, presets, tools,
 tests, openspec, tasks, CI. src/core/crash.c excluded (no engine reference).
 
-Patches: none (unmodified copy; build integration lives in the app's
-CMakeLists.txt as target fx0_engine — see docs/guitar-fx-port.md).
+Patches: src/engine/internal/cab_ir.c is patched (segmented overlap-add
+correctness fix; provenance diff at 0xFX/patches/cab_ir-segmented-overlap-add.patch).
+All other vendored files are byte-identical to the pinned SHA. Build integration
+lives in the app's CMakeLists.txt as target fx0_engine — see docs/guitar-fx-port.md.
