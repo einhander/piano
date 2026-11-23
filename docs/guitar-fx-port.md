@@ -279,6 +279,24 @@ future deviation must be recorded here with the reason.
 
 ## Host smoke test
 
+Not wired into Gradle (offline proof of self-sufficiency only). From
+`app/src/main/cpp/third_party/0xFX/`:
+
+```
+gcc -std=gnu99 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+  -Isrc/engine -Isrc/engine/internal -Isrc/core -Ideps \
+  src/engine/internal/{engine,amp,biquad,noise_gate,tuner,pedals,studio,cab_ir,mic_sim,preset,looper}.c \
+  src/core/log.c deps/cJSON.c deps/kissfft/kiss_fft.c deps/kissfft/kiss_fftr.c \
+  /tmp/fx_smoke.c -lm -o /tmp/fx_smoke && /tmp/fx_smoke
+```
+
+`fx_smoke.c` calls `fx_engine_create(48000.0f)` →
+`fx_chain_add_pedal(e, FX_PEDAL_JADE_DRIVE, FX_CHAIN_POS_PRE)` →
+`fx_pedal_set_param(e, p, 0, 0.5f)` → `fx_engine_process` on 64 zero frames →
+`fx_engine_destroy`. Result: `SMOKE OK pedal_id=1`, exit 0, no ASan/UBSan
+reports. The engine creates without extra setup; no allocation-honesty issues
+at create/process/destroy.
+
 ## Limitations / later phases
 
 - Adapter (RT-safe wrapper over the engine), JNI bridge, Kotlin UI: later phases.

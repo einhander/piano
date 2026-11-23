@@ -39,6 +39,42 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/fluidsynth ${CMAKE_CURR
 # checksum-pinned upstream release. No command-line frontend or decoder.
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/lame)
 
+# 0xFX guitar DSP core (vendored, pinned SHA — third_party/0xFX/UPSTREAM.txt).
+# Separate static C library mirroring upstream's fx_engine target; no
+# add_subdirectory on the upstream root (it builds GUI/desktop/plugins).
+# C standard: gnu99. Upstream relies on CMAKE_C_EXTENSIONS=ON (default):
+# POSIX timespec/clock_gettime in cab_ir.c and log.c are hidden under strict
+# c99. See docs/guitar-fx-port.md.
+add_library(fx0_engine STATIC
+    third_party/0xFX/src/engine/internal/engine.c
+    third_party/0xFX/src/engine/internal/amp.c
+    third_party/0xFX/src/engine/internal/biquad.c
+    third_party/0xFX/src/engine/internal/noise_gate.c
+    third_party/0xFX/src/engine/internal/tuner.c
+    third_party/0xFX/src/engine/internal/pedals.c
+    third_party/0xFX/src/engine/internal/studio.c
+    third_party/0xFX/src/engine/internal/cab_ir.c
+    third_party/0xFX/src/engine/internal/mic_sim.c
+    third_party/0xFX/src/engine/internal/preset.c
+    third_party/0xFX/src/engine/internal/looper.c
+    third_party/0xFX/src/core/log.c
+    third_party/0xFX/deps/cJSON.c
+    third_party/0xFX/deps/kissfft/kiss_fft.c
+    third_party/0xFX/deps/kissfft/kiss_fftr.c
+)
+target_include_directories(fx0_engine PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/0xFX/src/engine
+)
+target_include_directories(fx0_engine PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/0xFX/deps
+)
+set_target_properties(fx0_engine PROPERTIES
+    C_STANDARD 99
+    C_EXTENSIONS ON
+    POSITION_INDEPENDENT_CODE ON
+)
+target_link_libraries(fx0_engine PRIVATE m)
+
 # FluidSynth finds OpenMP::OpenMP_C internally; expose matching C++ runtime
 # target to the app for worker-thread OpenMP controls (same NDK runtime).
 find_package(OpenMP REQUIRED COMPONENTS CXX)
@@ -105,6 +141,7 @@ target_link_libraries(native-lib
     oboe
     mp3lame
     libfluidsynth
+    fx0_engine
     OpenMP::OpenMP_CXX
     log
     android
